@@ -1,0 +1,687 @@
+import { createHash } from "node:crypto";
+
+const ENDPOINT_BY_PATH = new Map([
+  ["/aweme/v1/web/history/read/", "watch_history"],
+  ["/aweme/v1/web/aweme/favorite/", "liked_videos"],
+  ["/aweme/v1/web/aweme/listcollection/", "favorite_videos"],
+  ["/aweme/v1/web/collects/list/", "favorite_folders"],
+  ["/aweme/v1/web/collects/video/list/", "favorite_videos"],
+]);
+
+const RECORD_TYPES = ["watch_history", "liked_videos", "favorite_videos"];
+const MAX_RECORDS_PER_TYPE = 50_000;
+const MAX_STRING_LENGTH = 500;
+const MAX_URL_LENGTH = 2_048;
+const MAX_TOPICS = 100;
+const MAX_TOPIC_LENGTH = 100;
+const MAX_DURATION_SECONDS = 24 * 60 * 60;
+const IMAGE_HOST_SUFFIXES = [
+  "douyin.com",
+  "douyinpic.com",
+  "douyinvod.com",
+  "byteimg.com",
+  "ibytedtos.com",
+  "snssdk.com",
+];
+
+export class CollectorAdapterError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "CollectorAdapterError";
+    this.code = code;
+  }
+}
+
+export function createEmptyRecords() {
+  return {
+    watch_history: [],
+    liked_videos: [],
+    favorite_videos: [],
+  };
+}
+
+export function matchDouyinEndpoint(value) {
+  try {
+    const url = new URL(value);
+    if (url.hostname !== "www.douyin.com") return null;
+    const kind = ENDPOINT_BY_PATH.get(url.pathname);
+    return kind ? { kind, pathname: url.pathname } : null;
+  } catch {
+    return null;
+  }
+}
+
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cleanString(value, limit = MAX_STRING_LENGTH) {
+  if (typeof value === "string" && value.trim()) return value.trim().slice(0, limit);
+  if (typeof value === "number" && Number.isFinite(value)) return String(value).slice(0, limit);
+  return null;
+}
+
+function firstString(...values) {
+  for (const value of values) {
+    const normalized = cleanString(value);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function firstObject(value, key) {
+  if (!isObject(value)) return null;
+  const child = value[key];
+  return isObject(child) ? child : null;
+}
+
+function firstList(payload, key) {
+  if (!isObject(payload)) return null;
+  if (Array.isArray(payload[key])) return payload[key];
+  const data = firstObject(payload, "data");
+  return data && Array.isArray(data[key]) ? data[key] : null;
+}
+
+function firstValue(payload, key) {
+  if (!isObject(payload)) return undefined;
+  if (payload[key] !== undefined) return payload[key];
+  return firstObject(payload, "data")?.[key];
+}
+
+function normalizePagination(payload) {
+  const rawHasMore = firstValue(payload, "has_more");
+  const hasMore = typeof rawHasMore === "boolean"
+    ? rawHasMore
+    : rawHasMore === 1 || rawHasMore === "1"
+      ? true
+      : rawHasMore === 0 || rawHasMore === "0"
+        ? false
+        : null;
+  const cursor = firstString(
+    firstValue(payload, "max_cursor"),
+    firstValue(payload, "cursor"),
+    firstValue(payload, "min_cursor"),
+  );
+  return { hasMore, cursor };
+}
+
+function normalizeNonNegativeInteger(value) {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && /^\d+$/u.test(value)
+      ? Number(value)
+      : Number.NaN;
+  return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function favoriteFolderTotal(payload) {
+  return normalizeNonNegativeInteger(firstValue(payload, "total") ?? firstValue(payload, "total_number"));
+}
+
+function normalizeTimestamp(value) {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const raw = typeof value === "string" ? value.trim() : value;
+  if (!raw) return null;
+  const numeric = Number(raw);
+  const milliseconds = Number.isFinite(numeric) && numeric > 0
+    ? numeric < 10_000_000_000 ? numeric * 1000 : numeric
+    : Number.NaN;
+  const date = Number.isFinite(milliseconds) ? new Date(milliseconds) : new Date(String(raw));
+  return Number.isFinite(date.getTime()) && date.getUTCFullYear() >= 2000 && date.getUTCFullYear() <= 2100
+    ? date.toISOString()
+    : null;
+}
+
+function eventTimestamp(item, recordType) {
+  if (!isObject(item)) return { value: null, source: "unknown" };
+  const history = firstObject(item, "history_info") ?? firstObject(item, "historyInfo");
+  const candidates = recordType === "watch_history"
+    ? [
+        history?.view_time, history?.watch_time,
+        history?.history_time, item.view_time, item.watch_time,
+        item.history_time, item.last_view_time, item.event_time,
+      ]
+    : recordType === "liked_videos"
+      ? [item.digg_time, item.like_time, item.like_at, item.favorite_time, item.event_time]
+      : [item.collect_time, item.favorite_time, item.collect_at, item.last_collect_time, item.event_time];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeTimestamp(candidate);
+    if (normalized) return { value: normalized, source: "platform_action" };
+  }
+  return { value: null, source: "unknown" };
+}
+
+function normalizeImageUrl(value) {
+  const candidate = cleanString(value, MAX_URL_LENGTH);
+  if (!candidate) return null;
+  try {
+    const parsed = new URL(candidate);
+    const hostname = parsed.hostname.toLocaleLowerCase();
+    if (parsed.protocol !== "https:" || !IMAGE_HOST_SUFFIXES.some((suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`))) {
+      return null;
+    }
+    return parsed.toString().slice(0, MAX_URL_LENGTH);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeVideoUrl(value, awemeId) {
+  const fallback = `https://www.douyin.com/video/${encodeURIComponent(awemeId)}`;
+  const candidate = cleanString(value, MAX_URL_LENGTH);
+  if (!candidate) return fallback;
+  try {
+    const parsed = new URL(candidate);
+    if (
+      parsed.protocol === "https:" &&
+      (parsed.hostname === "douyin.com" || parsed.hostname.endsWith(".douyin.com"))
+    ) {
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString().slice(0, MAX_URL_LENGTH);
+    }
+  } catch {
+    // Use the stable URL when a response contains a malformed share URL.
+  }
+  return fallback;
+}
+
+function normalizeCount(value) {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && /^\d+$/u.test(value.trim())
+      ? Number(value)
+      : Number.NaN;
+  return Number.isSafeInteger(numeric) && numeric >= 0 && numeric <= 1_000_000_000_000 ? numeric : null;
+}
+
+function normalizeDuration(value, unit = "auto") {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && /^\d+(?:\.\d+)?$/u.test(value.trim())
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  const seconds = unit === "milliseconds" || (unit === "auto" && numeric > 1_000)
+    ? numeric / 1_000
+    : numeric;
+  return Number.isFinite(seconds) && seconds >= 0 && seconds <= MAX_DURATION_SECONDS
+    ? Math.round(seconds * 100) / 100
+    : null;
+}
+
+function normalizePercent(value) {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && /^\d+(?:\.\d+)?$/u.test(value.trim())
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  const percent = numeric <= 1 ? numeric * 100 : numeric;
+  return percent <= 100 ? Math.round(percent * 100) / 100 : null;
+}
+
+function firstUrlFromObject(value, keys = []) {
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 20)) {
+      const normalized = firstUrlFromObject(item);
+      if (normalized) return normalized;
+    }
+    return null;
+  }
+  if (!isObject(value)) return normalizeImageUrl(value);
+  for (const key of keys) {
+    const direct = firstUrlFromObject(value[key]);
+    if (direct) return direct;
+  }
+  const list = value.url_list ?? value.urlList ?? value.urls;
+  if (Array.isArray(list)) {
+    for (const item of list) {
+      const normalized = normalizeImageUrl(item);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+function normalizeMusic(item) {
+  const music = firstObject(item, "music") ?? firstObject(item, "music_info");
+  if (!music) return null;
+  const result = {};
+  const id = firstString(music.id, music.music_id, music.musicId);
+  const title = firstString(music.title, music.name);
+  const author = firstString(music.author, music.author_name, firstObject(music, "owner")?.nickname);
+  const url = firstUrlFromObject(music, ["play_url", "playUrl"]);
+  if (id) result.id = id;
+  if (title) result.title = title;
+  if (author) result.author = author;
+  if (url) result.url = url;
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function normalizeTopics(item, title) {
+  const topics = [];
+  const add = (value) => {
+    const normalized = cleanString(value, MAX_TOPIC_LENGTH)?.replace(/^#/u, "");
+    if (normalized && !topics.includes(normalized) && topics.length < MAX_TOPICS) topics.push(normalized);
+  };
+  for (const list of [item.cha_list, item.chaList, item.text_extra, item.textExtra]) {
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      if (typeof entry === "string") add(entry);
+      else if (isObject(entry)) add(entry.cha_name ?? entry.hashtag_name ?? entry.name ?? entry.text);
+    }
+  }
+  if (typeof title === "string") {
+    for (const match of title.matchAll(/#([^#\s,，。！？!?;；]{1,100})/gu)) add(match[1]);
+  }
+  return topics;
+}
+
+function normalizeStats(item) {
+  const source = firstObject(item, "statistics") ?? firstObject(item, "stats") ?? {};
+  const aliases = {
+    playCount: ["play_count", "playCount", "view_count", "viewCount"],
+    diggCount: ["digg_count", "diggCount", "like_count", "likeCount"],
+    commentCount: ["comment_count", "commentCount"],
+    shareCount: ["share_count", "shareCount"],
+    collectCount: ["collect_count", "collectCount", "favorite_count", "favoriteCount"],
+    downloadCount: ["download_count", "downloadCount"],
+  };
+  const result = {};
+  for (const [name, keys] of Object.entries(aliases)) {
+    const count = normalizeCount(keys.map((key) => source[key]).find((value) => value !== undefined));
+    if (count !== null) result[name] = count;
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function normalizeProgress(item, durationSeconds) {
+  const history = firstObject(item, "history_info") ?? firstObject(item, "historyInfo");
+  if (!history) return null;
+  const result = {};
+  const watched = normalizeDuration(
+    history.watched_duration ?? history.watchedDuration ?? history.watch_duration ?? history.view_duration,
+    "milliseconds",
+  );
+  if (watched !== null) result.watchedSeconds = watched;
+  const percent = normalizePercent(history.play_progress ?? history.playProgress ?? history.progress ?? history.percent);
+  if (percent !== null) result.percent = percent;
+  if (result.watchedSeconds === undefined && durationSeconds !== null && percent !== null) {
+    result.watchedSeconds = Math.round(durationSeconds * percent / 100 * 100) / 100;
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function normalizeMediaType(item) {
+  if (item.is_live === true || item.media_type === "live" || item.mediaType === "live") return "live";
+  if (Array.isArray(item.images) || Array.isArray(item.image_list) || Array.isArray(item.imageList)) return "image";
+  if (isObject(item.video) || item.aweme_type === 0 || item.aweme_type === 4 || item.media_type === "video" || item.mediaType === "video") return "video";
+  if (item.aweme_type !== undefined) {
+    const value = cleanString(item.aweme_type)?.toLocaleLowerCase();
+    if (value === "image" || value === "video" || value === "live") return value;
+  }
+  return null;
+}
+
+function normalizeAweme(item, recordType) {
+  if (!isObject(item)) return null;
+  const author = firstObject(item, "author");
+  const shareInfo = firstObject(item, "share_info");
+  const awemeId = firstString(item.aweme_id, item.awemeId, item.item_id, item.group_id);
+  if (!awemeId) return null;
+
+  const title = firstString(item.desc, item.caption, item.item_title, item.preview_title) ?? "未命名视频";
+  const authorName = firstString(author?.nickname, author?.unique_id, item.author_name);
+  const rawShareUrl = firstString(item.share_url, shareInfo?.share_url);
+  const event = eventTimestamp(item, recordType);
+  const video = firstObject(item, "video");
+  const durationSeconds = normalizeDuration(
+    video?.duration ?? item.duration ?? item.duration_seconds ?? item.durationSeconds,
+    video?.duration !== undefined ? "milliseconds" : "auto",
+  );
+  const result = {
+    id: `${recordType}:${awemeId}`,
+    title,
+    author: authorName,
+    occurredAt: event.value,
+    url: normalizeVideoUrl(rawShareUrl, awemeId),
+    videoId: awemeId,
+  };
+
+  const authorId = firstString(author?.uid, author?.sec_uid, author?.secUid, item.author_id);
+  const authorAvatarUrl = firstUrlFromObject(
+    author?.avatar_thumb ?? author?.avatar_medium ?? author?.avatar_larger,
+    [],
+  );
+  const publishedAt = normalizeTimestamp(item.create_time ?? item.createTime ?? item.publish_time ?? item.published_at);
+  const coverUrl = firstUrlFromObject(
+    video?.cover ?? video?.origin_cover ?? video?.dynamic_cover ?? item.cover,
+    [],
+  );
+  const mediaType = normalizeMediaType(item);
+  const music = normalizeMusic(item);
+  const topics = normalizeTopics(item, title);
+  const stats = normalizeStats(item);
+  const watchProgress = normalizeProgress(item, durationSeconds);
+
+  if (authorId) result.authorId = authorId;
+  if (authorAvatarUrl) result.authorAvatarUrl = authorAvatarUrl;
+  result.occurredAtSource = event.source;
+  if (publishedAt) result.publishedAt = publishedAt;
+  if (coverUrl) result.coverUrl = coverUrl;
+  if (mediaType) result.mediaType = mediaType;
+  if (durationSeconds !== null) result.durationSeconds = durationSeconds;
+  if (music) result.music = music;
+  if (topics.length > 0) result.topics = topics;
+  if (stats) result.stats = stats;
+  if (watchProgress) result.watchProgress = watchProgress;
+  return result;
+}
+
+function normalizeOptionalString(value, limit = MAX_STRING_LENGTH) {
+  return cleanString(value, limit);
+}
+
+function normalizeRecordUrl(value) {
+  const candidate = cleanString(value, MAX_URL_LENGTH);
+  if (!candidate) return null;
+  try {
+    const parsed = new URL(candidate);
+    if (
+      parsed.protocol === "https:" &&
+      (parsed.hostname === "douyin.com" || parsed.hostname.endsWith(".douyin.com"))
+    ) {
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString().slice(0, MAX_URL_LENGTH);
+    }
+  } catch {
+    // Invalid links are intentionally dropped at the collector boundary.
+  }
+  return null;
+}
+
+function deriveVideoId(record) {
+  const direct = normalizeOptionalString(record.videoId, 200);
+  if (direct) return direct;
+  const id = normalizeOptionalString(record.id, 300);
+  if (id && /^[^:]+:(.+)$/u.test(id)) return id.replace(/^[^:]+:/u, "").slice(0, 200);
+  const url = normalizeRecordUrl(record.url);
+  if (url) {
+    try {
+      const match = new URL(url).pathname.match(/\/video\/([^/?#]+)/u);
+      if (match?.[1]) return decodeURIComponent(match[1]).slice(0, 200);
+    } catch {
+      // Ignore malformed URL values.
+    }
+  }
+  return null;
+}
+
+function normalizeStatsObject(value) {
+  if (!isObject(value)) return null;
+  const result = {};
+  for (const key of ["playCount", "diggCount", "commentCount", "shareCount", "collectCount", "downloadCount"]) {
+    const count = normalizeCount(value[key]);
+    if (count !== null) result[key] = count;
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function normalizeMusicObject(value) {
+  if (!isObject(value)) return null;
+  const result = {};
+  for (const key of ["id", "title", "author"]) {
+    const normalized = normalizeOptionalString(value[key]);
+    if (normalized) result[key] = normalized;
+  }
+  const url = normalizeImageUrl(value.url) ?? normalizeRecordUrl(value.url);
+  if (url) result.url = url;
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function normalizeProgressObject(value) {
+  if (!isObject(value)) return null;
+  const result = {};
+  const seconds = normalizeDuration(value.watchedSeconds ?? value.watched_seconds, "seconds");
+  const percent = normalizePercent(value.percent ?? value.progress);
+  if (seconds !== null) result.watchedSeconds = seconds;
+  if (percent !== null) result.percent = percent;
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/** Normalize a record received from the local collector or a persisted file. */
+export function normalizeRecord(value, timestampSource = "unknown") {
+  if (!isObject(value)) return null;
+  const id = normalizeOptionalString(value.id, 300);
+  const title = normalizeOptionalString(value.title) ?? "Untitled video";
+  if (!id) return null;
+  const result = {
+    id,
+    title,
+    author: normalizeOptionalString(value.author),
+    occurredAt: normalizeTimestamp(value.occurredAt),
+    url: normalizeRecordUrl(value.url),
+  };
+  const videoId = deriveVideoId(value);
+  if (videoId) result.videoId = videoId;
+  const authorId = normalizeOptionalString(value.authorId, 200);
+  const authorAvatarUrl = normalizeImageUrl(value.authorAvatarUrl ?? value.authorAvatar ?? value.avatarUrl);
+  const source = ["platform_action", "archive_action", "unknown"].includes(value.occurredAtSource)
+    ? value.occurredAtSource
+    : result.occurredAt && (timestampSource === "platform_action" || timestampSource === "archive_action")
+      ? timestampSource
+      : "unknown";
+  const publishedAt = normalizeTimestamp(value.publishedAt);
+  const coverUrl = normalizeImageUrl(value.coverUrl ?? value.cover);
+  const mediaType = ["video", "image", "live", "unknown"].includes(value.mediaType) ? value.mediaType : null;
+  const durationSeconds = normalizeDuration(value.durationSeconds ?? value.duration, "seconds");
+  const music = normalizeMusicObject(value.music);
+  const topics = Array.isArray(value.topics)
+    ? [...new Set(value.topics.flatMap((topic) => {
+        const normalized = normalizeOptionalString(topic, MAX_TOPIC_LENGTH)?.replace(/^#/u, "");
+        return normalized ? [normalized] : [];
+      }))].slice(0, MAX_TOPICS)
+    : [];
+  const stats = normalizeStatsObject(value.stats ?? value.statistics);
+  const watchProgress = normalizeProgressObject(value.watchProgress ?? value.progress);
+  if (authorId) result.authorId = authorId;
+  if (authorAvatarUrl) result.authorAvatarUrl = authorAvatarUrl;
+  result.occurredAtSource = source;
+  if (publishedAt) result.publishedAt = publishedAt;
+  if (coverUrl) result.coverUrl = coverUrl;
+  if (mediaType) result.mediaType = mediaType;
+  if (durationSeconds !== null) result.durationSeconds = durationSeconds;
+  if (music) result.music = music;
+  if (topics.length > 0) result.topics = topics;
+  if (stats) result.stats = stats;
+  if (watchProgress) result.watchProgress = watchProgress;
+  return result;
+}
+
+function hasValue(value) {
+  return value !== null && value !== undefined && value !== "";
+}
+
+function isPlaceholderTitle(value) {
+  return value === "Untitled video" || value === "未命名视频";
+}
+
+function mergeNested(existing, incoming, normalizer) {
+  const left = normalizer(existing);
+  const right = normalizer(incoming);
+  if (!left) return right;
+  if (!right) return left;
+  return { ...left, ...right };
+}
+
+/** Merge a fresh response into an existing record without erasing rich fields. */
+export function mergeRecords(existing, incoming) {
+  const left = normalizeRecord(existing);
+  const right = normalizeRecord(incoming);
+  if (!left) return right;
+  if (!right) return left;
+  const merged = { ...left, ...right };
+  for (const key of ["title", "author", "occurredAt", "url", "videoId", "authorId", "authorAvatarUrl", "publishedAt", "coverUrl", "mediaType", "durationSeconds"]) {
+    if (!hasValue(right[key]) && hasValue(left[key])) merged[key] = left[key];
+  }
+  if (isPlaceholderTitle(right.title) && !isPlaceholderTitle(left.title)) merged.title = left.title;
+  if (left.occurredAt && !right.occurredAt) {
+    merged.occurredAt = left.occurredAt;
+    merged.occurredAtSource = left.occurredAtSource;
+  }
+  if (left.occurredAtSource === "platform_action" && right.occurredAtSource !== "platform_action") {
+    merged.occurredAtSource = left.occurredAtSource;
+  }
+  const topics = [...new Set([...(left.topics ?? []), ...(right.topics ?? [])])].slice(0, MAX_TOPICS);
+  if (topics.length > 0) merged.topics = topics;
+  const stats = mergeNested(left.stats, right.stats, normalizeStatsObject);
+  if (stats) merged.stats = stats;
+  const music = mergeNested(left.music, right.music, normalizeMusicObject);
+  if (music) merged.music = music;
+  const progress = mergeNested(left.watchProgress, right.watchProgress, normalizeProgressObject);
+  if (progress) merged.watchProgress = progress;
+  return merged;
+}
+
+function fingerprintRecordPage(records) {
+  if (records.length === 0) return null;
+  const hash = createHash("sha256");
+  for (const id of records.map((record) => record.id).sort()) {
+    hash.update(id);
+    hash.update("\0");
+  }
+  return hash.digest("base64url");
+}
+
+function normalizeFolders(payload) {
+  const items = firstList(payload, "collects_list");
+  if (!items) {
+    const rawItems = firstValue(payload, "collects_list");
+    const pagination = normalizePagination(payload);
+    if (rawItems === null && pagination.hasMore === false && favoriteFolderTotal(payload) === 0) return [];
+    throw new CollectorAdapterError("schema_changed", "收藏夹响应缺少 collects_list。请更新采集器适配器。");
+  }
+
+  return items.flatMap((item) => {
+    if (!isObject(item)) return [];
+    const id = firstString(item.collects_id_str, item.collects_id);
+    const name = firstString(item.collects_name, item.name);
+    return id && name ? [{ id, name }] : [];
+  });
+}
+
+function statusCode(payload) {
+  if (!isObject(payload)) return null;
+  const value = payload.status_code ?? firstObject(payload, "data")?.status_code;
+  return typeof value === "number" ? value : null;
+}
+
+export function normalizeDouyinResponse(endpoint, payload) {
+  if (!endpoint || !ENDPOINT_BY_PATH.has(endpoint.pathname)) {
+    throw new CollectorAdapterError("unsupported_endpoint", "采集器收到了不支持的抖音响应。");
+  }
+  if (!isObject(payload)) {
+    throw new CollectorAdapterError("invalid_response", "抖音返回了非 JSON 对象。");
+  }
+
+  const code = statusCode(payload);
+  if (code !== null && code !== 0) {
+    throw new CollectorAdapterError("douyin_error", `抖音网页返回状态码 ${code}。`);
+  }
+
+  if (endpoint.kind === "favorite_folders") {
+    const folders = normalizeFolders(payload);
+    let pagination = normalizePagination(payload);
+    const total = favoriteFolderTotal(payload);
+    if (
+      pagination.hasMore === null
+      && total !== null
+      && folders.length >= total
+    ) {
+      pagination = { ...pagination, hasMore: false };
+    }
+    return { records: [], folders, pagination };
+  }
+
+  const items = firstList(payload, "aweme_list");
+  if (!items) {
+    throw new CollectorAdapterError("schema_changed", "视频响应缺少 aweme_list。请更新采集器适配器。");
+  }
+
+  return {
+    records: items.flatMap((item) => {
+      const record = normalizeAweme(item, endpoint.kind);
+      return record ? [record] : [];
+    }),
+    folders: [],
+    pagination: normalizePagination(payload),
+  };
+}
+
+export class RecordAccumulator {
+  constructor(initialRecords = createEmptyRecords()) {
+    this.records = createEmptyRecords();
+    this.folders = new Map();
+    this.truncatedTypes = new Set();
+    for (const type of RECORD_TYPES) this.addRecords(type, initialRecords[type] ?? []);
+  }
+
+  addResponse(endpoint, payload) {
+    const normalized = normalizeDouyinResponse(endpoint, payload);
+    if (endpoint.kind === "favorite_folders") {
+      for (const folder of normalized.folders) this.folders.set(folder.id, folder);
+      return {
+        added: normalized.folders.length,
+        pageSize: normalized.folders.length,
+        pageFingerprint: null,
+        type: endpoint.kind,
+        pagination: normalized.pagination,
+      };
+    }
+    return {
+      added: this.addRecords(endpoint.kind, normalized.records),
+      pageSize: normalized.records.length,
+      pageFingerprint: fingerprintRecordPage(normalized.records),
+      type: endpoint.kind,
+      pagination: normalized.pagination,
+    };
+  }
+
+  addRecords(type, records) {
+    if (!RECORD_TYPES.includes(type)) return 0;
+    const existing = new Map(this.records[type].flatMap((record) => {
+      const normalized = normalizeRecord(record);
+      return normalized ? [[normalized.id, normalized]] : [];
+    }));
+    const before = existing.size;
+    for (const rawRecord of records) {
+      const record = normalizeRecord(rawRecord);
+      if (!record) continue;
+      if (existing.size >= MAX_RECORDS_PER_TYPE && !existing.has(record.id)) {
+        this.truncatedTypes.add(type);
+        break;
+      }
+      existing.set(record.id, mergeRecords(existing.get(record.id), record));
+    }
+    this.records[type] = [...existing.values()].sort((left, right) => {
+      const leftTime = left.occurredAt ? Date.parse(left.occurredAt) : 0;
+      const rightTime = right.occurredAt ? Date.parse(right.occurredAt) : 0;
+      return rightTime - leftTime;
+    });
+    return existing.size - before;
+  }
+
+  isTruncated(type) {
+    return this.truncatedTypes.has(type);
+  }
+
+  snapshot() {
+    return {
+      records: structuredClone(this.records),
+      folders: [...this.folders.values()],
+    };
+  }
+}

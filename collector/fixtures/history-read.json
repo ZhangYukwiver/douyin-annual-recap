@@ -1,0 +1,45 @@
+{
+  "status_code": 0,
+  "aweme_list": [
+    {
+      "aweme_id": "demo-history-001",
+      "desc": "#城市散步 示例观看记录",
+      "create_time": 1722470400,
+      "history_info": {
+        "view_time": 1735689600,
+        "watched_duration": 18000,
+        "play_progress": 0.6
+      },
+      "author": {
+        "uid": "demo-author-a",
+        "nickname": "示例创作者甲",
+        "avatar_thumb": {
+          "url_list": ["https://p3.douyinpic.com/demo-avatar-a"]
+        }
+      },
+      "video": {
+        "duration": 30000,
+        "cover": {
+          "url_list": ["https://p3.douyinpic.com/demo-cover-a"]
+        }
+      },
+      "music": {
+        "id": "demo-music-a",
+        "title": "示例声音",
+        "author": "示例音乐人"
+      },
+      "cha_list": [
+        { "cha_name": "城市散步" }
+      ],
+      "statistics": {
+        "play_count": 1200,
+        "digg_count": 81,
+        "comment_count": 9,
+        "share_count": 4,
+        "collect_count": 12
+      }
+    }
+  ],
+  "has_more": 1,
+  "max_cursor": "demo-history-page-2"
+}

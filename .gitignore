@@ -1,0 +1,9 @@
+node_modules/
+.expo/
+dist/
+web-build/
+.local-data/
+.local-data-test/
+.env*
+!.env.example
+npm-debug.log*

@@ -1,0 +1,440 @@
+import {
+  createEmptyPersonalRecords,
+  type PersonalRecordCollection,
+  type PersonalRecordType,
+  type PersonalVideoRecord,
+  type PersonalVideoMediaType,
+  type PersonalEventTimeSource,
+  type PersonalVideoMusic,
+  type PersonalVideoProgress,
+  type PersonalVideoStats,
+} from "../domain/personalRecords";
+
+export type CollectorState =
+  | "idle"
+  | "launching_browser"
+  | "awaiting_login"
+  | "observing"
+  | "collecting"
+  | "complete"
+  | "partial"
+  | "error";
+
+export interface CollectorStatus {
+  state: CollectorState;
+  phase: PersonalRecordType | null;
+  message: string;
+  counts: Record<PersonalRecordType, number>;
+  updatedAt: string | null;
+  browserOpen: boolean;
+}
+
+export interface CollectorSnapshot {
+  schemaVersion: 2;
+  updatedAt: string | null;
+  records: PersonalRecordCollection;
+  warnings: string[];
+}
+
+export class LocalCollectorError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "LocalCollectorError";
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = hostname.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  return parts[0] === 10 ||
+    (parts[0] === 172 && parts[1] !== undefined && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    (parts[0] === 100 && parts[1] !== undefined && parts[1] >= 64 && parts[1] <= 127);
+}
+
+export function normalizeCollectorBaseUrl(value: string): string {
+  const candidate = value.trim();
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new LocalCollectorError("invalid_url", "请输入完整的本地采集服务地址。");
+  }
+
+  const bareHostname = url.hostname.replace(/^\[|\]$/gu, "");
+  const localHostname = bareHostname === "localhost" || bareHostname === "127.0.0.1" || bareHostname === "::1";
+  const privateHostname = isPrivateIpv4(bareHostname) ||
+    bareHostname.endsWith(".local") ||
+    /^(?:f[cd]|fe8)[0-9a-f]*:/iu.test(bareHostname);
+  if (!(["http:", "https:"].includes(url.protocol) && (localHostname || privateHostname))) {
+    throw new LocalCollectorError("unsafe_url", "只允许连接本机或私有局域网采集服务。");
+  }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    throw new LocalCollectorError("invalid_url", "采集服务地址不能包含账号、路径、查询参数或片段。");
+  }
+  return url.toString().replace(/\/$/u, "");
+}
+
+export function getDefaultCollectorBaseUrl(): string {
+  return process.env.EXPO_PUBLIC_COLLECTOR_BASE_URL?.trim() || "http://127.0.0.1:4765";
+}
+
+const MAX_RECORD_STRING = 500;
+const MAX_RECORD_URL = 2_048;
+const IMAGE_HOST_SUFFIXES = [
+  "douyin.com",
+  "douyinpic.com",
+  "douyinvod.com",
+  "byteimg.com",
+  "ibytedtos.com",
+  "snssdk.com",
+] as const;
+
+function cleanRecordString(value: unknown, limit = MAX_RECORD_STRING): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const text = String(value).trim();
+  return text ? text.slice(0, limit) : null;
+}
+
+function parseDate(value: unknown): string | null {
+  const text = cleanRecordString(value, 100);
+  if (!text) return null;
+  const numeric = /^\d+(?:\.\d+)?$/u.test(text) ? Number(text) : Number.NaN;
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric < 10_000_000_000 ? numeric * 1_000 : numeric)
+    : new Date(text);
+  return Number.isFinite(date.getTime()) && date.getUTCFullYear() >= 2000 && date.getUTCFullYear() <= 2100
+    ? date.toISOString()
+    : null;
+}
+
+function parseDouyinUrl(value: unknown): string | null {
+  const text = cleanRecordString(value, MAX_RECORD_URL);
+  if (!text) return null;
+  try {
+    const candidate = new URL(text);
+    if (
+      candidate.protocol === "https:"
+      && (candidate.hostname === "douyin.com" || candidate.hostname.endsWith(".douyin.com"))
+    ) {
+      candidate.search = "";
+      candidate.hash = "";
+      return candidate.toString().slice(0, MAX_RECORD_URL);
+    }
+  } catch {
+    // Invalid or non-Douyin links remain unavailable in the App.
+  }
+  return null;
+}
+
+function parseImageUrl(value: unknown): string | null {
+  const text = cleanRecordString(value, MAX_RECORD_URL);
+  if (!text) return null;
+  try {
+    const candidate = new URL(text);
+    const host = candidate.hostname.toLocaleLowerCase();
+    if (
+      candidate.protocol === "https:"
+      && IMAGE_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))
+    ) return candidate.toString().slice(0, MAX_RECORD_URL);
+  } catch {
+    // Untrusted image hosts are dropped before they reach the DOM.
+  }
+  return null;
+}
+
+function parseCount(value: unknown): number | null {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && /^\d+$/u.test(value.trim())
+      ? Number(value)
+      : Number.NaN;
+  return Number.isSafeInteger(numeric) && numeric >= 0 && numeric <= 1_000_000_000_000 ? numeric : null;
+}
+
+function parseDuration(value: unknown): number | null {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && /^\d+(?:\.\d+)?$/u.test(value.trim())
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return numeric <= 86_400 ? numeric : numeric / 1_000 <= 86_400 ? numeric / 1_000 : null;
+}
+
+function parseMediaType(value: unknown): PersonalVideoMediaType | undefined {
+  return value === "video" || value === "image" || value === "live" || value === "unknown" ? value : undefined;
+}
+
+function parseStats(value: unknown): PersonalVideoStats | null {
+  if (!isObject(value)) return null;
+  const result: PersonalVideoStats = {};
+  const fields = ["playCount", "diggCount", "commentCount", "shareCount", "collectCount", "downloadCount"] as const;
+  for (const field of fields) {
+    const count = parseCount(value[field]);
+    if (count !== null) result[field] = count;
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function parseMusic(value: unknown): PersonalVideoMusic | null {
+  if (!isObject(value)) return null;
+  const result: PersonalVideoMusic = {};
+  for (const field of ["id", "title", "author"] as const) {
+    const text = cleanRecordString(value[field]);
+    if (text) result[field] = text;
+  }
+  const url = parseImageUrl(value.url) ?? parseDouyinUrl(value.url);
+  if (url) result.url = url;
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function parseProgress(value: unknown): PersonalVideoProgress | null {
+  if (!isObject(value)) return null;
+  const result: PersonalVideoProgress = {};
+  const seconds = parseDuration(value.watchedSeconds ?? value.watched_seconds);
+  const rawPercent = typeof value.percent === "number" ? value.percent : typeof value.progress === "number" ? value.progress : null;
+  const percent = rawPercent !== null && Number.isFinite(rawPercent)
+    ? Math.min(100, Math.max(0, rawPercent <= 1 ? rawPercent * 100 : rawPercent))
+    : null;
+  if (seconds !== null) result.watchedSeconds = Math.round(seconds * 100) / 100;
+  if (percent !== null) result.percent = Math.round(percent * 100) / 100;
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function parseVideoId(value: unknown, id: string, url: string | null): string | null {
+  const direct = cleanRecordString(value, 200);
+  if (direct) return direct;
+  const idMatch = id.match(/^[^:]+:(.+)$/u);
+  if (idMatch?.[1]) return idMatch[1].slice(0, 200);
+  if (url) {
+    try {
+      const match = new URL(url).pathname.match(/\/video\/([^/?#]+)/u);
+      if (match?.[1]) return decodeURIComponent(match[1]).slice(0, 200);
+    } catch {
+      // Ignore malformed paths.
+    }
+  }
+  return null;
+}
+
+function parseRecord(value: unknown, defaultSource: PersonalEventTimeSource = "unknown"): PersonalVideoRecord | null {
+  if (!isObject(value) || typeof value.id !== "string") return null;
+  const id = cleanRecordString(value.id, 300);
+  const title = cleanRecordString(value.title) ?? "Untitled video";
+  if (!id) return null;
+  const url = parseDouyinUrl(value.url);
+  const record: PersonalVideoRecord = {
+    id,
+    title,
+    author: cleanRecordString(value.author),
+    occurredAt: parseDate(value.occurredAt),
+    url,
+  };
+  const videoId = parseVideoId(value.videoId, id, url);
+  if (videoId) record.videoId = videoId;
+  const authorId = cleanRecordString(value.authorId, 200);
+  const authorAvatarUrl = parseImageUrl(value.authorAvatarUrl ?? value.authorAvatar ?? value.avatarUrl);
+  if (authorId) record.authorId = authorId;
+  if (authorAvatarUrl) record.authorAvatarUrl = authorAvatarUrl;
+  const source: PersonalEventTimeSource = value.occurredAtSource === "platform_action"
+    || value.occurredAtSource === "archive_action"
+    || value.occurredAtSource === "unknown"
+    ? value.occurredAtSource
+    : record.occurredAt && (defaultSource === "platform_action" || defaultSource === "archive_action")
+      ? defaultSource
+      : "unknown";
+  record.occurredAtSource = source;
+  const publishedAt = parseDate(value.publishedAt);
+  if (publishedAt) record.publishedAt = publishedAt;
+  const coverUrl = parseImageUrl(value.coverUrl ?? value.cover);
+  if (coverUrl) record.coverUrl = coverUrl;
+  const mediaType = parseMediaType(value.mediaType);
+  if (mediaType) record.mediaType = mediaType;
+  const durationSeconds = parseDuration(value.durationSeconds ?? value.duration);
+  if (durationSeconds !== null) record.durationSeconds = Math.round(durationSeconds * 100) / 100;
+  const music = parseMusic(value.music);
+  if (music) record.music = music;
+  if (Array.isArray(value.topics)) {
+    const topics = [...new Set(value.topics.flatMap((topic) => {
+      const text = cleanRecordString(topic, 100)?.replace(/^#/u, "");
+      return text ? [text] : [];
+    }))].slice(0, 100);
+    if (topics.length > 0) record.topics = topics;
+  }
+  const stats = parseStats(value.stats ?? value.statistics);
+  if (stats) record.stats = stats;
+  const progress = parseProgress(value.watchProgress ?? value.progress);
+  if (progress) record.watchProgress = progress;
+  return record;
+}
+
+function parseRecords(value: unknown, defaultSource: PersonalEventTimeSource = "unknown"): PersonalRecordCollection {
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务返回了无效记录。");
+  const result = createEmptyPersonalRecords();
+  for (const type of Object.keys(result) as PersonalRecordType[]) {
+    if (!Array.isArray(value[type])) throw new LocalCollectorError("invalid_response", "采集服务记录分类不完整。");
+    result[type] = value[type].flatMap((item) => {
+      const record = parseRecord(item, defaultSource);
+      return record ? [record] : [];
+    });
+  }
+  return result;
+}
+
+function parseSnapshot(value: unknown): CollectorSnapshot {
+  if (!isObject(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) {
+    throw new LocalCollectorError("invalid_response", "采集服务版本不兼容。");
+  }
+  return {
+    schemaVersion: 2,
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null,
+    records: parseRecords(value.records, value.schemaVersion === 1 ? "platform_action" : "unknown"),
+    warnings: Array.isArray(value.warnings)
+      ? value.warnings.filter((item): item is string => typeof item === "string")
+      : [],
+  };
+}
+
+function parseStatus(value: unknown): CollectorStatus {
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务状态无效。");
+  const validStates: CollectorState[] = [
+    "idle",
+    "launching_browser",
+    "awaiting_login",
+    "observing",
+    "collecting",
+    "complete",
+    "partial",
+    "error",
+  ];
+  const state = validStates.find((item) => item === value.state);
+  const rawCounts = isObject(value.counts) ? value.counts : null;
+  function countFor(type: PersonalRecordType): number {
+    const count = rawCounts?.[type];
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0 || count > 100_000) {
+      throw new LocalCollectorError("invalid_response", "采集服务数量字段无效。");
+    }
+    return count;
+  }
+  if (!state || typeof value.message !== "string") {
+    throw new LocalCollectorError("invalid_response", "采集服务状态字段不完整。");
+  }
+  const phases: Array<PersonalRecordType | null> = ["watch_history", "liked_videos", "favorite_videos", null];
+  const phase = phases.find((item) => item === value.phase) ?? null;
+  return {
+    state,
+    phase,
+    message: value.message,
+    counts: {
+      watch_history: countFor("watch_history"),
+      liked_videos: countFor("liked_videos"),
+      favorite_videos: countFor("favorite_videos"),
+    },
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null,
+    browserOpen: value.browserOpen === true,
+  };
+}
+
+async function requestJson(
+  baseUrl: string,
+  path: string,
+  options: RequestInit = {},
+  token?: string,
+): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(`${normalizeCollectorBaseUrl(baseUrl)}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    });
+    const payload = await response.json().catch(() => null) as unknown;
+    if (!response.ok) {
+      const errorCode = isObject(payload) && typeof payload.error === "string" ? payload.error : `http_${response.status}`;
+      const message = errorCode === "invalid_pairing_code"
+        ? "配对码无效或已使用。"
+        : errorCode === "not_paired"
+          ? "连接已过期，请重新配对。"
+          : `采集服务请求失败（${response.status}）。`;
+      throw new LocalCollectorError(errorCode, message);
+    }
+    return payload;
+  } catch (error) {
+    if (error instanceof LocalCollectorError) throw error;
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new LocalCollectorError("timeout", "连接本地采集服务超时。");
+    }
+    throw new LocalCollectorError("unreachable", "无法连接本地采集服务，请确认服务已启动。");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function checkCollectorHealth(baseUrl: string): Promise<void> {
+  const value = await requestJson(baseUrl, "/v1/health");
+  if (!isObject(value) || value.ok !== true || value.version !== 1) {
+    throw new LocalCollectorError("invalid_response", "该地址不是兼容的本地采集服务。");
+  }
+}
+
+export async function pairCollector(baseUrl: string, code: string): Promise<string> {
+  if (!/^\d{8}$/u.test(code.trim())) throw new LocalCollectorError("invalid_code", "配对码应为 8 位数字。");
+  const value = await requestJson(baseUrl, "/v1/pair", {
+    method: "POST",
+    body: JSON.stringify({ code: code.trim() }),
+  });
+  if (!isObject(value) || typeof value.token !== "string" || value.token.length < 32) {
+    throw new LocalCollectorError("invalid_response", "采集服务未返回有效会话。");
+  }
+  return value.token;
+}
+
+export async function getCollectorStatus(baseUrl: string, token: string): Promise<CollectorStatus> {
+  return parseStatus(await requestJson(baseUrl, "/v1/status", {}, token));
+}
+
+export async function getCollectorRecords(baseUrl: string, token: string): Promise<CollectorSnapshot> {
+  return parseSnapshot(await requestJson(baseUrl, "/v1/records", {}, token));
+}
+
+export async function startCollectorSync(baseUrl: string, token: string): Promise<CollectorStatus> {
+  const value = await requestJson(baseUrl, "/v1/sync", { method: "POST" }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回同步状态。");
+  return parseStatus(value.status);
+}
+
+export async function startCollectorObservation(baseUrl: string, token: string): Promise<CollectorStatus> {
+  const value = await requestJson(baseUrl, "/v1/observe", { method: "POST" }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回监听状态。");
+  return parseStatus(value.status);
+}
+
+export async function stopCollectorObservation(baseUrl: string, token: string): Promise<CollectorStatus> {
+  const value = await requestJson(baseUrl, "/v1/observe/stop", { method: "POST" }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回监听状态。");
+  return parseStatus(value.status);
+}
+
+export async function switchCollectorAccount(baseUrl: string, token: string): Promise<CollectorStatus> {
+  const value = await requestJson(baseUrl, "/v1/account/switch", { method: "POST" }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回换号状态。");
+  return parseStatus(value.status);
+}
+
+export async function clearCollectorRecords(baseUrl: string, token: string): Promise<CollectorSnapshot> {
+  return parseSnapshot(await requestJson(baseUrl, "/v1/records", { method: "DELETE" }, token));
+}
