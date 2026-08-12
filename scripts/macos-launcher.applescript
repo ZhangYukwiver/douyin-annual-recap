@@ -1,10 +1,11 @@
 property supervisorPID : missing value
 property projectPath : missing value
+property applicationPath : missing value
 
 on run
-	set appPath to POSIX path of (path to me)
-	if appPath ends with "/" then set appPath to text 1 thru -2 of appPath
-	set projectPath to do shell script "/usr/bin/dirname " & quoted form of appPath
+	set applicationPath to POSIX path of (path to me)
+	if applicationPath ends with "/" then set applicationPath to text 1 thru -2 of applicationPath
+	set projectPath to do shell script "/usr/bin/dirname " & quoted form of applicationPath
 	my startSupervisor()
 end run
 
@@ -54,7 +55,9 @@ on startSupervisor()
 		set nodePath to do shell script "/bin/zsh -lc " & quoted form of "command -v node"
 		if nodePath is "" then error "未找到 Node.js。"
 		set launcherPath to projectPath & "/scripts/launch-macos.mjs"
-		set launchCommand to "(cd " & quoted form of projectPath & " && exec " & quoted form of nodePath & " " & quoted form of launcherPath & " 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- </dev/null >/dev/null 2>&1) & echo $!"
+		set appExecutable to applicationPath & "/Contents/MacOS/applet"
+		set appPID to do shell script "/usr/bin/pgrep -f -x " & quoted form of appExecutable
+		set launchCommand to "(cd " & quoted form of projectPath & " && DOUYIN_LAUNCHER_APP_PID=" & quoted form of appPID & " exec " & quoted form of nodePath & " " & quoted form of launcherPath & " 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- </dev/null >/dev/null 2>&1) & echo $!"
 		set supervisorPID to do shell script launchCommand
 	on error errorMessage
 		set supervisorPID to missing value

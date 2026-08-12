@@ -5,7 +5,6 @@ dist/
 web-build/
 .local-data/
 .local-data-test/
-/抖音年度回顾.app/
 .env*
 !.env.example
 npm-debug.log*

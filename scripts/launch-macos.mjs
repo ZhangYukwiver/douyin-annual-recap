@@ -19,10 +19,12 @@ const expoCli = path.join(projectDirectory, "node_modules", "expo", "bin", "cli"
 const distDirectory = path.join(projectDirectory, "dist");
 
 let collectorProcess = null;
+let exportProcess = null;
 let webServer = null;
 let currentPairingCode = null;
 let shuttingDown = false;
 let collectorError = "";
+let appMonitor = null;
 
 function tail(value, limit = 2_000) {
   return value.length > limit ? value.slice(-limit) : value;
@@ -88,17 +90,36 @@ async function runExport() {
   await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [expoCli, "export", projectDirectory, "--platform", "web"], {
       cwd: projectDirectory,
-      env: { ...process.env, CI: "1", EXPO_NO_TELEMETRY: "1", NO_COLOR: "1" },
+      env: {
+        ...process.env,
+        CI: "1",
+        EXPO_NO_TELEMETRY: "1",
+        EXPO_PUBLIC_COLLECTOR_BASE_URL: `http://127.0.0.1:${COLLECTOR_PORT}`,
+        NO_COLOR: "1",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    exportProcess = child;
     let output = "";
+    let killTimer = null;
     const capture = (chunk) => { output = tail(output + chunk.toString("utf8")); };
     child.stdout.on("data", capture);
     child.stderr.on("data", capture);
-    const timer = setTimeout(() => child.kill("SIGTERM"), 120_000);
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+    }, 120_000);
+    const finish = () => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (exportProcess === child) exportProcess = null;
+    };
+    child.once("error", (error) => {
+      finish();
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      finish();
       if (code === 0) resolve();
       else reject(new Error(`Web 构建失败（${signal ?? code ?? "unknown"}）。${output ? `\n${output.trim()}` : ""}`));
     });
@@ -226,20 +247,32 @@ async function waitForExit(child, milliseconds) {
   });
 }
 
+async function stopChild(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  if (!await waitForExit(child, 10_000)) {
+    child.kill("SIGKILL");
+    await waitForExit(child, 2_000);
+  }
+}
+
 async function stopServices() {
+  if (appMonitor) {
+    clearInterval(appMonitor);
+    appMonitor = null;
+  }
+  if (exportProcess) {
+    const child = exportProcess;
+    exportProcess = null;
+    await stopChild(child);
+  }
   if (webServer) {
     const server = webServer;
     webServer = null;
     server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
   }
-  if (collectorProcess && collectorProcess.exitCode === null && collectorProcess.signalCode === null) {
-    collectorProcess.kill("SIGTERM");
-    if (!await waitForExit(collectorProcess, 10_000)) {
-      collectorProcess.kill("SIGKILL");
-      await waitForExit(collectorProcess, 2_000);
-    }
-  }
+  await stopChild(collectorProcess);
 }
 
 async function fail(message) {
@@ -261,6 +294,16 @@ async function shutdown() {
 
 async function main() {
   process.title = "抖音年度回顾";
+  const launcherAppPID = Number.parseInt(process.env.DOUYIN_LAUNCHER_APP_PID ?? "", 10);
+  if (Number.isSafeInteger(launcherAppPID) && launcherAppPID > 1) {
+    appMonitor = setInterval(() => {
+      try {
+        process.kill(launcherAppPID, 0);
+      } catch {
+        void shutdown();
+      }
+    }, 2_000);
+  }
   await mkdir(localDataDirectory, { recursive: true });
   await writeFile(errorFile, "", { encoding: "utf8", mode: 0o600 });
   await chmod(errorFile, 0o600);
