@@ -114,6 +114,37 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function showAlert(title: string, message: string) {
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    window.alert(`${title}\n\n${message}`);
+    return;
+  }
+  Alert.alert(title, message);
+}
+
+function confirmAlert(
+  title: string,
+  message: string,
+  confirmText: string,
+  onDecision: (confirmed: boolean) => void,
+  destructive = false,
+) {
+  let settled = false;
+  const settle = (confirmed: boolean) => {
+    if (settled) return;
+    settled = true;
+    onDecision(confirmed);
+  };
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    settle(window.confirm(`${title}\n\n${message}`));
+    return;
+  }
+  Alert.alert(title, message, [
+    { text: "取消", style: "cancel", onPress: () => settle(false) },
+    { text: confirmText, style: destructive ? "destructive" : "default", onPress: () => settle(true) },
+  ], { cancelable: true, onDismiss: () => settle(false) });
+}
+
 function formatBytes(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "大小未知";
   if (value < 1024) return `${value} B`;
@@ -704,7 +735,7 @@ function AppContent() {
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(message);
-      Alert.alert("无法读取同步状态", message);
+      showAlert("无法读取同步状态", message);
     }
   }
 
@@ -723,7 +754,7 @@ function AppContent() {
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(message);
-      Alert.alert("无法开始同步", message);
+      showAlert("无法开始同步", message);
     }
   }
 
@@ -742,7 +773,7 @@ function AppContent() {
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(message);
-      Alert.alert("无法启动手动监听", message);
+      showAlert("无法启动手动监听", message);
     }
   }
 
@@ -763,7 +794,7 @@ function AppContent() {
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(message);
-      Alert.alert("无法停止手动监听", message);
+      showAlert("无法停止手动监听", message);
     }
   }
 
@@ -814,20 +845,14 @@ function AppContent() {
   function confirmAutomaticSync() {
     if (!collectorToken || collectorBusy || collectorStatus?.state === "observing" || syncConfirmationOpenRef.current) return;
     syncConfirmationOpenRef.current = true;
-    Alert.alert(
+    confirmAlert(
       "开始自动同步",
       "将由专用浏览器打开个人列表、切换标签并滚动加载数据。仅监听网页自行返回的响应。",
-      [
-        { text: "取消", style: "cancel", onPress: () => { syncConfirmationOpenRef.current = false; } },
-        {
-          text: "开始",
-          onPress: () => {
-            syncConfirmationOpenRef.current = false;
-            void beginSync(collectorUrl, collectorToken);
-          },
-        },
-      ],
-      { cancelable: true, onDismiss: () => { syncConfirmationOpenRef.current = false; } },
+      "开始",
+      (confirmed) => {
+        syncConfirmationOpenRef.current = false;
+        if (confirmed) void beginSync(collectorUrl, collectorToken);
+      },
     );
   }
 
@@ -872,7 +897,7 @@ function AppContent() {
       const message = collectorErrorMessage(error);
       setCollectorBusy(false);
       setCollectorError(message);
-      Alert.alert("无法切换账号", message);
+      showAlert("无法切换账号", message);
     } finally {
       setSwitchingAccount(false);
     }
@@ -881,20 +906,14 @@ function AppContent() {
   function confirmAccountSwitch() {
     if (accountSwitchConfirmationOpenRef.current) return;
     accountSwitchConfirmationOpenRef.current = true;
-    Alert.alert(
+    confirmAlert(
       "切换抖音账号",
       "将清除专用浏览器的登录会话和本地采集结果，随后打开专用浏览器进入手动监听，等待你登录新账号。不会影响抖音账号中的记录。",
-      [
-        { text: "取消", style: "cancel", onPress: () => { accountSwitchConfirmationOpenRef.current = false; } },
-        {
-          text: "切换",
-          onPress: () => {
-            accountSwitchConfirmationOpenRef.current = false;
-            void performAccountSwitch();
-          },
-        },
-      ],
-      { cancelable: true, onDismiss: () => { accountSwitchConfirmationOpenRef.current = false; } },
+      "切换",
+      (confirmed) => {
+        accountSwitchConfirmationOpenRef.current = false;
+        if (confirmed) void performAccountSwitch();
+      },
     );
   }
 
@@ -926,53 +945,53 @@ function AppContent() {
         } catch (error) {
           if (importRequest.current !== requestId) return;
           setSelectedArchive({ ...archive, inspection: { status: "failed" } });
-          Alert.alert("无法读取备用文件", describePersonalArchiveError(error));
+          showAlert("无法读取备用文件", describePersonalArchiveError(error));
         }
       }
     } catch {
-      Alert.alert("无法选择文件", "请检查文件访问权限后重试。");
+      showAlert("无法选择文件", "请检查文件访问权限后重试。");
     } finally {
       if (importRequest.current === requestId) setPickingArchive(false);
     }
   }
 
   function clearCurrentRecords() {
-    Alert.alert("清除本地记录", "将移除当前采集结果，不会清除抖音账号中的记录。", [
-      { text: "取消", style: "cancel" },
-      {
-        text: "清除",
-        style: "destructive",
-        onPress: () => {
-          if (collectorToken) {
-            const requestId = pollRequest.current + 1;
-            const token = collectorToken;
-            pollRequest.current = requestId;
-            setCollectorBusy(true);
-            setCollectorError(null);
-            void (async () => {
-              try {
-                const snapshot = await clearCollectorRecords(collectorUrl, token);
-                if (pollRequest.current !== requestId) return;
-                setCollectorSnapshot(snapshot);
-                const status = await getCollectorStatus(collectorUrl, token);
-                if (pollRequest.current !== requestId) return;
-                setCollectorStatus(status);
-              } catch (error) {
-                if (pollRequest.current !== requestId) return;
-                const message = collectorErrorMessage(error);
-                setCollectorError(message);
-                Alert.alert("无法清除记录", message);
-              } finally {
-                if (pollRequest.current === requestId) setCollectorBusy(false);
-              }
-            })();
-          } else {
-            importRequest.current += 1;
-            setSelectedArchive(null);
-          }
-        },
+    confirmAlert(
+      "清除本地记录",
+      "将移除当前采集结果，不会清除抖音账号中的记录。",
+      "清除",
+      (confirmed) => {
+        if (!confirmed) return;
+        if (collectorToken) {
+          const requestId = pollRequest.current + 1;
+          const token = collectorToken;
+          pollRequest.current = requestId;
+          setCollectorBusy(true);
+          setCollectorError(null);
+          void (async () => {
+            try {
+              const snapshot = await clearCollectorRecords(collectorUrl, token);
+              if (pollRequest.current !== requestId) return;
+              setCollectorSnapshot(snapshot);
+              const status = await getCollectorStatus(collectorUrl, token);
+              if (pollRequest.current !== requestId) return;
+              setCollectorStatus(status);
+            } catch (error) {
+              if (pollRequest.current !== requestId) return;
+              const message = collectorErrorMessage(error);
+              setCollectorError(message);
+              showAlert("无法清除记录", message);
+            } finally {
+              if (pollRequest.current === requestId) setCollectorBusy(false);
+            }
+          })();
+        } else {
+          importRequest.current += 1;
+          setSelectedArchive(null);
+        }
       },
-    ]);
+      true,
+    );
   }
 
   async function openRecord(url: string) {
@@ -980,7 +999,7 @@ function AppContent() {
       if (!(await Linking.canOpenURL(url))) throw new Error("unsupported_url");
       await Linking.openURL(url);
     } catch {
-      Alert.alert("无法打开视频", "该记录中的链接当前不可用。");
+      showAlert("无法打开视频", "该记录中的链接当前不可用。");
     }
   }
 
