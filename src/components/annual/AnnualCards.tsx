@@ -72,7 +72,7 @@ export function AnnualCoverPage({ report, privacy, pageNumber, totalPages }: Ann
           <View style={styles.coverMetrics}>
             <MetricBlock label="独立视频" value={formatCount(overview.counts.total)} detail="三类行为去重后" accent={annualColors.ink} large />
             <MetricBlock label="活跃日期" value={formatCount(overview.activeDays)} detail="上海时区" accent={annualColors.cyan} large />
-            <MetricBlock label="时间覆盖" value={`${formatCount(report.coverage.reliableRecordCount)}/${formatCount(report.coverage.recordCount)}`} detail="可分析记录 / 总记录" accent={annualColors.gold} large />
+            <MetricBlock label="时间覆盖" value={`${formatCount(report.snapshotCoverage.reliableRecordCount)}/${formatCount(report.snapshotCoverage.recordCount)}`} detail="全快照可分析 / 总记录" accent={annualColors.gold} large />
           </View>
         </View>
         <View style={styles.coverVisual}>
@@ -84,7 +84,7 @@ export function AnnualCoverPage({ report, privacy, pageNumber, totalPages }: Ann
               <Text style={styles.coverFrameMeta}>{privacy ? "标题、作者与图片节点均已替换" : hero?.author ?? "作者未知"}</Text>
             </View>
           </View>
-          <CoverageStrip coverage={report.coverage} compact />
+          <CoverageStrip coverage={report.snapshotCoverage} compact />
         </View>
       </View>
     </PageCanvas>
@@ -110,7 +110,7 @@ export function AnnualReportCardPage({ report, privacy, pageNumber, totalPages, 
 
 function renderCard(card: AnnualCard, report: AnnualReport, privacy: boolean) {
   switch (card.id) {
-    case "overview": return <OverviewCard data={card.data as AnnualOverviewData} />;
+    case "overview": return <OverviewCard data={card.data as AnnualOverviewData} coverage={report.snapshotCoverage} />;
     case "rhythm": return <RhythmCard data={card.data as AnnualRhythmData} privacy={privacy} />;
     case "monthly": return <MonthlyCard data={card.data as AnnualMonthlyData} />;
     case "creators": return <CreatorsCard data={card.data as AnnualCreatorsData} privacy={privacy} />;
@@ -121,7 +121,7 @@ function renderCard(card: AnnualCard, report: AnnualReport, privacy: boolean) {
   }
 }
 
-function OverviewCard({ data }: { data: AnnualOverviewData }) {
+function OverviewCard({ data, coverage }: { data: AnnualOverviewData; coverage: DataCoverage }) {
   return (
     <View style={styles.splitWide}>
       <View style={styles.primaryColumn}>
@@ -145,7 +145,7 @@ function OverviewCard({ data }: { data: AnnualOverviewData }) {
         <View style={styles.sideRule} />
         <Text style={styles.sideLabel}>实际日期范围</Text>
         <Text style={styles.sideMedium}>{data.dateRange ? `${formatDate(data.dateRange.start)} 至 ${formatDate(data.dateRange.end)}` : "无可用范围"}</Text>
-        <Text style={styles.sideDetail}>观看活跃日 {formatCount(data.watchActiveDays)} 天</Text>
+        <Text style={styles.sideDetail}>观看活跃日 {formatCount(data.watchActiveDays)} 天 · 时间覆盖 {formatPercent(coverage.reliableDateRatio)}</Text>
       </View>
     </View>
   );
@@ -325,9 +325,10 @@ function CardNotice({ card, coverage }: { card: AnnualCard; coverage: DataCovera
   if (coverage.undatedRecordCount > 0) notes.push(`${formatCount(coverage.undatedRecordCount)} 条记录没有可用行为时间`);
   if (coverage.unknownSourceRecordCount > 0) notes.push(`${formatCount(coverage.unknownSourceRecordCount)} 条时间来源不可靠`);
   notes.push(...coverage.warnings);
-  const unique = [...new Set(notes)].slice(0, 3);
+  const unique = [...new Set(notes)];
   if (!unique.length) return null;
-  return <View style={styles.noticeBand} accessibilityRole="alert"><Text style={styles.noticeText}>{unique.join(" · ")}</Text></View>;
+  const visible = [...unique.slice(0, 3), ...(unique.length > 3 ? [`另有 ${unique.length - 3} 条提示`] : [])];
+  return <View style={styles.noticeBand} accessibilityRole="alert"><Text style={styles.noticeText}>{visible.join(" · ")}</Text></View>;
 }
 
 function CoverageStrip({ coverage, compact = false }: { coverage: DataCoverage; compact?: boolean }) {
@@ -337,7 +338,7 @@ function CoverageStrip({ coverage, compact = false }: { coverage: DataCoverage; 
       <View style={styles.coverageDivider} />
       <View><Text style={styles.coverageValue}>{formatCount(coverage.recordCount)}</Text><Text style={styles.coverageLabel}>总记录</Text></View>
       <View style={styles.coverageDivider} />
-      <View><Text style={styles.coverageValue}>{formatCount(coverage.undatedRecordCount + coverage.unknownSourceRecordCount)}</Text><Text style={styles.coverageLabel}>时间不可用</Text></View>
+      <View><Text style={styles.coverageValue}>{formatCount(coverage.recordCount - coverage.reliableRecordCount)}</Text><Text style={styles.coverageLabel}>时间不可用</Text></View>
     </View>
   );
 }

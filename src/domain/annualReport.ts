@@ -1174,14 +1174,26 @@ function buildMonthly(index: AnnualIndex, year: number): { data: AnnualMonthlyDa
 function buildCreators(index: AnnualIndex, year: number): { data: AnnualCreatorsData; status: AnnualCardStatus; reason: string | null } {
   const entries = bucketFor(index, year).reliableEntries;
   const groups = new Map<string, { name: string; id: string | null; keys: Set<string>; events: number }>();
+  const idsByRecord = new Map<string, Set<string>>();
   const unknownKeys = new Set<string>();
+  for (const entry of entries) {
+    const author = authorOf(entry.record);
+    if (!author.id) continue;
+    const recordKey = normalizedRecordIdentity(entry);
+    const ids = idsByRecord.get(recordKey) ?? new Set<string>();
+    ids.add(author.id);
+    idsByRecord.set(recordKey, ids);
+  }
   for (const entry of entries) {
     const author = authorOf(entry.record);
     if (!author.name && !author.id) {
       unknownKeys.add(normalizedRecordIdentity(entry));
       continue;
     }
-    const key = `author:${author.id ?? author.name!.toLocaleLowerCase()}`;
+    const name = author.name?.toLocaleLowerCase() ?? null;
+    const matchingIds = idsByRecord.get(normalizedRecordIdentity(entry));
+    const resolvedId = author.id ?? (matchingIds?.size === 1 ? [...matchingIds][0]! : null);
+    const key = resolvedId ? `authorId:${resolvedId}` : `authorName:${name}`;
     const group = groups.get(key) ?? { name: author.name ?? "未命名创作者", id: author.id, keys: new Set<string>(), events: 0 };
     if (author.name && (group.name === "未命名创作者" || compareText(author.name, group.name) < 0)) group.name = author.name;
     if (author.id) group.id = author.id;

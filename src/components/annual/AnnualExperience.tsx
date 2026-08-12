@@ -142,8 +142,7 @@ export function AnnualExperience({
     const now = Date.now();
     if (now - lastWheelAt.current < 360) return;
     lastWheelAt.current = now;
-    const preventDefault = (event as { preventDefault?: () => void }).preventDefault;
-    preventDefault?.();
+    (event as { preventDefault?: () => void }).preventDefault?.();
     navigateBy(delta > 0 ? 1 : -1);
   }, [navigateBy]);
 
@@ -272,10 +271,9 @@ export function AnnualExperience({
               <Animated.View
                 testID={`annual-page-${index}`}
                 key={`${report.year}:${index}`}
-                pointerEvents={isCurrent ? "auto" : "none"}
                 accessibilityElementsHidden={!isCurrent}
                 importantForAccessibility={isCurrent ? "yes" : "no-hide-descendants"}
-                style={[styles.pageLayer, { transform: [{ translateY }], zIndex: isCurrent ? 2 : 1 }]}
+                style={[styles.pageLayer, { pointerEvents: isCurrent ? "auto" : "none", transform: [{ translateY }], zIndex: isCurrent ? 2 : 1 }]}
               >
                 {page}
               </Animated.View>

@@ -194,6 +194,27 @@ describe("annual report domain", () => {
     expect(summary.metrics.topTopic).toEqual(interests.topics[0]);
   });
 
+  it("fills a missing authorId only from the same video", () => {
+    const report = buildAnnualReport(buildAnnualIndex(recordsOf({
+      watch_history: [
+        record("known", "2025-01-01T00:00:00Z", { videoId: "shared", author: "同一作者", authorId: "author-a", occurredAtSource: "platform_action" }),
+        record("alias", "2025-01-02T00:00:00Z", { videoId: "alias", author: "同一作者", occurredAtSource: "platform_action" }),
+        record("same-name-a", "2025-01-03T00:00:00Z", { videoId: "same-name-a", author: "重名作者", authorId: "author-b", occurredAtSource: "platform_action" }),
+        record("same-name-b", "2025-01-04T00:00:00Z", { videoId: "same-name-b", author: "重名作者", authorId: "author-c", occurredAtSource: "platform_action" }),
+        record("name-only", "2025-01-05T00:00:00Z", { videoId: "name-only", author: "仅姓名作者", occurredAtSource: "platform_action" }),
+      ],
+      liked_videos: [
+        record("shared-like", "2025-01-06T00:00:00Z", { videoId: "shared", author: "同一作者", occurredAtSource: "platform_action" }),
+      ],
+    })), 2025);
+    const creators = cardData<AnnualCreatorsData>(report, "creators");
+
+    expect(creators.creatorCount).toBe(5);
+    expect(creators.top.find((creator) => creator.authorId === "author-a")).toMatchObject({ name: "同一作者", count: 1, events: 2 });
+    expect(creators.top.filter((creator) => creator.name === "同一作者")).toHaveLength(2);
+    expect(creators.top.filter((creator) => creator.name === "重名作者").map((creator) => creator.authorId)).toEqual(["author-b", "author-c"]);
+  });
+
   it("returns explicit empty and current-year states", () => {
     const emptyIndex = buildAnnualIndex(createEmptyPersonalRecords(), {
       now: "2026-08-11T12:00:00+08:00",
