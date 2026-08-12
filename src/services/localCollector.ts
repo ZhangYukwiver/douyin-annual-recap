@@ -86,6 +86,10 @@ export function getDefaultCollectorBaseUrl(): string {
   return process.env.EXPO_PUBLIC_COLLECTOR_BASE_URL?.trim() || "http://127.0.0.1:4765";
 }
 
+export function parseLaunchPairingCode(hash: string): string | null {
+  return /^#pair=(\d{8})$/u.exec(hash)?.[1] ?? null;
+}
+
 const MAX_RECORD_STRING = 500;
 const MAX_RECORD_URL = 2_048;
 const IMAGE_HOST_SUFFIXES = [

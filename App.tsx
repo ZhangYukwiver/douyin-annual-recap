@@ -64,6 +64,7 @@ import {
   getDefaultCollectorBaseUrl,
   LocalCollectorError,
   normalizeCollectorBaseUrl,
+  parseLaunchPairingCode,
   pairCollector,
   startCollectorSync,
   startCollectorObservation,
@@ -600,6 +601,19 @@ function AppContent() {
     importRequest.current += 1;
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return undefined;
+    const hostname = window.location.hostname.replace(/^\[|\]$/gu, "");
+    const code = ["localhost", "127.0.0.1", "::1"].includes(hostname)
+      ? parseLaunchPairingCode(window.location.hash)
+      : null;
+    if (!code) return undefined;
+
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`);
+    void connectCollector(code, true);
+    return undefined;
+  }, []);
+
   const displaySnapshot: DisplaySnapshot | null = collectorSnapshot
     ? {
         source: "collector",
@@ -798,7 +812,7 @@ function AppContent() {
     }
   }
 
-  async function connectCollector() {
+  async function connectCollector(code = pairingCode, automatic = false) {
     if (collectorToken || connectingRef.current) return;
     connectingRef.current = true;
     const requestId = pollRequest.current + 1;
@@ -810,7 +824,7 @@ function AppContent() {
     try {
       normalizedUrl = normalizeCollectorBaseUrl(collectorUrl);
       await checkCollectorHealth(normalizedUrl);
-      pairedToken = await pairCollector(normalizedUrl, pairingCode);
+      pairedToken = await pairCollector(normalizedUrl, code);
       if (pollRequest.current !== requestId) return;
       setCollectorUrl(normalizedUrl);
       setCollectorToken(pairedToken);
@@ -823,7 +837,7 @@ function AppContent() {
       setCollectorUrl(normalizedUrl);
       setCollectorStatus(status);
       setCollectorSnapshot(snapshot);
-      setActiveView("sources");
+      if (!automatic) setActiveView("sources");
       if (TERMINAL_COLLECTOR_STATES.has(status.state)) {
         setCollectorBusy(false);
       } else {

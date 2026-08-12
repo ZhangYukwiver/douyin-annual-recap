@@ -5,6 +5,7 @@ import {
   LocalCollectorError,
   getCollectorStatus,
   normalizeCollectorBaseUrl,
+  parseLaunchPairingCode,
   pairCollector,
   startCollectorObservation,
   stopCollectorObservation,
@@ -24,6 +25,14 @@ describe("normalizeCollectorBaseUrl", () => {
     expect(() => normalizeCollectorBaseUrl("http://example.com:4765")).toThrowError(LocalCollectorError);
     expect(() => normalizeCollectorBaseUrl("https://example.com:4765")).toThrowError(LocalCollectorError);
     expect(() => normalizeCollectorBaseUrl("https://user:pass@example.com")).toThrowError(LocalCollectorError);
+  });
+});
+
+describe("parseLaunchPairingCode", () => {
+  it("only accepts one exact 8-digit launch code", () => {
+    expect(parseLaunchPairingCode("#pair=12345678")).toBe("12345678");
+    expect(parseLaunchPairingCode("#pair=1234567")).toBeNull();
+    expect(parseLaunchPairingCode("#pair=12345678&token=secret")).toBeNull();
   });
 });
 
