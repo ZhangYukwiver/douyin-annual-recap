@@ -43,7 +43,7 @@ export function createEmptyRecords() {
 export function matchDouyinEndpoint(value) {
   try {
     const url = new URL(value);
-    if (url.hostname !== "www.douyin.com") return null;
+    if (!["www.douyin.com", "www-hj.douyin.com"].includes(url.hostname)) return null;
     const kind = ENDPOINT_BY_PATH.get(url.pathname);
     return kind ? { kind, pathname: url.pathname } : null;
   } catch {

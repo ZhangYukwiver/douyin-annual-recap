@@ -14,9 +14,11 @@ function responseFixture(name) {
 }
 
 describe("matchDouyinEndpoint", () => {
-  it("matches only the supported Douyin host and exact path", () => {
+  it("matches only the supported Douyin hosts and exact paths", () => {
     expect(matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/history/read/?msToken=secret"))
       .toEqual({ kind: "watch_history", pathname: "/aweme/v1/web/history/read/" });
+    expect(matchDouyinEndpoint("https://www-hj.douyin.com/aweme/v1/web/aweme/favorite/?a_bogus=secret"))
+      .toEqual({ kind: "liked_videos", pathname: "/aweme/v1/web/aweme/favorite/" });
     expect(matchDouyinEndpoint("https://evil.example/aweme/v1/web/history/read/")).toBeNull();
     expect(matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/history/read/extra")).toBeNull();
   });
@@ -25,7 +27,7 @@ describe("matchDouyinEndpoint", () => {
 describe("normalizeDouyinResponse", () => {
   it.each([
     ["history-read", "https://www.douyin.com/aweme/v1/web/history/read/", "watch_history", true],
-    ["favorite", "https://www.douyin.com/aweme/v1/web/aweme/favorite/", "liked_videos", false],
+    ["favorite", "https://www-hj.douyin.com/aweme/v1/web/aweme/favorite/", "liked_videos", false],
     ["listcollection", "https://www.douyin.com/aweme/v1/web/aweme/listcollection/", "favorite_videos", false],
   ])("normalizes the redacted %s endpoint fixture", (fixtureName, url, expectedType, expectedHasMore) => {
     const endpoint = matchDouyinEndpoint(url);
