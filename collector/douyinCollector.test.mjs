@@ -69,7 +69,6 @@ function collectorForResponses(initialSnapshot, responses) {
 }
 
 const terminalEmptyVideos = { status_code: 0, aweme_list: [], has_more: 0 };
-const terminalEmptyFolders = { status_code: 0, collects_list: [], total: 0 };
 
 describe("Douyin profile routing", () => {
   it("normalizes only a concrete same-origin profile URL", () => {
@@ -222,7 +221,7 @@ describe("DouyinCollector manual observation", () => {
 });
 
 describe("DouyinCollector response completion", () => {
-  it("merges an incomplete page with existing records instead of replacing them", async () => {
+  it("uses a non-terminal first page as the current sample", async () => {
     const initial = emptySnapshot();
     initial.records.liked_videos = [{
       id: "liked_videos:old",
@@ -240,18 +239,14 @@ describe("DouyinCollector response completion", () => {
         max_cursor: "next-page",
       }),
       favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
-      favorite_folders: fakeResponse("/aweme/v1/web/collects/list/", terminalEmptyFolders),
     });
 
     await collector.runSync(1);
 
     const savedRecords = store.save.mock.calls[0][0];
-    expect(savedRecords.liked_videos.map((record) => record.id)).toEqual([
-      "liked_videos:old",
-      "liked_videos:new",
-    ]);
-    expect(collector.snapshot.warnings).toContain("点赞列表分页尚未完整读取。");
-    expect(collector.status.state).toBe("partial");
+    expect(savedRecords.liked_videos.map((record) => record.id)).toEqual(["liked_videos:new"]);
+    expect(collector.snapshot.warnings).toEqual([]);
+    expect(collector.status.state).toBe("complete");
   });
 
   it("waits for delayed response parsing before calculating capture warnings", async () => {
@@ -262,7 +257,6 @@ describe("DouyinCollector response completion", () => {
       watch_history: fakeResponse("/aweme/v1/web/history/read/", delayedHistory),
       liked_videos: fakeResponse("/aweme/v1/web/aweme/favorite/", terminalEmptyVideos),
       favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
-      favorite_folders: fakeResponse("/aweme/v1/web/collects/list/", terminalEmptyFolders),
     });
 
     await collector.runSync(1);
@@ -284,7 +278,6 @@ describe("DouyinCollector response completion", () => {
     const { collector } = collectorForResponses(emptySnapshot(), {
       liked_videos: fakeResponse("/aweme/v1/web/aweme/favorite/", terminalEmptyVideos),
       favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
-      favorite_folders: fakeResponse("/aweme/v1/web/collects/list/", terminalEmptyFolders),
     });
     const context = collector.context;
     collector.collectPhase = vi.fn(async (_page, _versions, phase) => {
@@ -295,7 +288,6 @@ describe("DouyinCollector response completion", () => {
         const response = {
           liked_videos: fakeResponse("/aweme/v1/web/aweme/favorite/", terminalEmptyVideos),
           favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
-          favorite_folders: fakeResponse("/aweme/v1/web/collects/list/", terminalEmptyFolders),
         }[phase];
         if (response) context.emit("response", response);
       }
@@ -309,16 +301,81 @@ describe("DouyinCollector response completion", () => {
     expect(collector.status.state).toBe("complete");
   });
 
-  it("keeps favorites partial when the webpage never returns the folder list", async () => {
+  it("keeps at most 50 records from each primary page", async () => {
+    const page = (prefix) => ({
+      status_code: 0,
+      aweme_list: Array.from({ length: 55 }, (_, index) => ({
+        aweme_id: `${prefix}-${index}`,
+        desc: `${prefix} ${index}`,
+        event_time: 1_700_000_000 + index,
+      })),
+      has_more: 1,
+      max_cursor: "next-page",
+    });
     const { collector } = collectorForResponses(emptySnapshot(), {
-      watch_history: fakeResponse("/aweme/v1/web/history/read/", terminalEmptyVideos),
-      liked_videos: fakeResponse("/aweme/v1/web/aweme/favorite/", terminalEmptyVideos),
-      favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
+      watch_history: fakeResponse("/aweme/v1/web/history/read/", page("watch")),
+      liked_videos: fakeResponse("/aweme/v1/web/aweme/favorite/", page("liked")),
+      favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", page("favorite")),
     });
 
     await collector.runSync(1);
 
-    expect(collector.snapshot.warnings).toContain("收藏夹列表未捕获到网页响应。");
+    expect(collector.snapshot.records.watch_history).toHaveLength(50);
+    expect(collector.snapshot.records.liked_videos).toHaveLength(50);
+    expect(collector.snapshot.records.favorite_videos).toHaveLength(50);
+    expect(collector.snapshot.records.watch_history.map((record) => record.videoId))
+      .toEqual(Array.from({ length: 50 }, (_, index) => `watch-${index}`));
+    expect(collector.snapshot.records.liked_videos.map((record) => record.videoId))
+      .toEqual(Array.from({ length: 50 }, (_, index) => `liked-${index}`));
+    expect(collector.snapshot.records.favorite_videos.map((record) => record.videoId))
+      .toEqual(Array.from({ length: 50 }, (_, index) => `favorite-${index}`));
+    expect(collector.snapshot.warnings).toEqual([]);
+    expect(collector.status.state).toBe("complete");
+  });
+
+  it("keeps the previous sample when a later response cannot be normalized", async () => {
+    const initial = emptySnapshot();
+    initial.records.liked_videos = [{
+      id: "liked_videos:old",
+      title: "旧记录",
+      author: null,
+      occurredAt: null,
+      url: "https://www.douyin.com/video/old",
+      videoId: "old",
+    }];
+    const { collector } = collectorForResponses(initial, {
+      watch_history: fakeResponse("/aweme/v1/web/history/read/", terminalEmptyVideos),
+      favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
+    });
+    const context = collector.context;
+    collector.collectPhase = vi.fn(async (_page, _versions, phase) => {
+      if (phase === "liked_videos") {
+        context.emit("response", fakeResponse("/aweme/v1/web/aweme/favorite/", {
+          status_code: 0,
+          aweme_list: [{ aweme_id: "new", desc: "本次读取记录" }],
+          has_more: 1,
+          max_cursor: "next-page",
+        }));
+        context.emit("response", fakeResponse("/aweme/v1/web/aweme/favorite/", {
+          status_code: 0,
+          aweme_list: [{ new_schema_id: "unrecognized" }],
+          has_more: 1,
+          max_cursor: "next-page-2",
+        }));
+        return;
+      }
+      const response = {
+        watch_history: fakeResponse("/aweme/v1/web/history/read/", terminalEmptyVideos),
+        favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
+      }[phase];
+      if (response) context.emit("response", response);
+    });
+
+    await collector.runSync(1);
+
+    expect(collector.snapshot.records.liked_videos.map((record) => record.videoId)).toEqual(["old"]);
+    expect(collector.snapshot.warnings).toContain("点赞列表读取不完整，已保留上次样本。");
+    expect(collector.snapshot.warnings).toContain("视频列表包含无法识别的数据。请更新采集器适配器。");
     expect(collector.status.state).toBe("partial");
   });
 });
@@ -454,6 +511,32 @@ describe("DouyinCollector deterministic tab fallback", () => {
 
     expect(progress.visualSurfaceMissing).toBe(true);
     expect(page.mouse.move).not.toHaveBeenCalled();
+    expect(page.mouse.wheel).not.toHaveBeenCalled();
+  });
+
+  it("does not scroll after collecting 50 unique records", async () => {
+    const progress = createEndpointProgress();
+    progress.matchedCount = 1;
+    progress.processedCount = 1;
+    progress.uniqueAddedCount = 50;
+    const page = {
+      evaluate: vi.fn(),
+      mouse: { move: vi.fn(), wheel: vi.fn() },
+    };
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.syncRunId = 1;
+
+    await collector.scrollUntilIdle(
+      page,
+      new Map([["liked_videos", 1]]),
+      ["liked_videos"],
+      1,
+      [progress],
+      1,
+      "like",
+    );
+
+    expect(page.evaluate).not.toHaveBeenCalled();
     expect(page.mouse.wheel).not.toHaveBeenCalled();
   });
 });

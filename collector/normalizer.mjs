@@ -611,11 +611,16 @@ export function normalizeDouyinResponse(endpoint, payload) {
     throw new CollectorAdapterError("schema_changed", "视频响应缺少 aweme_list。请更新采集器适配器。");
   }
 
+  const records = items.flatMap((item) => {
+    const record = normalizeAweme(item, endpoint.kind);
+    return record ? [record] : [];
+  });
+  if (items.length > 0 && records.length === 0) {
+    throw new CollectorAdapterError("schema_changed", "视频列表包含无法识别的数据。请更新采集器适配器。");
+  }
+
   return {
-    records: items.flatMap((item) => {
-      const record = normalizeAweme(item, endpoint.kind);
-      return record ? [record] : [];
-    }),
+    records,
     folders: [],
     pagination: normalizePagination(payload),
   };
@@ -645,6 +650,7 @@ export class RecordAccumulator {
       added: this.addRecords(endpoint.kind, normalized.records),
       pageSize: normalized.records.length,
       pageFingerprint: fingerprintRecordPage(normalized.records),
+      recordIds: normalized.records.map((record) => record.id),
       type: endpoint.kind,
       pagination: normalized.pagination,
     };

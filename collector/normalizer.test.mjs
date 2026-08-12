@@ -249,7 +249,7 @@ describe("RecordAccumulator", () => {
     expect(accumulator.snapshot().records.favorite_videos[0]?.title).toBe("更新标题");
   });
 
-  it("returns only an irreversible page fingerprint for progress diagnostics", () => {
+  it("returns an irreversible page fingerprint for progress diagnostics", () => {
     const endpoint = matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/history/read/");
     const accumulator = new RecordAccumulator();
     const result = accumulator.addResponse(endpoint, {

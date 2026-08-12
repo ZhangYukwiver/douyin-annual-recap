@@ -26,9 +26,9 @@ const TYPE_LABELS = {
   liked_videos: "点赞列表",
   favorite_videos: "收藏列表",
 };
+const SYNC_SAMPLE_LIMIT = 50;
 const MAX_LOGIN_WAIT_MS = 10 * 60 * 1000;
 const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
-const MAX_FAVORITE_FOLDERS = 100;
 const ENDPOINT_ACTIVATION_WAIT_MS = 8_000;
 const RESPONSE_DRAIN_WAIT_MS = 12_000;
 const MANUAL_OBSERVATION_WARNING = "手动监听模式：仅保存你在独立浏览器中实际浏览到的数据，完整性不会自动验证。";
@@ -53,19 +53,6 @@ function safeMessage(error, fallback) {
   if (error instanceof CollectorAdapterError) return error.message;
   if (error instanceof Error && error.name === "TimeoutError") return "抖音网页加载超时，请检查网络后重试。";
   return fallback;
-}
-
-function favoriteFolderIdFromResponseUrl(value) {
-  try {
-    const url = new URL(value);
-    for (const key of ["collects_id", "collects_id_str", "collection_id", "folder_id"]) {
-      const folderId = url.searchParams.get(key);
-      if (folderId) return folderId;
-    }
-  } catch {
-    // Invalid response URLs are ignored by the endpoint matcher as well.
-  }
-  return null;
 }
 
 async function firstVisible(locator, limit = 8) {
@@ -815,6 +802,7 @@ export class DouyinCollector {
         await delay(250);
         continue;
       }
+      if (activeProgresses.some((progress) => progress.uniqueAddedCount >= SYNC_SAMPLE_LIMIT)) break;
 
       let visualResult = await wheelResolvedVisualSurface(page)
         .catch(() => ({ resolved: false, moved: false, atBottom: true }));
@@ -876,22 +864,14 @@ export class DouyinCollector {
         timeoutMs: 5_000,
       });
     } else {
-      targetTab = phase === "liked_videos"
-        ? "like"
-        : phase === "favorite_folders"
-          ? "favorite_folder"
-          : "favorite_collection";
+      targetTab = phase === "liked_videos" ? "like" : "favorite_collection";
       fallbackLabels = phase === "liked_videos"
         ? ["喜欢", "点赞"]
-        : phase === "favorite_folders"
-          ? ["收藏夹"]
-          : ["收藏", "收藏作品", "收藏视频", "收藏夹"];
+        : ["收藏", "收藏作品", "收藏视频", "收藏夹"];
       const profileUrl = await this.resolveOwnProfileUrl(page, runId);
-      const neutralTab = phase === "favorite_folders" ? "favorite_collection" : "record";
+      const neutralTab = "record";
       const neutralUrl = profileTabUrl(profileUrl, neutralTab) ?? `${SELF_PROFILE_URL}?showTab=${neutralTab}`;
-      targetUrl = phase === "favorite_folders"
-        ? neutralUrl
-        : profileTabUrl(profileUrl, targetTab) ?? `${SELF_PROFILE_URL}?showTab=${targetTab}`;
+      targetUrl = profileTabUrl(profileUrl, targetTab) ?? `${SELF_PROFILE_URL}?showTab=${targetTab}`;
       await this.visit(page, neutralUrl, runId);
       if (!await isProfileTabSelected(page, neutralTab)) {
         const neutralLabels = neutralTab === "record"
@@ -950,7 +930,7 @@ export class DouyinCollector {
       }
       await this.waitForVersionAdvance(responseVersions, phase, before, runId, 4_000);
     }
-    const kinds = phase === "favorite_videos" ? [phase, "favorite_folders"] : [phase];
+    const kinds = [phase];
     const maxSteps = phase === "watch_history" ? 260 : 70;
     await resolveActiveVisualSurface(page, targetTab);
     await this.scrollUntilIdle(
@@ -964,8 +944,8 @@ export class DouyinCollector {
     );
     const emptyTab = phase === "liked_videos"
       ? "like"
-      : phase === "favorite_folders"
-        ? "favorite_folder"
+      : phase === "favorite_videos"
+        ? "favorite_collection"
         : null;
     if (
       emptyTab
@@ -974,43 +954,6 @@ export class DouyinCollector {
     ) {
       recordVerifiedEmpty(terminalProgresses[0]);
     }
-  }
-
-  async collectFavoriteFolders(page, accumulator, responseVersions, runId, favoriteUrl, hooks) {
-    const allFolders = accumulator.snapshot().folders;
-    const folders = allFolders.slice(0, MAX_FAVORITE_FOLDERS);
-    for (const folder of folders) {
-      this.assertSyncActive(runId);
-      await this.visit(page, favoriteUrl, runId);
-      const before = responseVersions.get("favorite_videos") ?? 0;
-      const progress = hooks.begin(folder.id);
-      try {
-        await captureVisualSurfaceBaseline(page, "favorite_collection");
-        const clicked = await clickSemanticTarget(page, [folder.name], {
-          roles: ["tab", "link", "button", "menuitem"],
-          allowText: true,
-          timeoutMs: 4_000,
-        });
-        if (clicked) {
-          await this.waitForVersionAdvance(responseVersions, "favorite_videos", before, runId, 5_000);
-          await resolveActiveVisualSurface(page, "favorite_collection");
-          await this.scrollUntilIdle(
-            page,
-            responseVersions,
-            ["favorite_videos"],
-            runId,
-            [progress],
-            45,
-            "favorite_collection",
-          );
-        }
-        await hooks.drain();
-      } finally {
-        hooks.end(folder.id);
-        await page.keyboard.press("Escape").catch(() => undefined);
-      }
-    }
-    return { discovered: allFolders.length, attempted: folders.length };
   }
 
   async runSync(runId) {
@@ -1026,10 +969,9 @@ export class DouyinCollector {
 
     const accumulator = new RecordAccumulator();
     const responseVersions = new Map();
-    const processedVersions = new Map();
     const primaryProgress = new Map(REQUIRED_TYPES.map((type) => [type, createEndpointProgress()]));
-    const favoriteFoldersProgress = createEndpointProgress();
-    const folderProgress = new Map();
+    const sampleIds = new Map(REQUIRED_TYPES.map((type) => [type, []]));
+    const sampledIdSets = new Map(REQUIRED_TYPES.map((type) => [type, new Set()]));
     const activeProgressByPath = new Map();
     const responseErrors = [];
     const pendingResponses = new Set();
@@ -1060,14 +1002,11 @@ export class DouyinCollector {
       if (!acceptingResponses || runId !== this.syncRunId) return;
       const endpoint = matchDouyinEndpoint(response.url());
       if (!endpoint) return;
+      const progress = activeProgressByPath.get(endpoint.pathname);
+      if (!progress) return;
       lastResponseAt = Date.now();
       responseVersions.set(endpoint.kind, (responseVersions.get(endpoint.kind) ?? 0) + 1);
-      let progress = activeProgressByPath.get(endpoint.pathname);
-      if (endpoint.pathname === "/aweme/v1/web/collects/video/list/") {
-        const folderId = favoriteFolderIdFromResponseUrl(response.url());
-        if (folderId) progress = folderProgress.get(folderId) ?? null;
-      }
-      if (progress) recordEndpointMatch(progress);
+      recordEndpointMatch(progress);
       const previous = processingChains.get(endpoint.pathname) ?? Promise.resolve();
       let task;
       task = previous.catch(() => undefined).then(async () => {
@@ -1080,8 +1019,16 @@ export class DouyinCollector {
         this.assertSyncActive(runId);
         if (!acceptingResponses) return;
         const normalized = accumulator.addResponse(endpoint, payload);
-        if (progress) recordEndpointResult(progress, normalized.pagination, normalized);
-        processedVersions.set(endpoint.kind, (processedVersions.get(endpoint.kind) ?? 0) + 1);
+        const ids = sampleIds.get(endpoint.kind);
+        const seen = sampledIdSets.get(endpoint.kind);
+        for (const id of normalized.recordIds ?? []) {
+          if (ids.length >= SYNC_SAMPLE_LIMIT) break;
+          if (!seen.has(id)) {
+            seen.add(id);
+            ids.push(id);
+          }
+        }
+        recordEndpointResult(progress, normalized.pagination, normalized);
         this.updateStatus({ counts: recordCounts(accumulator.snapshot().records) });
       }).catch((error) => {
         if (error instanceof CollectorCancelledError || runId !== this.syncRunId) return;
@@ -1096,8 +1043,6 @@ export class DouyinCollector {
 
     context.on("response", handleResponse);
     const phaseWarnings = [];
-    let favoriteUrl = `${SELF_PROFILE_URL}?showTab=favorite_collection`;
-    let folderStats = { discovered: 0, attempted: 0 };
 
     try {
       for (const phase of REQUIRED_TYPES) {
@@ -1120,35 +1065,6 @@ export class DouyinCollector {
         });
         await drainPendingResponses();
         activeProgressByPath.delete(REQUIRED_PATHS[phase]);
-        if (phase === "favorite_videos") {
-          favoriteUrl = profileTabUrl(page.url(), "favorite_collection") ?? favoriteUrl;
-        }
-      }
-
-      this.assertSyncActive(runId);
-      page = await this.currentPage(context);
-      this.updateStatus({ state: "collecting", phase: "favorite_videos", message: "正在读取收藏夹列表" });
-      activeProgressByPath.set("/aweme/v1/web/collects/list/", favoriteFoldersProgress);
-      await this.collectPhase(page, responseVersions, "favorite_folders", runId, [favoriteFoldersProgress])
-        .catch((error) => {
-          if (error instanceof CollectorCancelledError) throw error;
-          phaseWarnings.push(safeMessage(error, "收藏夹页面操作失败。"));
-        });
-      await drainPendingResponses();
-      activeProgressByPath.delete("/aweme/v1/web/collects/list/");
-
-      if (accumulator.snapshot().folders.length > 0) {
-        this.updateStatus({ state: "collecting", phase: "favorite_videos", message: "正在读取收藏夹视频" });
-        folderStats = await this.collectFavoriteFolders(page, accumulator, responseVersions, runId, favoriteUrl, {
-          begin: (folderId) => {
-            const progress = createEndpointProgress();
-            folderProgress.set(folderId, progress);
-            activeProgressByPath.set("/aweme/v1/web/collects/video/list/", progress);
-            return progress;
-          },
-          drain: drainPendingResponses,
-          end: () => activeProgressByPath.delete("/aweme/v1/web/collects/video/list/"),
-        });
       }
 
       const drained = await drainPendingResponses();
@@ -1156,24 +1072,16 @@ export class DouyinCollector {
       if (!drained) phaseWarnings.push("部分抖音响应读取超时，本次结果按不完整数据处理。");
 
       const completeTypes = new Set();
-      for (const type of ["watch_history", "liked_videos"]) {
-        if (isEndpointComplete(primaryProgress.get(type)) && !accumulator.isTruncated(type)) {
+      for (const type of REQUIRED_TYPES) {
+        const progress = primaryProgress.get(type);
+        if (
+          progress.verifiedEmpty
+          || (progress.matchedCount > 0
+            && progress.processedCount === progress.matchedCount
+            && (progress.uniqueAddedCount > 0 || progress.terminalSeen))
+        ) {
           completeTypes.add(type);
         }
-      }
-      const favoritePrimaryComplete = isEndpointComplete(primaryProgress.get("favorite_videos"));
-      const folderListComplete = isEndpointComplete(favoriteFoldersProgress);
-      const foldersWithinLimit = folderStats.discovered <= MAX_FAVORITE_FOLDERS;
-      const allFoldersComplete = folderStats.attempted === folderStats.discovered
-        && [...folderProgress.values()].every((progress) => isEndpointComplete(progress));
-      if (
-        favoritePrimaryComplete
-        && folderListComplete
-        && foldersWithinLimit
-        && allFoldersComplete
-        && !accumulator.isTruncated("favorite_videos")
-      ) {
-        completeTypes.add("favorite_videos");
       }
 
       const addProgressWarnings = (label, progress, { required = true } = {}) => {
@@ -1184,49 +1092,40 @@ export class DouyinCollector {
         if (progress.processedCount < progress.matchedCount) {
           phaseWarnings.push(`${label}部分网页响应未能读取。`);
         }
-        if (!progress.terminalSeen) phaseWarnings.push(`${label}分页尚未完整读取。`);
-        if (progress.repeatedPageFingerprint && !progress.terminalSeen) {
-          phaseWarnings.push(`${label}网页响应出现重复分页，仍未捕获终页。`);
+        if (progress.visualSurfaceMissing && progress.uniqueAddedCount < SYNC_SAMPLE_LIMIT) {
+          phaseWarnings.push(`${label}未继续滚动，已使用当前读取到的 ${progress.uniqueAddedCount} 条。`);
         }
-        if (progress.visualSurfaceMissing) phaseWarnings.push(`${label}未定位到可滚动的顶层内容区域。`);
-        if (progress.cursorStalled) phaseWarnings.push(`${label}分页游标停滞。`);
-        if (progress.paginationMissing) phaseWarnings.push(`${label}响应缺少分页字段。`);
       };
 
       for (const type of REQUIRED_TYPES) {
         addProgressWarnings(TYPE_LABELS[type], primaryProgress.get(type));
-        if (accumulator.isTruncated(type)) phaseWarnings.push(`${TYPE_LABELS[type]}超过本地记录上限。`);
-      }
-      addProgressWarnings("收藏夹列表", favoriteFoldersProgress);
-      const incompleteFolderCount = [...folderProgress.values()]
-        .filter((progress) => !isEndpointComplete(progress)).length;
-      if (incompleteFolderCount > 0) phaseWarnings.push(`有 ${incompleteFolderCount} 个收藏夹未完整读取。`);
-      if (!foldersWithinLimit) {
-        phaseWarnings.push(`收藏夹数量超过 ${MAX_FAVORITE_FOLDERS} 个，本次未能全部读取。`);
       }
 
       const normalized = accumulator.snapshot().records;
-      const mergedAccumulator = new RecordAccumulator(this.snapshot.records);
-      for (const type of REQUIRED_TYPES) mergedAccumulator.addRecords(type, normalized[type]);
-      const merged = mergedAccumulator.snapshot().records;
       for (const type of REQUIRED_TYPES) {
-        if (completeTypes.has(type)) continue;
-        if ((processedVersions.get(type) ?? 0) > 0) {
-          normalized[type] = merged[type];
-          phaseWarnings.push(`${TYPE_LABELS[type]}未完整读取，已保留已有记录并合并本次结果。`);
+        const currentById = new Map(normalized[type].map((record) => [record.id, record]));
+        const currentSample = sampleIds.get(type).flatMap((id) => currentById.has(id) ? [currentById.get(id)] : []);
+        if (completeTypes.has(type)) {
+          normalized[type] = currentSample;
+        } else if (this.snapshot.records[type].length > 0) {
+          normalized[type] = structuredClone(this.snapshot.records[type].slice(0, SYNC_SAMPLE_LIMIT));
+          phaseWarnings.push(`${TYPE_LABELS[type]}读取不完整，已保留上次样本。`);
         } else {
-          normalized[type] = structuredClone(this.snapshot.records[type]);
+          normalized[type] = currentSample;
+          phaseWarnings.push(currentSample.length > 0
+            ? `${TYPE_LABELS[type]}读取不完整，已使用本次读取到的 ${currentSample.length} 条。`
+            : `${TYPE_LABELS[type]}未读取到可用记录，也未确认列表为空。`);
         }
       }
 
       const warnings = [...new Set([...phaseWarnings, ...responseErrors])];
       this.assertSyncActive(runId);
       this.snapshot = await this.store.save(normalized, warnings);
-      const complete = completeTypes.size === REQUIRED_TYPES.length;
+      const complete = completeTypes.size === REQUIRED_TYPES.length && responseErrors.length === 0;
       this.updateStatus({
         state: complete ? "complete" : "partial",
         phase: null,
-        message: complete ? "观看历史、点赞和收藏已同步" : "部分列表未捕获，请按提示重试",
+        message: complete ? "当前样本已读取，每类最多 50 条" : "部分列表未捕获，已保留现有数据",
         counts: recordCounts(this.snapshot.records),
         updatedAt: this.snapshot.updatedAt,
       });
