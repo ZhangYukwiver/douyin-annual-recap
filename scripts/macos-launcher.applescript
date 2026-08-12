@@ -55,8 +55,7 @@ on startSupervisor()
 		set nodePath to do shell script "/bin/zsh -lc " & quoted form of "command -v node"
 		if nodePath is "" then error "未找到 Node.js。"
 		set launcherPath to projectPath & "/scripts/launch-macos.mjs"
-		set appExecutable to applicationPath & "/Contents/MacOS/applet"
-		set appPID to do shell script "/usr/bin/pgrep -f -x " & quoted form of appExecutable
+		set appPID to do shell script "/bin/echo $PPID"
 		set launchCommand to "(cd " & quoted form of projectPath & " && DOUYIN_LAUNCHER_APP_PID=" & quoted form of appPID & " exec " & quoted form of nodePath & " " & quoted form of launcherPath & " 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- </dev/null >/dev/null 2>&1) & echo $!"
 		set supervisorPID to do shell script launchCommand
 	on error errorMessage
