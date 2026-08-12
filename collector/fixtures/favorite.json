@@ -1,0 +1,28 @@
+{
+  "status_code": 0,
+  "data": {
+    "aweme_list": [
+      {
+        "aweme_id": "demo-liked-001",
+        "desc": "示例喜欢记录",
+        "digg_time": 1738368000,
+        "create_time": 1704067200,
+        "author": {
+          "uid": "demo-author-b",
+          "nickname": "示例创作者乙",
+          "avatar_thumb": {
+            "url_list": ["https://untrusted.example/demo-avatar"]
+          }
+        },
+        "video": {
+          "duration": 45000,
+          "cover": {
+            "url_list": ["https://untrusted.example/demo-cover"]
+          }
+        }
+      }
+    ],
+    "has_more": false,
+    "max_cursor": "0"
+  }
+}

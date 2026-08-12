@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "watch_history": [
+    { "videoId": "demo-001", "title": "#城市散步 清晨路线", "author": "示例创作者甲", "authorId": "author-a", "occurredAt": "2025-01-03T00:10:00.000Z", "occurredAtSource": "archive_action", "coverUrl": "https://p3.douyinpic.com/demo-001", "durationSeconds": 28, "topics": ["城市散步"], "music": { "id": "music-a", "title": "清晨节拍", "author": "示例音乐人" }, "stats": { "diggCount": 180, "commentCount": 12, "shareCount": 8 } },
+    { "videoId": "demo-002", "title": "#手作 木工小物", "author": "示例创作者乙", "authorId": "author-b", "occurredAt": "2025-01-08T13:20:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 64, "topics": ["手作"] },
+    { "videoId": "demo-003", "title": "一碗热汤的做法 #家常菜", "author": "示例创作者丙", "authorId": "author-c", "occurredAt": "2025-01-15T14:35:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 92, "topics": ["家常菜"] },
+    { "videoId": "demo-004", "title": "#摄影 阴天也有层次", "author": "示例创作者甲", "authorId": "author-a", "occurredAt": "2025-02-02T15:05:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 43, "topics": ["摄影"] },
+    { "videoId": "demo-005", "title": "周末书桌整理", "author": "示例创作者丁", "authorId": "author-d", "occurredAt": "2025-02-11T15:40:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 18 },
+    { "videoId": "demo-006", "title": "#城市散步 河边晚风", "author": "示例创作者甲", "authorId": "author-a", "occurredAt": "2025-03-01T14:12:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 36, "topics": ["城市散步"] },
+    { "videoId": "demo-007", "title": "春天的第一束花 #植物", "author": "示例创作者戊", "authorId": "author-e", "occurredAt": "2025-03-09T02:22:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 51, "topics": ["植物"] },
+    { "videoId": "demo-008", "title": "#手作 修好旧台灯", "author": "示例创作者乙", "authorId": "author-b", "occurredAt": "2025-03-18T15:18:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 125, "topics": ["手作"] },
+    { "videoId": "demo-009", "title": "十分钟拉伸", "author": "示例创作者己", "authorId": "author-f", "occurredAt": "2025-04-04T23:40:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 600 },
+    { "videoId": "demo-010", "title": "#摄影 夜景取景思路", "author": "示例创作者甲", "authorId": "author-a", "occurredAt": "2025-04-17T15:35:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 78, "topics": ["摄影"] },
+    { "videoId": "demo-011", "title": "一人份晚餐 #家常菜", "author": "示例创作者丙", "authorId": "author-c", "occurredAt": "2025-05-05T12:15:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 84, "topics": ["家常菜"] },
+    { "videoId": "demo-012", "title": "#城市散步 老街转角", "author": "示例创作者甲", "authorId": "author-a", "occurredAt": "2025-05-19T15:02:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 31, "topics": ["城市散步"] },
+    { "videoId": "demo-013", "title": "雨天读书片段", "author": "示例创作者丁", "authorId": "author-d", "occurredAt": "2025-06-06T01:12:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 205 },
+    { "videoId": "demo-014", "title": "#手作 小屋收纳", "author": "示例创作者乙", "authorId": "author-b", "occurredAt": "2025-06-21T14:42:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 147, "topics": ["手作"] },
+    { "videoId": "demo-015", "title": "夏夜骑行", "author": "示例创作者庚", "authorId": "author-g", "occurredAt": "2025-07-07T15:31:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 56 },
+    { "videoId": "demo-016", "title": "#城市散步 路灯亮起", "author": "示例创作者甲", "authorId": "author-a", "occurredAt": "2025-08-12T15:25:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 39, "topics": ["城市散步"] },
+    { "videoId": "demo-017", "title": "秋天的配色 #摄影", "author": "示例创作者甲", "authorId": "author-a", "occurredAt": "2025-09-09T14:58:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 69, "topics": ["摄影"] },
+    { "videoId": "demo-018", "title": "#家常菜 热气腾腾", "author": "示例创作者丙", "authorId": "author-c", "occurredAt": "2025-10-18T12:08:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 103, "topics": ["家常菜"] },
+    { "videoId": "demo-019", "title": "修补一只旧包 #手作", "author": "示例创作者乙", "authorId": "author-b", "occurredAt": "2025-11-11T15:11:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 188, "topics": ["手作"] },
+    { "videoId": "demo-020", "title": "#城市散步 年末灯火", "author": "示例创作者甲", "authorId": "author-a", "occurredAt": "2025-12-20T15:20:00.000Z", "occurredAtSource": "archive_action", "durationSeconds": 44, "topics": ["城市散步"], "stats": { "diggCount": 260, "commentCount": 21, "shareCount": 17, "collectCount": 34 } }
+  ],
+  "liked_videos": [
+    { "videoId": "demo-001", "title": "#城市散步 清晨路线", "author": "示例创作者甲", "occurredAt": "2025-01-03T00:12:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-002", "title": "#手作 木工小物", "author": "示例创作者乙", "occurredAt": "2025-02-03T13:30:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-003", "title": "一碗热汤的做法 #家常菜", "author": "示例创作者丙", "occurredAt": "2025-03-03T14:42:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-004", "title": "#摄影 阴天也有层次", "author": "示例创作者甲", "occurredAt": "2025-04-04T15:22:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-005", "title": "周末书桌整理", "author": "示例创作者丁", "occurredAt": "2025-05-05T15:45:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-006", "title": "#城市散步 河边晚风", "author": "示例创作者甲", "occurredAt": "2025-06-06T14:22:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-007", "title": "春天的第一束花 #植物", "author": "示例创作者戊", "occurredAt": "2025-07-07T02:28:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-008", "title": "#手作 修好旧台灯", "author": "示例创作者乙", "occurredAt": "2025-08-08T15:24:00.000Z", "occurredAtSource": "archive_action" }
+  ],
+  "favorite_videos": [
+    { "videoId": "demo-001", "title": "#城市散步 清晨路线", "author": "示例创作者甲", "occurredAt": "2025-01-03T00:14:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-002", "title": "#手作 木工小物", "author": "示例创作者乙", "occurredAt": "2025-03-08T13:32:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-003", "title": "一碗热汤的做法 #家常菜", "author": "示例创作者丙", "occurredAt": "2025-05-15T14:45:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-004", "title": "#摄影 阴天也有层次", "author": "示例创作者甲", "occurredAt": "2025-07-21T15:28:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-005", "title": "周末书桌整理", "author": "示例创作者丁", "occurredAt": "2025-10-02T15:48:00.000Z", "occurredAtSource": "archive_action" },
+    { "videoId": "demo-undated", "title": "没有行为时间的收藏", "author": "示例创作者辛", "occurredAt": null, "occurredAtSource": "unknown" }
+  ]
+}

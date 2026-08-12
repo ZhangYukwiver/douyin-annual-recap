@@ -1,0 +1,25 @@
+{
+  "status_code": 0,
+  "aweme_list": [
+    {
+      "aweme_id": "demo-favorite-001",
+      "desc": "#手作 示例收藏记录",
+      "collect_time": 1740787200,
+      "author": {
+        "uid": "demo-author-c",
+        "nickname": "示例创作者丙"
+      },
+      "video": {
+        "duration": 72000,
+        "cover": {
+          "url_list": ["https://p3.douyinpic.com/demo-cover-c"]
+        }
+      },
+      "text_extra": [
+        { "hashtag_name": "手作" }
+      ]
+    }
+  ],
+  "has_more": 0,
+  "cursor": "0"
+}

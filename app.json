@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "内容数据工作台",
+    "slug": "douyin-content-insights",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "contentinsights",
+    "android": {
+      "usesCleartextTraffic": true
+    },
+    "ios": {
+      "infoPlist": {
+        "NSAllowsLocalNetworking": true,
+        "NSLocalNetworkUsageDescription": "连接电脑上的本地抖音记录采集服务。"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
