@@ -4,7 +4,9 @@ import {
   ANNUAL_CARD_IDS,
   buildAnnualIndex,
   buildAnnualReport,
+  buildPersonalSummary,
   type AnnualCreatorsData,
+  type AnnualHighlightsData,
   type AnnualInterestsData,
   type AnnualKeptData,
   type AnnualOverviewData,
@@ -44,6 +46,75 @@ function cardData<T>(report: ReturnType<typeof buildAnnualReport>, id: string): 
 }
 
 describe("annual report domain", () => {
+  it("summarizes up to 50 current records per list without requiring dates", () => {
+    const watch = Array.from({ length: 55 }, (_, index) => record(`watch-${index}`, null, {
+      videoId: index === 0 ? "shared" : `watch-${index}`,
+      author: "样本作者",
+      authorId: "author-sample",
+      occurredAtSource: "unknown",
+      topics: ["旅行"],
+      durationSeconds: index === 0 ? 180 : 30,
+      stats: index === 0 ? { diggCount: 20, commentCount: 5 } : null,
+    }));
+    const summary = buildPersonalSummary(recordsOf({
+      watch_history: watch,
+      liked_videos: [record("liked-shared", null, {
+        videoId: "shared",
+        author: "样本作者",
+        authorId: "author-sample",
+        occurredAtSource: "unknown",
+      })],
+      favorite_videos: [record("favorite-shared", null, {
+        videoId: "shared",
+        author: "样本作者",
+        authorId: "author-sample",
+        occurredAtSource: "unknown",
+      })],
+    }));
+
+    expect(summary.status).toBe("ok");
+    expect(summary.periodLabel).toBe("当前样本");
+    expect(summary.cards.map((card) => card.id)).toEqual(ANNUAL_CARD_IDS);
+    const overview = cardData<AnnualOverviewData>(summary, "overview");
+    const creators = cardData<AnnualCreatorsData>(summary, "creators");
+    const interests = cardData<AnnualInterestsData>(summary, "interests");
+    const kept = cardData<AnnualKeptData>(summary, "kept");
+    const highlights = cardData<AnnualHighlightsData>(summary, "highlights");
+    const recap = cardData<AnnualSummaryData>(summary, "summary");
+    expect(overview.counts).toEqual({ watch: 50, liked: 1, favorite: 1, total: 50, watchEvents: 50, likedEvents: 1, favoriteEvents: 1 });
+    expect(creators.top[0]).toMatchObject({ name: "样本作者", count: 50, events: 52 });
+    expect(interests.topics[0]).toEqual({ name: "旅行", count: 50 });
+    expect(kept.allThree).toBe(1);
+    expect(highlights.longest?.videoId).toBe("shared");
+    expect(highlights.mostEngaged?.videoId).toBe("shared");
+    expect(recap.metrics.totalUniqueVideos).toBe(50);
+    expect(summary.overview.status).toBe("ok");
+    expect(summary.rhythm.status).toBe("insufficient");
+    expect(summary.monthly.status).toBe("insufficient");
+    expect(summary.highlights.status).toBe("ok");
+    expect(summary.overview.notices).toContain("52 条记录已进入内容统计，但未进入时间图表");
+  });
+
+  it("keeps cross-year samples together while leaving annual charts unmerged", () => {
+    const summary = buildPersonalSummary(recordsOf({
+      watch_history: [
+        record("older", "2024-05-01T00:00:00Z", { videoId: "older", occurredAtSource: "platform_action" }),
+        record("newer", "2025-06-01T00:00:00Z", { videoId: "newer", occurredAtSource: "platform_action" }),
+      ],
+      liked_videos: [record("undated", null, { videoId: "undated", occurredAtSource: "unknown", topics: ["样本"] })],
+    }));
+
+    const overview = cardData<AnnualOverviewData>(summary, "overview");
+    const highlights = cardData<AnnualHighlightsData>(summary, "highlights");
+    expect(overview.counts.total).toBe(3);
+    expect(overview.activeDays).toBe(2);
+    expect(overview.dateRange).toMatchObject({ start: "2024-05-01", end: "2025-06-01" });
+    expect(overview.calendar).toEqual([]);
+    expect(summary.monthly).toMatchObject({ status: "insufficient", reason: "当前样本跨越多个年份，未合并月份趋势" });
+    expect(highlights.first?.videoId).toBe("older");
+    expect(highlights.last?.videoId).toBe("newer");
+  });
+
   it("buckets strict action times at the Asia/Shanghai year boundary", () => {
     const records = recordsOf({
       watch_history: [

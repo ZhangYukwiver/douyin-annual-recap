@@ -223,6 +223,17 @@ export const ANNUAL_CARD_MANIFEST: readonly AnnualCardManifest[] = [
   },
 ] as const;
 
+export const PERSONAL_SUMMARY_CARD_MANIFEST: readonly AnnualCardManifest[] = [
+  { id: "overview", order: 0, title: "样本总览", eyebrow: "CURRENT SAMPLE", description: "当前三类列表的内容与时间覆盖" },
+  { id: "rhythm", order: 1, title: "观看作息", eyebrow: "YOUR RHYTHM", description: "有可靠行为时间的观看样本分布" },
+  { id: "monthly", order: 2, title: "月份分布", eyebrow: "THE ARC", description: "有可靠行为时间的样本月度变化" },
+  { id: "creators", order: 3, title: "创作者宇宙", eyebrow: "YOUR CREATORS", description: "当前样本中的创作者分布" },
+  { id: "interests", order: 4, title: "兴趣与声音", eyebrow: "YOUR SIGNALS", description: "当前样本中的显式话题、音乐与时长" },
+  { id: "kept", order: 5, title: "留下来的内容", eyebrow: "WHAT STAYED", description: "三类当前样本的内容交集" },
+  { id: "highlights", order: 6, title: "内容高光", eyebrow: "HIGHLIGHTS", description: "从当前样本中选出的代表内容" },
+  { id: "summary", order: 7, title: "Bento 总结", eyebrow: "THE RECAP", description: "复用前七张卡片的个人摘要" },
+] as const;
+
 export interface AnnualOverviewData {
   counts: {
     watch: number;
@@ -427,6 +438,12 @@ export interface AnnualReport {
   kept: AnnualCard;
   highlights: AnnualCard;
   summary: AnnualCard;
+}
+
+export const PERSONAL_SUMMARY_SAMPLE_LIMIT = 50;
+
+export interface PersonalSummaryReport extends AnnualReport {
+  sampleLimit: typeof PERSONAL_SUMMARY_SAMPLE_LIMIT;
 }
 
 type ShortType = "watch" | "liked" | "favorite";
@@ -1032,10 +1049,10 @@ function calendarForYear(entries: readonly AnnualIndexedRecord[], year: number):
   return result;
 }
 
-function peakDayForYear(entries: readonly AnnualIndexedRecord[], year: number): AnnualPeakDay | null {
+function peakDayForEntries(entries: readonly AnnualIndexedRecord[], year?: number): AnnualPeakDay | null {
   const byDate = new Map<string, AnnualIndexedRecord[]>();
   for (const entry of entries) {
-    if (!entry.zoned || entry.zoned.year !== year) continue;
+    if (!entry.zoned || (year !== undefined && entry.zoned.year !== year)) continue;
     const list = byDate.get(entry.zoned.date) ?? [];
     list.push(entry);
     byDate.set(entry.zoned.date, list);
@@ -1065,7 +1082,7 @@ function buildOverview(index: AnnualIndex, year: number): { data: AnnualOverview
   const calendar = calendarForYear(entries, year);
   const activeDays = calendar.filter((day) => day.count > 0).length;
   const watchActiveDays = calendar.filter((day) => day.byType.watch > 0).length;
-  const peakDay = peakDayForYear(entries, year);
+  const peakDay = peakDayForEntries(entries, year);
   const coverage = buildCoverage(bucketFor(index, year).entries, index.availableYears, index.options, year);
   const data: AnnualOverviewData = {
     counts: {
@@ -1090,8 +1107,36 @@ function buildOverview(index: AnnualIndex, year: number): { data: AnnualOverview
   };
 }
 
-function buildRhythm(index: AnnualIndex, year: number): { data: AnnualRhythmData; status: AnnualCardStatus; reason: string | null } {
-  const entries = bucketFor(index, year).reliableEntries.filter((entry) => entry.type === "watch_history");
+function buildSampleOverview(index: AnnualIndex): { data: AnnualOverviewData; status: AnnualCardStatus; reason: string | null } {
+  const reliable = index.entries.filter(isReliableAnnualEntry);
+  const years = [...new Set(reliable.map((entry) => entry.zoned!.year))];
+  const calendar = years.length === 1 ? calendarForYear(reliable, years[0]!) : [];
+  return {
+    data: {
+      counts: {
+        watch: index.uniqueByType.watch_history.length,
+        liked: index.uniqueByType.liked_videos.length,
+        favorite: index.uniqueByType.favorite_videos.length,
+        total: index.uniqueEntries.length,
+        watchEvents: index.byType.watch_history.length,
+        likedEvents: index.byType.liked_videos.length,
+        favoriteEvents: index.byType.favorite_videos.length,
+      },
+      activeDays: new Set(reliable.map((entry) => entry.zoned!.date)).size,
+      watchActiveDays: new Set(reliable.filter((entry) => entry.type === "watch_history").map((entry) => entry.zoned!.date)).size,
+      dateRange: index.coverage.dateRange,
+      peakDay: peakDayForEntries(reliable),
+      calendar,
+      coverage: index.coverage,
+    },
+    ...cardStatus(index.entries.length > 0, "当前还没有可总结的记录"),
+  };
+}
+
+function buildRhythmFromEntries(
+  entries: readonly AnnualIndexedRecord[],
+  missingReason: string,
+): { data: AnnualRhythmData; status: AnnualCardStatus; reason: string | null } {
   const cellMap = new Map<string, AnnualIndexedRecord[]>();
   const weekdayCounts = new Map<number, number>();
   const hourCounts = new Map<number, number>();
@@ -1130,11 +1175,20 @@ function buildRhythm(index: AnnualIndex, year: number): { data: AnnualRhythmData
     watchRecordCount: entries.length,
     activeDays,
   };
-  return { data, ...cardStatus(sufficient, "观看历史不足以判断稳定的观看作息") };
+  return { data, ...cardStatus(sufficient, missingReason) };
 }
 
-function buildMonthly(index: AnnualIndex, year: number): { data: AnnualMonthlyData; status: AnnualCardStatus; reason: string | null } {
-  const entries = bucketFor(index, year).reliableEntries;
+function buildRhythm(index: AnnualIndex, year: number): { data: AnnualRhythmData; status: AnnualCardStatus; reason: string | null } {
+  return buildRhythmFromEntries(
+    bucketFor(index, year).reliableEntries.filter((entry) => entry.type === "watch_history"),
+    "观看历史不足以判断稳定的观看作息",
+  );
+}
+
+function buildMonthlyFromEntries(
+  entries: readonly AnnualIndexedRecord[],
+  missingReason: string,
+): { data: AnnualMonthlyData; status: AnnualCardStatus; reason: string | null } {
   const months: AnnualMonthPoint[] = [];
   const availability = {} as Record<ShortType, boolean>;
   for (const type of TYPE_ORDER) availability[SHORT_TYPE[type]] = entries.some((entry) => entry.type === type);
@@ -1167,12 +1221,18 @@ function buildMonthly(index: AnnualIndex, year: number): { data: AnnualMonthlyDa
       seriesAvailability: availability,
       unavailableSeries: (["watch", "liked", "favorite"] as ShortType[]).filter((type) => !availability[type]),
     },
-    ...cardStatus(hasSeries, "这一年没有可按月比较的行为时间"),
+    ...cardStatus(hasSeries, missingReason),
   };
 }
 
-function buildCreators(index: AnnualIndex, year: number): { data: AnnualCreatorsData; status: AnnualCardStatus; reason: string | null } {
-  const entries = bucketFor(index, year).reliableEntries;
+function buildMonthly(index: AnnualIndex, year: number): { data: AnnualMonthlyData; status: AnnualCardStatus; reason: string | null } {
+  return buildMonthlyFromEntries(bucketFor(index, year).reliableEntries, "这一年没有可按月比较的行为时间");
+}
+
+function buildCreatorsFromEntries(
+  entries: readonly AnnualIndexedRecord[],
+  missingReason: string,
+): { data: AnnualCreatorsData; status: AnnualCardStatus; reason: string | null } {
   const groups = new Map<string, { name: string; id: string | null; keys: Set<string>; events: number }>();
   const idsByRecord = new Map<string, Set<string>>();
   const unknownKeys = new Set<string>();
@@ -1208,14 +1268,20 @@ function buildCreators(index: AnnualIndex, year: number): { data: AnnualCreators
   const exploration = total > 0 ? groups.size / total : 0;
   return {
     data: { top, creatorCount: groups.size, unknownCount: unknownKeys.size, headShare, exploration },
-    ...cardStatus(ranked.length > 0, "年度记录中没有可识别的创作者"),
+    ...cardStatus(ranked.length > 0, missingReason),
   };
 }
 
-function buildInterests(index: AnnualIndex, year: number): { data: AnnualInterestsData; status: AnnualCardStatus; reason: string | null } {
+function buildCreators(index: AnnualIndex, year: number): { data: AnnualCreatorsData; status: AnnualCardStatus; reason: string | null } {
+  return buildCreatorsFromEntries(bucketFor(index, year).reliableEntries, "年度记录中没有可识别的创作者");
+}
+
+function buildInterestsFromEntries(
+  entries: readonly AnnualIndexedRecord[],
+  missingReason: string,
+): { data: AnnualInterestsData; status: AnnualCardStatus; reason: string | null } {
   // Interest metadata describes content, so the same video present in several
   // behavior lists contributes once rather than masquerading as repeat views.
-  const entries = bucketFor(index, year).reliableUniqueEntries;
   const topics = new Map<string, number>();
   const music = new Map<string, AnnualMusic>();
   const durations: AnnualDurationBucket[] = [
@@ -1261,8 +1327,15 @@ function buildInterests(index: AnnualIndex, year: number): { data: AnnualInteres
       durationStats: { count: durationValues.length, averageSeconds, medianSeconds },
       signalCount,
     },
-    ...cardStatus(signalCount > 0, "年度记录缺少可用的话题、音乐或时长字段"),
+    ...cardStatus(signalCount > 0, missingReason),
   };
+}
+
+function buildInterests(index: AnnualIndex, year: number): { data: AnnualInterestsData; status: AnnualCardStatus; reason: string | null } {
+  return buildInterestsFromEntries(
+    bucketFor(index, year).reliableUniqueEntries,
+    "年度记录缺少可用的话题、音乐或时长字段",
+  );
 }
 
 function buildKept(index: AnnualIndex): { data: AnnualKeptData; status: AnnualCardStatus; reason: string | null } {
@@ -1291,15 +1364,19 @@ function buildKept(index: AnnualIndex): { data: AnnualKeptData; status: AnnualCa
   };
 }
 
-function buildHighlights(index: AnnualIndex, year: number, peakDay: AnnualPeakDay | null): { data: AnnualHighlightsData; status: AnnualCardStatus; reason: string | null } {
-  const entries = bucketFor(index, year).reliableEntries;
-  const sorted = entries;
+function buildHighlightsFromEntries(
+  timeEntries: readonly AnnualIndexedRecord[],
+  contentEntries: readonly AnnualIndexedRecord[],
+  peakDay: AnnualPeakDay | null,
+  missingReason: string,
+): { data: AnnualHighlightsData; status: AnnualCardStatus; reason: string | null } {
+  const sorted = [...timeEntries].sort(compareEntries);
   const byPeak = peakDay?.records[0] ?? null;
-  const withDuration = entries.filter((entry) => durationOf(entry.record) !== null).sort((left, right) => {
+  const withDuration = contentEntries.filter((entry) => durationOf(entry.record) !== null).sort((left, right) => {
     const delta = (durationOf(right.record) ?? 0) - (durationOf(left.record) ?? 0);
     return delta || compareEntries(left, right);
   });
-  const withScore = entries.filter((entry) => interactionScore(entry.record) !== null).sort((left, right) => {
+  const withScore = contentEntries.filter((entry) => interactionScore(entry.record) !== null).sort((left, right) => {
     const delta = (interactionScore(right.record) ?? 0) - (interactionScore(left.record) ?? 0);
     return delta || compareEntries(left, right);
   });
@@ -1310,7 +1387,12 @@ function buildHighlights(index: AnnualIndex, year: number, peakDay: AnnualPeakDa
     longest: withDuration[0] ? contentRef(withDuration[0]) : null,
     mostEngaged: withScore[0] ? contentRef(withScore[0]) : null,
   };
-  return { data, ...cardStatus(entries.length > 0, "这一年没有可用于高光排序的可靠时间记录") };
+  return { data, ...cardStatus(Object.values(data).some(Boolean), missingReason) };
+}
+
+function buildHighlights(index: AnnualIndex, year: number, peakDay: AnnualPeakDay | null): { data: AnnualHighlightsData; status: AnnualCardStatus; reason: string | null } {
+  const entries = bucketFor(index, year).reliableEntries;
+  return buildHighlightsFromEntries(entries, entries, peakDay, "这一年没有可用于高光排序的可靠时间记录");
 }
 
 function weekdayLabel(weekday: number): string {
@@ -1356,6 +1438,7 @@ function buildSummary(
   interests: AnnualCard,
   kept: AnnualCard,
   coverage: DataCoverage,
+  missingReason = "没有足够的年度数据生成摘要",
 ): { data: AnnualSummaryData; status: AnnualCardStatus; reason: string | null } {
   const overviewData = overview.data as AnnualOverviewData;
   const creatorsData = creators.data as AnnualCreatorsData;
@@ -1375,8 +1458,27 @@ function buildSummary(
       coverage,
       sourceCardIds: ["overview", "rhythm", "monthly", "creators", "interests", "kept", "highlights"],
     },
-    ...cardStatus(hasAny, "没有足够的年度数据生成摘要"),
+    ...cardStatus(hasAny, missingReason),
   };
+}
+
+function sampleNoticesForCard(
+  id: AnnualCardId,
+  coverage: DataCoverage,
+  kept: AnnualKeptData,
+  spansYears: boolean,
+): string[] {
+  const notices: string[] = [];
+  if (coverage.partial) notices.push(...(coverage.warnings.length ? coverage.warnings : ["采集状态为 partial，结论只代表当前样本"]));
+  if (["overview", "rhythm", "monthly", "highlights"].includes(id)) {
+    const withoutReliableTime = coverage.recordCount - coverage.reliableRecordCount;
+    if (withoutReliableTime > 0) notices.push(`${withoutReliableTime} 条记录已进入内容统计，但未进入时间图表`);
+  }
+  if ((id === "overview" || id === "monthly") && spansYears) notices.push("可靠行为时间跨越多个年份，未合并日历和月份趋势");
+  if ((id === "kept" || id === "summary") && kept.unknownIdRecordCount > 0) {
+    notices.push(`${kept.unknownIdRecordCount} 条记录缺少可比较的 videoId，未进入列表交集`);
+  }
+  return [...new Set(notices)];
 }
 
 export function buildAnnualIndex(
@@ -1521,4 +1623,85 @@ export function buildAnnualReport(index: AnnualIndex, year: number): AnnualRepor
     summary: byId.get("summary")!,
   };
   return report;
+}
+
+export function buildPersonalSummary(
+  records: PersonalRecordCollection | null | undefined,
+  options: AnnualIndexOptions = {},
+): PersonalSummaryReport {
+  const sampled: PersonalRecordCollection = {
+    watch_history: safeTypeRecords(records, "watch_history").slice(0, PERSONAL_SUMMARY_SAMPLE_LIMIT),
+    liked_videos: safeTypeRecords(records, "liked_videos").slice(0, PERSONAL_SUMMARY_SAMPLE_LIMIT),
+    favorite_videos: safeTypeRecords(records, "favorite_videos").slice(0, PERSONAL_SUMMARY_SAMPLE_LIMIT),
+  };
+  const index = buildAnnualIndex(sampled, options);
+  const reliableEntries = index.entries.filter(isReliableAnnualEntry);
+  const reliableYears = new Set(reliableEntries.map((entry) => entry.zoned!.year));
+  const spansYears = reliableYears.size > 1;
+  const overviewResult = buildSampleOverview(index);
+  const rhythmResult = buildRhythmFromEntries(
+    reliableEntries.filter((entry) => entry.type === "watch_history"),
+    "当前观看样本不足以判断稳定的观看作息",
+  );
+  const monthlyResult = spansYears
+    ? buildMonthlyFromEntries([], "当前样本跨越多个年份，未合并月份趋势")
+    : buildMonthlyFromEntries(reliableEntries, "当前样本没有可按月比较的可靠行为时间");
+  const creatorsResult = buildCreatorsFromEntries(index.entries, "当前样本中没有可识别的创作者");
+  const interestsResult = buildInterestsFromEntries(index.uniqueEntries, "当前样本缺少可用的话题、音乐或时长字段");
+  const keptResult = buildKept(index);
+  const highlightsResult = buildHighlightsFromEntries(
+    reliableEntries,
+    index.uniqueEntries,
+    overviewResult.data.peakDay,
+    "当前样本缺少可用于高光展示的时间、时长或互动信息",
+  );
+  const byId = new Map<AnnualCardId, AnnualCard>();
+  const results: Array<{ id: AnnualCardId; result: { data: AnnualCardData; status: AnnualCardStatus; reason: string | null } }> = [
+    { id: "overview", result: overviewResult },
+    { id: "rhythm", result: rhythmResult },
+    { id: "monthly", result: monthlyResult },
+    { id: "creators", result: creatorsResult },
+    { id: "interests", result: interestsResult },
+    { id: "kept", result: keptResult },
+    { id: "highlights", result: highlightsResult },
+  ];
+  for (const item of results) {
+    const manifest = PERSONAL_SUMMARY_CARD_MANIFEST.find((candidate) => candidate.id === item.id)!;
+    byId.set(item.id, makeCard(manifest, item.result));
+  }
+  const summaryResult = buildSummary(
+    byId.get("overview")!,
+    byId.get("creators")!,
+    byId.get("interests")!,
+    byId.get("kept")!,
+    index.coverage,
+    "当前还没有足够的样本生成摘要",
+  );
+  byId.set("summary", makeCard(PERSONAL_SUMMARY_CARD_MANIFEST.find((candidate) => candidate.id === "summary")!, summaryResult));
+  const keptData = keptResult.data;
+  for (const [id, card] of byId) card.notices = sampleNoticesForCard(id, index.coverage, keptData, spansYears);
+  const cards = ANNUAL_CARD_IDS.map((id) => ({ ...byId.get(id)! }));
+  const nowTimestamp = parseTimestamp(index.now) ?? Date.now();
+  return {
+    status: index.entries.length > 0 ? "ok" : "empty",
+    year: currentShanghaiYear(nowTimestamp),
+    timezone: ANNUAL_TIME_ZONE,
+    isAvailableYear: false,
+    isCurrentPartialYear: false,
+    periodLabel: "当前样本",
+    coverage: index.coverage,
+    snapshotCoverage: index.coverage,
+    cards,
+    cardManifest: PERSONAL_SUMMARY_CARD_MANIFEST,
+    manifest: PERSONAL_SUMMARY_CARD_MANIFEST,
+    overview: byId.get("overview")!,
+    rhythm: byId.get("rhythm")!,
+    monthly: byId.get("monthly")!,
+    creators: byId.get("creators")!,
+    interests: byId.get("interests")!,
+    kept: byId.get("kept")!,
+    highlights: byId.get("highlights")!,
+    summary: byId.get("summary")!,
+    sampleLimit: PERSONAL_SUMMARY_SAMPLE_LIMIT,
+  };
 }

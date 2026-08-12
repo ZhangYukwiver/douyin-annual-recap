@@ -162,7 +162,7 @@ export function MetricBlock({
 export function CalendarHeatmap({ days }: { days: readonly AnnualCalendarDay[] }) {
   const legend = [0, 1, 2, 3, 4] as const;
   return (
-    <View style={styles.calendarWrap} accessibilityRole="image" accessibilityLabel="全年活动日历热力图">
+    <View style={styles.calendarWrap} accessibilityRole="image" accessibilityLabel="样本日期活动热力图">
       <View style={styles.calendarGrid}>
         {days.map((day) => (
           <View

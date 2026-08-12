@@ -52,35 +52,35 @@ export interface AnnualPageContentProps {
 export function AnnualCoverPage({ report, privacy, pageNumber, totalPages }: AnnualPageContentProps) {
   const overview = report.overview.data as AnnualOverviewData;
   const highlights = report.highlights.data as AnnualHighlightsData;
-  const hero = highlights.first ?? highlights.peakDay ?? highlights.last;
+  const hero = highlights.first ?? highlights.peakDay ?? highlights.last ?? highlights.longest ?? highlights.mostEngaged;
   const reportStatus = report.status === "ok" ? "ok" : "insufficient";
   return (
-    <PageCanvas pageNumber={pageNumber} totalPages={totalPages} label={`${report.periodLabel}年度回顾封面`}>
+    <PageCanvas pageNumber={pageNumber} totalPages={totalPages} label={`${report.periodLabel}个人总结封面`}>
       <View style={styles.coverLayout}>
         <View style={styles.coverCopy}>
           <View style={styles.coverMetaRow}>
-            <Text style={styles.eyebrow}>DOUYIN / ANNUAL RECAP</Text>
+            <Text style={styles.eyebrow}>DOUYIN / PERSONAL SUMMARY</Text>
             <StatusPill status={reportStatus} />
           </View>
-          <Text style={styles.coverYear}>{report.year}</Text>
-          <Text style={styles.coverTitle}>这一年，内容留下了形状。</Text>
+          <Text style={styles.coverYear}>当前样本</Text>
+          <Text style={styles.coverTitle}>这些内容，留下了现在的形状。</Text>
           <Text style={styles.coverLead}>
             {overview.counts.total > 0
-              ? `${formatCount(overview.counts.total)} 个有可靠行为时间的独立视频，组成一份只在本地生成的年度回顾。`
-              : "当前数据还不足以描出年度轨迹。报告会保留边界，也不会拿发布时间代替你的行为时间。"}
+              ? `${formatCount(overview.counts.total)} 个去重内容，组成一份只在本地生成的个人总结。`
+              : "当前还没有可总结的记录。读取任意一类样本后，这里就会自动更新。"}
           </Text>
           <View style={styles.coverMetrics}>
-            <MetricBlock label="独立视频" value={formatCount(overview.counts.total)} detail="三类行为去重后" accent={annualColors.ink} large />
-            <MetricBlock label="活跃日期" value={formatCount(overview.activeDays)} detail="上海时区" accent={annualColors.cyan} large />
-            <MetricBlock label="时间覆盖" value={`${formatCount(report.snapshotCoverage.reliableRecordCount)}/${formatCount(report.snapshotCoverage.recordCount)}`} detail="全快照可分析 / 总记录" accent={annualColors.gold} large />
+            <MetricBlock label="去重内容" value={formatCount(overview.counts.total)} detail="三类当前样本合并" accent={annualColors.ink} large />
+            <MetricBlock label="有时间日期" value={formatCount(overview.activeDays)} detail="上海时区" accent={annualColors.cyan} large />
+            <MetricBlock label="时间覆盖" value={`${formatCount(report.snapshotCoverage.reliableRecordCount)}/${formatCount(report.snapshotCoverage.recordCount)}`} detail="可靠时间 / 样本记录" accent={annualColors.gold} large />
           </View>
         </View>
         <View style={styles.coverVisual}>
           <View style={styles.coverFrame}>
             <CoverImage uri={hero?.coverUrl} title={hero?.title} privacy={privacy} size="large" />
             <View style={styles.coverFrameCopy}>
-              <Text style={styles.coverFrameLabel}>{privacy ? "年度内容已隐藏" : hero ? "从第一条可靠记录开始" : "等待第一条可靠记录"}</Text>
-              <Text style={styles.coverFrameTitle} numberOfLines={2}>{privacy ? "隐私模式已开启" : hero?.title ?? "你的年度封面将在这里出现"}</Text>
+              <Text style={styles.coverFrameLabel}>{privacy ? "样本内容已隐藏" : hero ? "当前样本代表内容" : "等待第一条样本"}</Text>
+              <Text style={styles.coverFrameTitle} numberOfLines={2}>{privacy ? "隐私模式已开启" : hero?.title ?? "你的个人总结封面将在这里出现"}</Text>
               <Text style={styles.coverFrameMeta}>{privacy ? "标题、作者与图片节点均已替换" : hero?.author ?? "作者未知"}</Text>
             </View>
           </View>
@@ -102,7 +102,7 @@ export function AnnualReportCardPage({ report, privacy, pageNumber, totalPages, 
         </View>
         <StatusPill status={card.status} />
       </View>
-      <CardNotice card={card} coverage={card.id === "kept" ? report.snapshotCoverage : report.coverage} />
+      <CardNotice card={card} privacy={privacy} />
       <View style={styles.cardContent}>{renderCard(card, report, privacy)}</View>
     </PageCanvas>
   );
@@ -126,7 +126,7 @@ function OverviewCard({ data, coverage }: { data: AnnualOverviewData; coverage: 
     <View style={styles.splitWide}>
       <View style={styles.primaryColumn}>
         <Text style={styles.statement}>
-          {data.counts.total > 0 ? `${formatCount(data.counts.total)} 个独立视频，把这一年点亮了 ${formatCount(data.activeDays)} 天。` : "没有可靠时间，就不替这一年下结论。"}
+          {data.counts.total > 0 ? `${formatCount(data.counts.total)} 个去重内容，组成这份当前样本。` : "读取任意一类记录后，这里就会形成样本总览。"}
         </Text>
         <View style={styles.metricRow}>
           <MetricBlock label="观看" value={formatCount(data.counts.watch)} detail="独立视频" accent={annualColors.cyan} />
@@ -135,7 +135,7 @@ function OverviewCard({ data, coverage }: { data: AnnualOverviewData; coverage: 
           <MetricBlock label="活跃日" value={formatCount(data.activeDays)} detail="至少一条可靠记录" accent={annualColors.ink} />
         </View>
         <View style={styles.sectionDivider} />
-        <View style={styles.sectionHeadingRow}><CalendarDays color={annualColors.cyan} size={18} strokeWidth={2} /><Text style={styles.sectionHeading}>全年日历热力图</Text></View>
+        <View style={styles.sectionHeadingRow}><CalendarDays color={annualColors.cyan} size={18} strokeWidth={2} /><Text style={styles.sectionHeading}>样本日期热力图</Text></View>
         <CalendarHeatmap days={data.calendar} />
       </View>
       <View style={styles.secondaryColumn}>
@@ -181,7 +181,7 @@ function MonthlyCard({ data }: { data: AnnualMonthlyData }) {
   return (
     <View style={styles.splitWide}>
       <View style={styles.primaryColumn}>
-        <Text style={styles.statement}>{data.peakMonth ? `${data.peakMonth.label}冲到了年度峰值，留下 ${formatCount(data.peakMonth.count)} 个独立视频。` : "十二个月都在等一条可按月归档的可靠记录。"}</Text>
+        <Text style={styles.statement}>{data.peakMonth ? `${data.peakMonth.label}是当前样本的峰值月，留下 ${formatCount(data.peakMonth.count)} 个去重内容。` : "当前样本还没有可按月归档的可靠记录。"}</Text>
         <MonthlyChart months={data.months} />
       </View>
       <View style={styles.secondaryColumn}>
@@ -204,7 +204,7 @@ function CreatorsCard({ data, privacy }: { data: AnnualCreatorsData; privacy: bo
   return (
     <View style={styles.splitWide}>
       <View style={styles.primaryColumn}>
-        <Text style={styles.statement}>{top[0] ? `${privacy ? "一位已隐藏的创作者" : top[0].name}，成为这一年出现最多的名字。` : "创作者信息还没有形成可比较的年度排行。"}</Text>
+        <Text style={styles.statement}>{top[0] ? `${privacy ? "一位已隐藏的创作者" : top[0].name}，是当前样本中出现最多的名字。` : "当前样本还没有形成可比较的创作者排行。"}</Text>
         <View style={styles.rankList}>
           {top.length ? top.map((creator) => <RankBar key={`${creator.authorId ?? creator.name}:${creator.rank}`} rank={creator.rank} label={privacy ? `创作者 ${String(creator.rank).padStart(2, "0")}` : creator.name} value={creator.count} share={creator.share} max={max} />) : <Text style={styles.emptyInline}>暂无可识别创作者</Text>}
         </View>
@@ -227,7 +227,7 @@ function InterestsCard({ data, privacy }: { data: AnnualInterestsData; privacy: 
   return (
     <View style={styles.interestLayout}>
       <View style={styles.interestLead}>
-        <Text style={styles.statement}>{topTopic ? `${privacy ? "一个已隐藏话题" : `#${topTopic.name}`}，是这一年最清晰的显式兴趣信号。` : "没有足够字段，就不拼出一朵想象中的词云。"}</Text>
+        <Text style={styles.statement}>{topTopic ? `${privacy ? "一个已隐藏话题" : `#${topTopic.name}`}，是当前样本最清晰的显式兴趣信号。` : "没有足够字段，就不拼出一朵想象中的词云。"}</Text>
         <Text style={styles.sectionNote}>仅统计平台话题、标题中的显式 #话题、音乐和视频时长。</Text>
       </View>
       <View style={styles.interestColumns}>
@@ -236,14 +236,14 @@ function InterestsCard({ data, privacy }: { data: AnnualInterestsData; privacy: 
           <View style={styles.topicWrap}>{topicLabels.length ? topicLabels.map((topic, index) => <View key={`${topic.name}:${index}`} style={styles.topicChip}><Text style={styles.topicName}>{privacy ? `话题 ${index + 1}` : `#${topic.name}`}</Text><Text style={styles.topicCount}>{formatCount(topic.count)}</Text></View>) : <Text style={styles.emptyInline}>话题字段不足</Text>}</View>
         </View>
         <View style={styles.interestColumn}>
-          <View style={styles.sectionHeadingRow}><Music2 size={18} color={annualColors.gold} /><Text style={styles.sectionHeading}>年度声音</Text></View>
+          <View style={styles.sectionHeadingRow}><Music2 size={18} color={annualColors.gold} /><Text style={styles.sectionHeading}>样本声音</Text></View>
           {data.music.slice(0, 4).map((music, index) => <View style={styles.musicRow} key={`${music.id ?? music.title}:${index}`}><Disc3 size={16} color={annualColors.gold} /><View style={styles.musicCopy}><Text style={styles.musicTitle} numberOfLines={1}>{privacy ? `音乐 ${index + 1}` : music.title}</Text><Text style={styles.musicMeta}>{privacy ? "来源已隐藏" : music.author ?? "作者未知"}</Text></View><Text style={styles.musicCount}>{formatCount(music.count)}</Text></View>)}
           {!data.music.length ? <Text style={styles.emptyInline}>音乐字段不足</Text> : null}
         </View>
         <View style={styles.interestColumn}>
           <View style={styles.sectionHeadingRow}><Clock3 size={18} color={annualColors.cyan} /><Text style={styles.sectionHeading}>视频时长</Text></View>
-          <MiniBars values={durationValues} colors={[annualColors.cyanMid, annualColors.cyan, annualColors.gold, annualColors.red]} labels={data.durations.map((item) => item.label.replace("秒以内", "秒").replace("秒至 1 分钟", "秒–1分").replace("1 至 5 分钟", "1–5分").replace("5 分钟以上", "5分+"))} />
-          <Text style={styles.sectionNote}>中位数 {data.durationStats.medianSeconds === null ? "—" : `${Math.round(data.durationStats.medianSeconds)} 秒`} · 有效时长 {formatCount(data.durationStats.count)} 条</Text>
+          <MiniBars values={durationValues} colors={[annualColors.cyanMid, annualColors.cyan, annualColors.gold, annualColors.red]} labels={data.durations.map((item) => item.label.replace("秒以内", "秒").replace("秒至 1 分钟", "秒至1分").replace("1 至 5 分钟", "1至5分").replace("5 分钟以上", "5分+"))} />
+          <Text style={styles.sectionNote}>中位数 {data.durationStats.medianSeconds === null ? "暂无" : `${Math.round(data.durationStats.medianSeconds)} 秒`} · 有效时长 {formatCount(data.durationStats.count)} 条</Text>
         </View>
       </View>
     </View>
@@ -253,7 +253,7 @@ function InterestsCard({ data, privacy }: { data: AnnualInterestsData; privacy: 
 function KeptCard({ data }: { data: AnnualKeptData }) {
   return (
     <View>
-      <View style={styles.snapshotTitleRow}><Library size={22} color={annualColors.ink} /><View><Text style={styles.statement}>{data.allThree > 0 ? `${formatCount(data.allThree)} 个视频，同时出现在观看、喜欢与收藏中。` : "三份列表已经就位，但三者交集暂时为空。"}</Text><Text style={styles.sectionNote}>这是全部已采集列表的内容快照，不是年度转化漏斗。</Text></View></View>
+      <View style={styles.snapshotTitleRow}><Library size={22} color={annualColors.ink} /><View><Text style={styles.statement}>{data.allThree > 0 ? `${formatCount(data.allThree)} 个视频，同时出现在观看、喜欢与收藏中。` : "三份列表已经就位，但三者交集暂时为空。"}</Text><Text style={styles.sectionNote}>这是三类当前样本的内容快照，不是转化漏斗。</Text></View></View>
       <View style={styles.setRow}>
         <SetBlock label="观看历史" value={data.sets.watch.videoIds.length} records={data.sets.watch.recordCount} color={annualColors.cyan} icon={<Eye size={21} color={annualColors.cyan} />} />
         <SetBlock label="喜欢列表" value={data.sets.liked.videoIds.length} records={data.sets.liked.recordCount} color={annualColors.red} icon={<Heart size={21} color={annualColors.red} />} />
@@ -280,7 +280,7 @@ function HighlightsCard({ data, privacy }: { data: AnnualHighlightsData; privacy
   ];
   return (
     <View>
-      <Text style={styles.statement}>五个确定性坐标，把年度高光落回真实内容。</Text>
+      <Text style={styles.statement}>五个确定性坐标，把样本高光落回真实内容。</Text>
       <Text style={styles.sectionNote}>并列时按稳定规则排序；互动项只是平台统计快照之和，不代表官方排名。</Text>
       <View style={styles.highlightGrid}>{items.map((entry) => <HighlightTile key={entry.label} label={entry.label} item={entry.item} detail={entry.detail} privacy={privacy} />)}</View>
     </View>
@@ -293,14 +293,14 @@ function SummaryCard({ data, privacy, periodLabel }: { data: AnnualSummaryData; 
   return (
     <View>
       <Text style={styles.summaryKicker}>{periodLabel} / ALL SIGNALS</Text>
-      <Text style={styles.summaryTitle}>这是你的年度内容坐标。</Text>
+      <Text style={styles.summaryTitle}>这是你的当前内容坐标。</Text>
       <View style={styles.bentoGrid}>
-        <BentoBlock label="可靠年度内容" value={formatCount(data.metrics.totalUniqueVideos)} detail="独立视频" color={annualColors.cyan} wide />
+        <BentoBlock label="当前样本内容" value={formatCount(data.metrics.totalUniqueVideos)} detail="去重内容" color={annualColors.cyan} wide />
         <BentoBlock label="活跃日期" value={formatCount(data.metrics.activeDays)} detail="上海时区" color={annualColors.ink} />
         <BentoBlock label="不同创作者" value={formatCount(data.metrics.creatorCount)} detail="未知作者未进入排行" color={annualColors.red} />
-        <BentoBlock label="年度创作者" value={topCreator} detail={data.metrics.topCreator ? `${formatCount(data.metrics.topCreator.count)} 个独立视频` : "数据不足"} color={annualColors.red} text />
+        <BentoBlock label="样本创作者" value={topCreator} detail={data.metrics.topCreator ? `${formatCount(data.metrics.topCreator.count)} 个独立视频` : "数据不足"} color={annualColors.red} text />
         <BentoBlock label="显式话题" value={topTopic} detail={data.metrics.topTopic ? `${formatCount(data.metrics.topTopic.count)} 次信号` : "字段不足"} color={annualColors.gold} text />
-        <BentoBlock label="三份列表都留下" value={formatCount(data.metrics.allThree)} detail="全部已采集内容快照" color={annualColors.cyan} />
+        <BentoBlock label="三份列表都留下" value={formatCount(data.metrics.allThree)} detail="当前样本内容快照" color={annualColors.cyan} />
       </View>
       <CoverageStrip coverage={data.coverage} />
       <Text style={styles.summaryFootnote}>本页只复用前七页结果，没有重新扫描或重算原始记录。</Text>
@@ -317,16 +317,13 @@ function PageCanvas({ children, pageNumber, totalPages, label }: { children: Rea
   );
 }
 
-function CardNotice({ card, coverage }: { card: AnnualCard; coverage: DataCoverage }) {
+function CardNotice({ card, privacy }: { card: AnnualCard; privacy: boolean }) {
   const notes: string[] = [];
   if (card.reason) notes.push(card.reason);
   notes.push(...card.notices);
-  if (coverage.partial) notes.push("采集状态为 partial，结论只代表当前已采集范围");
-  if (coverage.undatedRecordCount > 0) notes.push(`${formatCount(coverage.undatedRecordCount)} 条记录没有可用行为时间`);
-  if (coverage.unknownSourceRecordCount > 0) notes.push(`${formatCount(coverage.unknownSourceRecordCount)} 条时间来源不可靠`);
-  notes.push(...coverage.warnings);
   const unique = [...new Set(notes)];
   if (!unique.length) return null;
+  if (privacy) return <View style={styles.noticeBand} accessibilityRole="alert"><Text style={styles.noticeText}>有 {unique.length} 条数据提示，关闭隐私模式后查看</Text></View>;
   const visible = [...unique.slice(0, 3), ...(unique.length > 3 ? [`另有 ${unique.length - 3} 条提示`] : [])];
   return <View style={styles.noticeBand} accessibilityRole="alert"><Text style={styles.noticeText}>{visible.join(" · ")}</Text></View>;
 }
@@ -334,11 +331,11 @@ function CardNotice({ card, coverage }: { card: AnnualCard; coverage: DataCovera
 function CoverageStrip({ coverage, compact = false }: { coverage: DataCoverage; compact?: boolean }) {
   return (
     <View style={[styles.coverageStrip, compact && styles.coverageStripCompact]} accessibilityRole="text">
-      <View><Text style={styles.coverageValue}>{formatCount(coverage.reliableRecordCount)}</Text><Text style={styles.coverageLabel}>可分析记录</Text></View>
+      <View><Text style={styles.coverageValue}>{formatCount(coverage.recordCount)}</Text><Text style={styles.coverageLabel}>样本记录</Text></View>
       <View style={styles.coverageDivider} />
-      <View><Text style={styles.coverageValue}>{formatCount(coverage.recordCount)}</Text><Text style={styles.coverageLabel}>总记录</Text></View>
+      <View><Text style={styles.coverageValue}>{formatCount(coverage.uniqueVideoCount)}</Text><Text style={styles.coverageLabel}>去重内容</Text></View>
       <View style={styles.coverageDivider} />
-      <View><Text style={styles.coverageValue}>{formatCount(coverage.recordCount - coverage.reliableRecordCount)}</Text><Text style={styles.coverageLabel}>时间不可用</Text></View>
+      <View><Text style={styles.coverageValue}>{formatCount(coverage.reliableRecordCount)}</Text><Text style={styles.coverageLabel}>有可靠时间</Text></View>
     </View>
   );
 }

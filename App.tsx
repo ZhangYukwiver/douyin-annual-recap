@@ -37,12 +37,7 @@ import {
 
 import { AnnualExperience } from "./src/components/annual";
 import { StatusBadge } from "./src/components/StatusBadge";
-import {
-  buildAnnualIndex,
-  buildAnnualReport,
-  type AnnualIndex,
-  type AnnualReport,
-} from "./src/domain/annualReport";
+import { buildPersonalSummary } from "./src/domain/annualReport";
 import {
   describeArchiveInspection,
   type PersonalArchiveInspection,
@@ -79,7 +74,7 @@ import {
 } from "./src/services/importPersonalArchive";
 import { colors } from "./src/theme";
 
-type ViewKey = "annual" | "records" | "sources";
+type ViewKey = "summary" | "records" | "sources";
 type BadgeState = "ready" | "not_configured" | "invalid" | "manual_action";
 
 interface SelectedArchive {
@@ -104,7 +99,7 @@ const recordIcons = {
 } satisfies Record<PersonalRecordType, typeof History>;
 
 const navigationItems = [
-  { id: "annual", label: "年度", icon: Sparkles },
+  { id: "summary", label: "总结", icon: Sparkles },
   { id: "records", label: "记录", icon: History },
   { id: "sources", label: "数据源", icon: Link2 },
 ] as const;
@@ -265,7 +260,7 @@ function RecordsView({
           </View>
           {collectorConnected ? (
             <Pressable
-              accessibilityLabel="重新同步"
+              accessibilityLabel="重新读取样本"
               accessibilityRole="button"
               disabled={collectorBusy}
               onPress={() => void onSync()}
@@ -342,7 +337,7 @@ function RecordsView({
                 {collectorConnected
                   ? <RefreshCw color={colors.surface} size={17} />
                   : <Link2 color={colors.surface} size={17} />}
-                <Text style={styles.primaryButtonText}>{collectorConnected ? "同步" : "连接采集器"}</Text>
+                <Text style={styles.primaryButtonText}>{collectorConnected ? "读取样本" : "连接采集器"}</Text>
               </>
             )}
           </Pressable>
@@ -493,13 +488,14 @@ function SourcesView({
           {connected ? (
             <>
               <Pressable
-                accessibilityLabel="自动同步"
+                accessibilityLabel="自动读取当前样本"
                 accessibilityRole="button"
                 disabled={busy || observing}
                 onPress={onStartSync}
-                style={({ pressed }) => [styles.secondaryIconButton, (busy || observing) && styles.disabled, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.sampleButton, (busy || observing) && styles.disabled, pressed && styles.pressed]}
               >
                 <Play color={colors.secondaryText} size={18} />
+                <Text style={styles.sampleButtonText}>读取样本</Text>
               </Pressable>
               <Pressable
                 accessibilityLabel="断开采集器"
@@ -572,7 +568,7 @@ function SourcesView({
 }
 
 function AppContent() {
-  const [activeView, setActiveView] = useState<ViewKey>(() => Platform.OS === "web" ? "annual" : "records");
+  const [activeView, setActiveView] = useState<ViewKey>(() => Platform.OS === "web" ? "summary" : "records");
   const [activeRecord, setActiveRecord] = useState<PersonalRecordType>("watch_history");
   const [selectedArchive, setSelectedArchive] = useState<SelectedArchive | null>(null);
   const [pickingArchive, setPickingArchive] = useState(false);
@@ -584,12 +580,6 @@ function AppContent() {
   const [collectorBusy, setCollectorBusy] = useState(false);
   const [switchingAccount, setSwitchingAccount] = useState(false);
   const [collectorError, setCollectorError] = useState<string | null>(null);
-  const [annualIndex, setAnnualIndex] = useState<AnnualIndex | null>(null);
-  const [annualIndexLoading, setAnnualIndexLoading] = useState(false);
-  const [annualReport, setAnnualReport] = useState<AnnualReport | null>(null);
-  const [annualReportLoading, setAnnualReportLoading] = useState(false);
-  const [requestedAnnualYear, setRequestedAnnualYear] = useState<number | null>(null);
-  const annualReportCache = useRef(new WeakMap<AnnualIndex, Map<number, AnnualReport>>());
   const importRequest = useRef(0);
   const pollRequest = useRef(0);
   const connectingRef = useRef(false);
@@ -630,7 +620,8 @@ function AppContent() {
         }
       : null;
 
-  const annualIndexOptions = useMemo(() => {
+  const personalSummary = useMemo(() => {
+    if (Platform.OS !== "web" || !displaySnapshot) return null;
     const collectionState = displaySnapshot?.source === "collector"
       ? collectorStatus?.state === "complete"
         ? "complete"
@@ -638,83 +629,12 @@ function AppContent() {
           ? "partial"
           : "unknown"
       : "unknown";
-    return {
+    return buildPersonalSummary(displaySnapshot.records, {
       source: displaySnapshot?.source,
       collectionState,
       warnings: displaySnapshot?.warnings ?? [],
-    } as const;
-  }, [collectorStatus, displaySnapshot?.source, displaySnapshot?.warnings]);
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || !displaySnapshot) {
-      setAnnualIndex(null);
-      setAnnualIndexLoading(false);
-      return undefined;
-    }
-
-    let cancelled = false;
-    setAnnualIndex(null);
-    setAnnualIndexLoading(true);
-    const task = setTimeout(() => {
-      const nextIndex = buildAnnualIndex(displaySnapshot.records, annualIndexOptions);
-      if (!cancelled) {
-        setAnnualIndex(nextIndex);
-        setAnnualIndexLoading(false);
-      }
-    }, 0);
-    return () => {
-      cancelled = true;
-      clearTimeout(task);
-    };
-  }, [annualIndexOptions, displaySnapshot?.records]);
-
-  const fallbackAnnualYear = useMemo(() => {
-    const currentYear = Number(new Intl.DateTimeFormat("en-US", {
-      timeZone: "Asia/Shanghai",
-      year: "numeric",
-    }).format(new Date()));
-    return currentYear - 1;
-  }, []);
-  const annualYear = annualIndex
-    ? requestedAnnualYear !== null && annualIndex.availableYears.includes(requestedAnnualYear)
-      ? requestedAnnualYear
-      : annualIndex.defaultYear ?? fallbackAnnualYear
-    : null;
-
-  useEffect(() => {
-    if (!annualIndex || annualIndex.entries.length === 0 || annualYear === null) {
-      setAnnualReport(null);
-      setAnnualReportLoading(false);
-      return undefined;
-    }
-
-    const cached = annualReportCache.current.get(annualIndex)?.get(annualYear);
-    if (cached) {
-      setAnnualReport(cached);
-      setAnnualReportLoading(false);
-      return undefined;
-    }
-
-    let cancelled = false;
-    setAnnualReport(null);
-    setAnnualReportLoading(true);
-    const task = setTimeout(() => {
-      const nextReport = buildAnnualReport(annualIndex, annualYear);
-      if (!cancelled) {
-        const reports = annualReportCache.current.get(annualIndex) ?? new Map<number, AnnualReport>();
-        reports.set(annualYear, nextReport);
-        annualReportCache.current.set(annualIndex, reports);
-        setAnnualReport(nextReport);
-        setAnnualReportLoading(false);
-      }
-    }, 0);
-    return () => {
-      cancelled = true;
-      clearTimeout(task);
-    };
-  }, [annualIndex, annualYear]);
-
-  const visibleAnnualReport = annualReport?.year === annualYear ? annualReport : null;
+    });
+  }, [collectorStatus?.state, displaySnapshot?.records, displaySnapshot?.source, displaySnapshot?.warnings]);
 
   async function refreshCollectorSnapshot(baseUrl: string, token: string, requestId?: number): Promise<boolean> {
     const snapshot = await getCollectorRecords(baseUrl, token);
@@ -860,8 +780,8 @@ function AppContent() {
     if (!collectorToken || collectorBusy || collectorStatus?.state === "observing" || syncConfirmationOpenRef.current) return;
     syncConfirmationOpenRef.current = true;
     confirmAlert(
-      "开始自动同步",
-      "将由专用浏览器打开个人列表、切换标签并滚动加载数据。仅监听网页自行返回的响应。",
+      "开始读取当前样本",
+      "将由专用浏览器依次打开观看、点赞和收藏列表，每类最多读取 50 条。页面不足 50 条也会直接完成。",
       "开始",
       (confirmed) => {
         syncConfirmationOpenRef.current = false;
@@ -1019,20 +939,16 @@ function AppContent() {
 
   const visibleNavigationItems = Platform.OS === "web"
     ? navigationItems
-    : navigationItems.filter((item) => item.id !== "annual");
+    : navigationItems.filter((item) => item.id !== "summary");
 
   return (
     <SafeAreaView edges={["top", "bottom"]} style={styles.safeArea}>
       <StatusBar style="dark" />
-      {Platform.OS === "web" && activeView === "annual" ? (
+      {Platform.OS === "web" && activeView === "summary" ? (
         <AnnualExperience
-          loading={annualIndexLoading || annualReportLoading || Boolean(annualIndex?.entries.length && visibleAnnualReport === null)}
           onOpenRecords={() => setActiveView("records")}
           onOpenSources={() => setActiveView("sources")}
-          onSelectYear={setRequestedAnnualYear}
-          report={visibleAnnualReport}
-          selectedYear={annualYear}
-          years={annualIndex?.availableYears ?? []}
+          report={personalSummary}
         />
       ) : (
         <View style={styles.appFrame}>
@@ -1340,6 +1256,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.surface,
   },
+  sampleButton: {
+    minWidth: 102,
+    height: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 20,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  sampleButtonText: { color: colors.secondaryText, fontSize: 12, fontWeight: "700" },
   accountSwitchButton: {
     width: "100%",
     height: 48,
