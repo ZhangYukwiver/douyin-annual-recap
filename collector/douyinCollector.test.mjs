@@ -249,6 +249,29 @@ describe("DouyinCollector response completion", () => {
     expect(collector.status.state).toBe("complete");
   });
 
+  it("preserves the previous sample when a primary page emits no response", async () => {
+    const initial = emptySnapshot();
+    initial.records.liked_videos = [{
+      id: "liked_videos:old",
+      title: "旧记录",
+      author: null,
+      occurredAt: null,
+      url: "https://www.douyin.com/video/old",
+      videoId: "old",
+    }];
+    const { collector } = collectorForResponses(initial, {
+      watch_history: fakeResponse("/aweme/v1/web/history/read/", terminalEmptyVideos),
+      favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
+    });
+
+    await collector.runSync(1);
+
+    expect(collector.snapshot.records.liked_videos.map((record) => record.videoId)).toEqual(["old"]);
+    expect(collector.snapshot.warnings).toContain("点赞列表未捕获到网页响应。");
+    expect(collector.snapshot.warnings).toContain("点赞列表读取不完整，已保留上次样本。");
+    expect(collector.status.state).toBe("partial");
+  });
+
   it("waits for delayed response parsing before calculating capture warnings", async () => {
     const delayedHistory = () => new Promise((resolve) => {
       setTimeout(() => resolve(terminalEmptyVideos), 25);
@@ -376,6 +399,55 @@ describe("DouyinCollector response completion", () => {
     expect(collector.snapshot.records.liked_videos.map((record) => record.videoId)).toEqual(["old"]);
     expect(collector.snapshot.warnings).toContain("点赞列表读取不完整，已保留上次样本。");
     expect(collector.snapshot.warnings).toContain("视频列表包含无法识别的数据。请更新采集器适配器。");
+    expect(collector.status.state).toBe("partial");
+  });
+
+  it("keeps a full current sample when a later response cannot be normalized", async () => {
+    const initial = emptySnapshot();
+    initial.records.liked_videos = [{
+      id: "liked_videos:old",
+      title: "旧记录",
+      author: null,
+      occurredAt: null,
+      url: "https://www.douyin.com/video/old",
+      videoId: "old",
+    }];
+    const { collector } = collectorForResponses(initial, {
+      watch_history: fakeResponse("/aweme/v1/web/history/read/", terminalEmptyVideos),
+      favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
+    });
+    const context = collector.context;
+    collector.collectPhase = vi.fn(async (_page, _versions, phase) => {
+      if (phase === "liked_videos") {
+        context.emit("response", fakeResponse("/aweme/v1/web/aweme/favorite/", {
+          status_code: 0,
+          aweme_list: Array.from({ length: 55 }, (_, index) => ({
+            aweme_id: `current-${index}`,
+            desc: `本次记录 ${index}`,
+          })),
+          has_more: 1,
+          max_cursor: "next-page",
+        }));
+        context.emit("response", fakeResponse("/aweme/v1/web/aweme/favorite/", {
+          status_code: 0,
+          aweme_list: [{ new_schema_id: "unrecognized" }],
+          has_more: 1,
+          max_cursor: "next-page-2",
+        }));
+        return;
+      }
+      const response = {
+        watch_history: fakeResponse("/aweme/v1/web/history/read/", terminalEmptyVideos),
+        favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
+      }[phase];
+      if (response) context.emit("response", response);
+    });
+
+    await collector.runSync(1);
+
+    expect(collector.snapshot.records.liked_videos).toHaveLength(50);
+    expect(collector.snapshot.records.liked_videos[0].videoId).toBe("current-0");
+    expect(collector.snapshot.warnings).not.toContain("点赞列表读取不完整，已保留上次样本。");
     expect(collector.status.state).toBe("partial");
   });
 });
@@ -512,6 +584,87 @@ describe("DouyinCollector deterministic tab fallback", () => {
     expect(progress.visualSurfaceMissing).toBe(true);
     expect(page.mouse.move).not.toHaveBeenCalled();
     expect(page.mouse.wheel).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a scrollable ancestor when the active panel has no box", async () => {
+    const attributes = new Map();
+    const root = {
+      tagName: "HTML",
+      parentElement: null,
+      hidden: false,
+      inert: false,
+      scrollHeight: 1_800,
+      clientHeight: 900,
+      scrollTop: 0,
+      getAttribute: (name) => attributes.get(name) ?? null,
+      setAttribute: (name, value) => attributes.set(name, value),
+      removeAttribute: (name) => attributes.delete(name),
+      getBoundingClientRect: () => ({ left: 0, right: 1_280, top: 0, bottom: 900, width: 1_280, height: 900 }),
+    };
+    const panel = {
+      tagName: "DIV",
+      parentElement: root,
+      hidden: false,
+      inert: false,
+      scrollHeight: 700,
+      clientHeight: 700,
+      scrollTop: 0,
+      getAttribute: () => null,
+      contains: (element) => element === panel || element === content,
+      getBoundingClientRect: () => ({ left: 817, right: 817, top: 226, bottom: 226, width: 0, height: 0 }),
+    };
+    const content = {
+      tagName: "DIV",
+      parentElement: panel,
+      hidden: false,
+      inert: false,
+      scrollHeight: 600,
+      clientHeight: 600,
+      scrollTop: 0,
+      getAttribute: () => null,
+    };
+    const fakeDocument = {
+      scrollingElement: root,
+      querySelectorAll: () => attributes.has("data-douyin-collector-surface") ? [root] : [],
+      querySelector: () => attributes.has("data-douyin-collector-surface") ? root : null,
+      getElementById: (id) => id === "semiTabPanellike" ? panel : null,
+      elementsFromPoint: () => [content],
+    };
+    const fakeWindow = {
+      innerWidth: 1_280,
+      innerHeight: 900,
+      getComputedStyle: (element) => ({ overflowY: element === root ? "auto" : "visible", display: "block", visibility: "visible", opacity: "1" }),
+      __douyinCollectorVisualBaseline: new Set(),
+    };
+    vi.stubGlobal("document", fakeDocument);
+    vi.stubGlobal("window", fakeWindow);
+
+    const progress = createEndpointProgress();
+    progress.matchedCount = 1;
+    progress.processedCount = 1;
+    progress.uniqueAddedCount = 20;
+    const page = {
+      evaluate: vi.fn(async (callback, argument) => callback(argument)),
+    };
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.syncRunId = 1;
+
+    try {
+      await collector.scrollUntilIdle(
+        page,
+        new Map([["liked_videos", 1]]),
+        ["liked_videos"],
+        1,
+        [progress],
+        1,
+        "like",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(progress.visualSurfaceMissing).toBe(false);
+    expect(root.scrollTop).toBeGreaterThan(0);
   });
 
   it("does not scroll after collecting 50 unique records", async () => {

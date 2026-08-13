@@ -9,7 +9,6 @@ import {
   isEndpointComplete,
   recordEndpointMatch,
   recordEndpointResult,
-  recordVerifiedEmpty,
 } from "./progress.mjs";
 
 const HOME_URL = "https://www.douyin.com/";
@@ -254,10 +253,27 @@ async function resolveActiveVisualSurface(page, targetTab) {
   const result = await page.evaluate((expectedTab) => {
     document.querySelectorAll('[data-douyin-collector-surface="active"]')
       .forEach((element) => element.removeAttribute("data-douyin-collector-surface"));
-    window.__douyinCollectorSurfacePoint = null;
 
     const panel = document.getElementById(`semiTabPanel${expectedTab}`);
     if (!panel) return { resolved: false, candidateCount: 0 };
+    const isWritableScrollSurface = (element, requireOverflow = true) => {
+      const style = window.getComputedStyle(element);
+      const maximum = element.scrollHeight - element.clientHeight;
+      if (maximum <= 80 || (requireOverflow && !/auto|scroll|overlay/u.test(style.overflowY))) return false;
+      const before = element.scrollTop;
+      const probe = before < maximum - 1 ? before + 1 : Math.max(0, before - 1);
+      element.scrollTop = probe;
+      const writable = Math.abs(element.scrollTop - before) > 0.5;
+      element.scrollTop = before;
+      return writable;
+    };
+    const findFallbackScrollSurface = () => {
+      for (let current = panel.parentElement; current; current = current.parentElement) {
+        if (isWritableScrollSurface(current)) return current;
+      }
+      const documentSurface = document.scrollingElement;
+      return documentSurface && isWritableScrollSurface(documentSurface, false) ? documentSurface : null;
+    };
     const panelRect = panel.getBoundingClientRect();
     const panelStyle = window.getComputedStyle(panel);
     if (
@@ -266,14 +282,16 @@ async function resolveActiveVisualSurface(page, targetTab) {
       || panelStyle.display === "none"
       || panelStyle.visibility === "hidden"
       || Number(panelStyle.opacity) === 0
-      || panelRect.width < 80
-      || panelRect.height < 80
     ) return { resolved: false, candidateCount: 0 };
 
-    const left = Math.max(8, panelRect.left);
-    const right = Math.min(window.innerWidth - 8, panelRect.right);
-    const top = Math.max(8, panelRect.top);
-    const bottom = Math.min(window.innerHeight - 8, panelRect.bottom);
+    const panelHasBox = panelRect.width >= 80 && panelRect.height >= 80;
+    const forcedFallback = panelHasBox ? null : findFallbackScrollSurface();
+    if (!panelHasBox && !forcedFallback) return { resolved: false, candidateCount: 0 };
+    const samplingRect = forcedFallback?.getBoundingClientRect() ?? panelRect;
+    const left = Math.max(8, samplingRect.left);
+    const right = Math.min(window.innerWidth - 8, samplingRect.right);
+    const top = Math.max(8, samplingRect.top);
+    const bottom = Math.min(window.innerHeight - 8, samplingRect.bottom);
     if (right - left < 80 || bottom - top < 80) return { resolved: false, candidateCount: 0 };
 
     const baseline = window.__douyinCollectorVisualBaseline instanceof Set
@@ -302,43 +320,36 @@ async function resolveActiveVisualSurface(page, targetTab) {
 
         let surface = null;
         for (let current = topHit; current && panel.contains(current); current = current.parentElement) {
-          const style = window.getComputedStyle(current);
-          const maximum = current.scrollHeight - current.clientHeight;
-          if (!/auto|scroll|overlay/u.test(style.overflowY) || maximum <= 80) continue;
-          const before = current.scrollTop;
-          const probe = before < maximum - 1 ? before + 1 : Math.max(0, before - 1);
-          current.scrollTop = probe;
-          const writable = Math.abs(current.scrollTop - before) > 0.5;
-          current.scrollTop = before;
-          if (writable) {
+          if (isWritableScrollSurface(current)) {
             surface = current;
             break;
           }
         }
         if (!surface) continue;
-        const evidence = candidates.get(surface) ?? { hits: 0, newHits: 0, point };
+        const evidence = candidates.get(surface) ?? { hits: 0, newHits: 0 };
         evidence.hits += 1;
-        if (!baseline.has(topHit)) {
-          evidence.newHits += 1;
-          evidence.point = point;
-        }
+        if (!baseline.has(topHit)) evidence.newHits += 1;
         candidates.set(surface, evidence);
       }
     }
 
     const ranked = [...candidates.entries()].sort((leftEntry, rightEntry) =>
       rightEntry[1].newHits - leftEntry[1].newHits || rightEntry[1].hits - leftEntry[1].hits);
-    const winner = ranked[0];
-    if (!winner || winner[1].hits < 2 || (baseline.size > 0 && winner[1].newHits < 1)) {
-      return { resolved: false, candidateCount: ranked.length };
+    let winner = forcedFallback ? [forcedFallback, {
+      hits: 1,
+      newHits: 1,
+    }] : ranked[0];
+    if (!forcedFallback && (!winner || winner[1].hits < 2 || (baseline.size > 0 && winner[1].newHits < 1))) {
+      const fallback = findFallbackScrollSurface();
+      if (!fallback) return { resolved: false, candidateCount: ranked.length };
+      winner = [fallback, {
+        hits: 1,
+        newHits: 1,
+      }];
     }
     const [surface, evidence] = winner;
     const rect = surface.getBoundingClientRect();
     surface.setAttribute("data-douyin-collector-surface", "active");
-    window.__douyinCollectorSurfacePoint = {
-      x: Math.max(rect.left + 10, Math.min(rect.right - 10, evidence.point.x)),
-      y: Math.max(rect.top + 10, Math.min(rect.bottom - 10, evidence.point.y)),
-    };
     return {
       resolved: true,
       candidateCount: ranked.length,
@@ -356,43 +367,20 @@ async function resolveActiveVisualSurface(page, targetTab) {
     : { resolved: false, candidateCount: 0 };
 }
 
-async function wheelResolvedVisualSurface(page) {
-  const before = await page.evaluate(() => {
+async function scrollResolvedVisualSurface(page) {
+  const result = await page.evaluate(() => {
     const surface = document.querySelector('[data-douyin-collector-surface="active"]');
-    if (!surface) return null;
-    const rect = surface.getBoundingClientRect();
+    if (!surface) return { resolved: false, moved: false, atBottom: true };
+    const before = surface.scrollTop;
+    surface.scrollTop = surface.scrollHeight;
     const maximum = surface.scrollHeight - surface.clientHeight;
-    const point = window.__douyinCollectorSurfacePoint;
     return {
-      scrollTop: surface.scrollTop,
-      maximum,
+      resolved: true,
+      moved: Math.abs(surface.scrollTop - before) > 1,
       atBottom: maximum - surface.scrollTop <= 2,
-      x: Math.max(rect.left + 10, Math.min(rect.right - 10, point?.x ?? rect.left + rect.width / 2)),
-      y: Math.max(rect.top + 10, Math.min(rect.bottom - 10, point?.y ?? rect.top + rect.height * 0.72)),
-      amount: Math.max(360, Math.floor(Math.min(rect.height, window.innerHeight) * 0.55)),
     };
   }).catch(() => null);
-  if (!before) return { resolved: false, moved: false, atBottom: true };
-  await page.mouse.move(before.x, before.y);
-  if (before.atBottom) {
-    await page.mouse.wheel(0, -before.amount);
-    await delay(150);
-    await page.mouse.wheel(0, before.amount * 3);
-  } else {
-    await page.mouse.wheel(0, before.amount);
-  }
-  await delay(180);
-  const after = await page.evaluate(() => {
-    const surface = document.querySelector('[data-douyin-collector-surface="active"]');
-    if (!surface) return null;
-    const maximum = surface.scrollHeight - surface.clientHeight;
-    return { scrollTop: surface.scrollTop, atBottom: maximum - surface.scrollTop <= 2 };
-  }).catch(() => null);
-  return {
-    resolved: Boolean(after),
-    moved: Boolean(after && Math.abs(after.scrollTop - before.scrollTop) > 1),
-    atBottom: after?.atBottom ?? true,
-  };
+  return result ?? { resolved: false, moved: false, atBottom: true };
 }
 
 async function clickLoadMoreInResolvedVisualSurface(page) {
@@ -423,39 +411,6 @@ async function clickLoadMoreInResolvedVisualSurface(page) {
     control.click();
     return true;
   }).catch(() => false);
-}
-
-async function hasStableEmptyProfileTab(page, tab) {
-  if (await hasVisibleLoginControl(page)) return false;
-  const panelId = `semiTabPanel${tab}`;
-  const sample = () => page.evaluate((expectedPanelId) => {
-    const profileTab = document.querySelector(`[role="tab"][aria-controls="${expectedPanelId}"]`);
-    const panel = document.getElementById(expectedPanelId);
-    if (!profileTab || !panel) return false;
-    const ariaSelected = profileTab.getAttribute("aria-selected");
-    const selected = ariaSelected === null
-      ? /active|selected|current/u.test(String(profileTab.className || ""))
-      : ariaSelected === "true";
-    const rect = panel.getBoundingClientRect();
-    const style = window.getComputedStyle(panel);
-    const hasLoadingState = panel.getAttribute("aria-busy") === "true"
-      || Boolean(panel.querySelector('[aria-busy="true"], [role="progressbar"]'))
-      || [...panel.querySelectorAll("*")].some((element) => /loading|skeleton|spinner|spin/u
-        .test(String(element.className || "").toLowerCase()));
-    return selected
-      && !panel.hasAttribute("hidden")
-      && panel.getAttribute("aria-hidden") !== "true"
-      && style.display !== "none"
-      && style.visibility !== "hidden"
-      && (rect.width === 0 || rect.height === 0)
-      && panel.childElementCount <= 2
-      && (panel.textContent || "").trim().length === 0
-      && !panel.querySelector('a[href*="/video/"], video, img, canvas, button')
-      && !hasLoadingState;
-  }, panelId).catch(() => false);
-  if (!await sample()) return false;
-  await delay(1_500);
-  return sample();
 }
 
 export class DouyinCollector {
@@ -804,7 +759,7 @@ export class DouyinCollector {
       }
       if (activeProgresses.some((progress) => progress.uniqueAddedCount >= SYNC_SAMPLE_LIMIT)) break;
 
-      let visualResult = await wheelResolvedVisualSurface(page)
+      let visualResult = await scrollResolvedVisualSurface(page)
         .catch(() => ({ resolved: false, moved: false, atBottom: true }));
       if (!visualResult.resolved) {
         const visualSurface = await resolveActiveVisualSurface(page, targetTab);
@@ -812,7 +767,7 @@ export class DouyinCollector {
           for (const progress of terminalProgresses) progress.visualSurfaceMissing = true;
           break;
         }
-        visualResult = await wheelResolvedVisualSurface(page)
+        visualResult = await scrollResolvedVisualSurface(page)
           .catch(() => ({ resolved: false, moved: false, atBottom: true }));
         if (!visualResult.resolved) {
           for (const progress of terminalProgresses) progress.visualSurfaceMissing = true;
@@ -942,18 +897,6 @@ export class DouyinCollector {
       maxSteps,
       targetTab,
     );
-    const emptyTab = phase === "liked_videos"
-      ? "like"
-      : phase === "favorite_videos"
-        ? "favorite_collection"
-        : null;
-    if (
-      emptyTab
-      && terminalProgresses[0]?.matchedCount === 0
-      && await hasStableEmptyProfileTab(page, emptyTab)
-    ) {
-      recordVerifiedEmpty(terminalProgresses[0]);
-    }
   }
 
   async runSync(runId) {
@@ -1075,7 +1018,8 @@ export class DouyinCollector {
       for (const type of REQUIRED_TYPES) {
         const progress = primaryProgress.get(type);
         if (
-          progress.verifiedEmpty
+          progress.uniqueAddedCount >= SYNC_SAMPLE_LIMIT
+          || progress.verifiedEmpty
           || (progress.matchedCount > 0
             && progress.processedCount === progress.matchedCount
             && (progress.uniqueAddedCount > 0 || progress.terminalSeen))
