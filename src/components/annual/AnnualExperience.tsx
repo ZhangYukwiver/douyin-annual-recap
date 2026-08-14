@@ -191,7 +191,7 @@ export function AnnualExperience({
           <View style={styles.topbarActions}>
             <View style={styles.sampleBadge} accessibilityRole="text">
               <Text style={styles.sampleBadgeTitle}>{report.periodLabel}</Text>
-              <Text style={styles.sampleBadgeHint}>每类最多 50 条</Text>
+              <Text style={styles.sampleBadgeHint}>全部可见记录</Text>
             </View>
             <Pressable
               testID="annual-privacy-toggle"
@@ -266,7 +266,7 @@ function EmptyAnnualState({ loading, onOpenRecords, onOpenSources }: { loading: 
         <View style={styles.emptyIcon}><LockKeyhole color={annualColors.cyan} size={25} /></View>
         <Text style={styles.gateEyebrow}>PERSONAL SUMMARY / LOCAL ONLY</Text>
         <Text style={styles.emptyTitle}>{loading ? "正在准备当前样本…" : "还没有可总结的记录。"}</Text>
-        <Text style={styles.gateBody}>{loading ? "当前页面不会访问外部 AI 或私有接口。" : "先从数据源读取样本，或导入 JSON / ZIP 归档。无需行为时间，这里也会自动出现封面和八张卡片。"}</Text>
+        <Text style={styles.gateBody}>{loading ? "当前页面不会访问外部 AI 或私有接口。" : "先从数据源读取记录，或导入 JSON / ZIP 归档。无需行为时间，这里也会自动出现封面和八张卡片。"}</Text>
         <View style={styles.gateActions}>
           <Pressable accessibilityRole="button" onPress={onOpenSources} style={({ pressed }) => [styles.gateButton, styles.gateButtonPrimary, pressed && styles.buttonPressed, webPointer]}><Database color={annualColors.white} size={17} /><Text style={styles.gateButtonPrimaryText}>打开数据源</Text></Pressable>
           <Pressable accessibilityRole="button" onPress={onOpenRecords} style={({ pressed }) => [styles.gateButton, styles.gateButtonSecondary, pressed && styles.buttonPressed, webPointer]}><FileText color={annualColors.ink} size={17} /><Text style={styles.gateButtonSecondaryText}>查看记录</Text></Pressable>

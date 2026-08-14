@@ -440,11 +440,7 @@ export interface AnnualReport {
   summary: AnnualCard;
 }
 
-export const PERSONAL_SUMMARY_SAMPLE_LIMIT = 50;
-
-export interface PersonalSummaryReport extends AnnualReport {
-  sampleLimit: typeof PERSONAL_SUMMARY_SAMPLE_LIMIT;
-}
+export type PersonalSummaryReport = AnnualReport;
 
 type ShortType = "watch" | "liked" | "favorite";
 
@@ -1630,9 +1626,9 @@ export function buildPersonalSummary(
   options: AnnualIndexOptions = {},
 ): PersonalSummaryReport {
   const sampled: PersonalRecordCollection = {
-    watch_history: safeTypeRecords(records, "watch_history").slice(0, PERSONAL_SUMMARY_SAMPLE_LIMIT),
-    liked_videos: safeTypeRecords(records, "liked_videos").slice(0, PERSONAL_SUMMARY_SAMPLE_LIMIT),
-    favorite_videos: safeTypeRecords(records, "favorite_videos").slice(0, PERSONAL_SUMMARY_SAMPLE_LIMIT),
+    watch_history: safeTypeRecords(records, "watch_history"),
+    liked_videos: safeTypeRecords(records, "liked_videos"),
+    favorite_videos: safeTypeRecords(records, "favorite_videos"),
   };
   const index = buildAnnualIndex(sampled, options);
   const reliableEntries = index.entries.filter(isReliableAnnualEntry);
@@ -1702,6 +1698,5 @@ export function buildPersonalSummary(
     kept: byId.get("kept")!,
     highlights: byId.get("highlights")!,
     summary: byId.get("summary")!,
-    sampleLimit: PERSONAL_SUMMARY_SAMPLE_LIMIT,
   };
 }

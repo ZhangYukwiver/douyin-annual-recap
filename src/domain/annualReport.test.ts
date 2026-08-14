@@ -46,7 +46,7 @@ function cardData<T>(report: ReturnType<typeof buildAnnualReport>, id: string): 
 }
 
 describe("annual report domain", () => {
-  it("summarizes up to 50 current records per list without requiring dates", () => {
+  it("summarizes all current records without requiring dates", () => {
     const watch = Array.from({ length: 55 }, (_, index) => record(`watch-${index}`, null, {
       videoId: index === 0 ? "shared" : `watch-${index}`,
       author: "样本作者",
@@ -81,18 +81,18 @@ describe("annual report domain", () => {
     const kept = cardData<AnnualKeptData>(summary, "kept");
     const highlights = cardData<AnnualHighlightsData>(summary, "highlights");
     const recap = cardData<AnnualSummaryData>(summary, "summary");
-    expect(overview.counts).toEqual({ watch: 50, liked: 1, favorite: 1, total: 50, watchEvents: 50, likedEvents: 1, favoriteEvents: 1 });
-    expect(creators.top[0]).toMatchObject({ name: "样本作者", count: 50, events: 52 });
-    expect(interests.topics[0]).toEqual({ name: "旅行", count: 50 });
+    expect(overview.counts).toEqual({ watch: 55, liked: 1, favorite: 1, total: 55, watchEvents: 55, likedEvents: 1, favoriteEvents: 1 });
+    expect(creators.top[0]).toMatchObject({ name: "样本作者", count: 55, events: 57 });
+    expect(interests.topics[0]).toEqual({ name: "旅行", count: 55 });
     expect(kept.allThree).toBe(1);
     expect(highlights.longest?.videoId).toBe("shared");
     expect(highlights.mostEngaged?.videoId).toBe("shared");
-    expect(recap.metrics.totalUniqueVideos).toBe(50);
+    expect(recap.metrics.totalUniqueVideos).toBe(55);
     expect(summary.overview.status).toBe("ok");
     expect(summary.rhythm.status).toBe("insufficient");
     expect(summary.monthly.status).toBe("insufficient");
     expect(summary.highlights.status).toBe("ok");
-    expect(summary.overview.notices).toContain("52 条记录已进入内容统计，但未进入时间图表");
+    expect(summary.overview.notices).toContain("57 条记录已进入内容统计，但未进入时间图表");
   });
 
   it("keeps cross-year samples together while leaving annual charts unmerged", () => {
