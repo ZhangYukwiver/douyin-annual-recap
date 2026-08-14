@@ -33,7 +33,6 @@ export const annualColors = {
 } as const;
 
 const TYPE_COLORS = {
-  watch: annualColors.cyan,
   liked: annualColors.red,
   favorite: annualColors.gold,
 } as const;
@@ -239,17 +238,16 @@ export function MonthlyChart({ months }: { months: readonly AnnualMonthPoint[] }
   const right = 16;
   const top = 18;
   const bottom = 36;
-  const values = months.flatMap((month) => [month.watch, month.liked, month.favorite].filter((value): value is number => value !== null));
+  const values = months.flatMap((month) => [month.liked, month.favorite].filter((value): value is number => value !== null));
   const max = Math.max(1, ...values);
   const x = (index: number) => left + (index / Math.max(1, months.length - 1)) * (width - left - right);
   const y = (value: number) => top + (1 - value / max) * (height - top - bottom);
   const series = [
-    { key: "watch" as const, label: "观看", color: TYPE_COLORS.watch, dash: undefined },
-    { key: "liked" as const, label: "喜欢", color: TYPE_COLORS.liked, dash: "6 4" },
+    { key: "liked" as const, label: "喜欢", color: TYPE_COLORS.liked, dash: undefined },
     { key: "favorite" as const, label: "收藏", color: TYPE_COLORS.favorite, dash: "2 4" },
   ];
   return (
-    <View accessibilityRole="image" accessibilityLabel="十二个月观看、喜欢、收藏趋势图">
+    <View accessibilityRole="image" accessibilityLabel="十二个月喜欢与收藏偏好变化图">
       <Svg width="100%" height={210} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
         {[0, 0.5, 1].map((ratio) => <Line key={ratio} x1={left} x2={width - right} y1={y(max * ratio)} y2={y(max * ratio)} stroke="#E5E9EC" strokeWidth={1} />)}
         {series.map(({ key, color, dash }) => {

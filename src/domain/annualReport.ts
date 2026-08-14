@@ -182,9 +182,9 @@ export const ANNUAL_CARD_MANIFEST: readonly AnnualCardManifest[] = [
   {
     id: "monthly",
     order: 2,
-    title: "月度轨迹",
-    eyebrow: "THE ARC",
-    description: "按月观察三类行为的变化",
+    title: "偏好变化",
+    eyebrow: "PREFERENCE SHIFT",
+    description: "按播放进度更新时间观察喜欢与收藏变化",
   },
   {
     id: "creators",
@@ -196,9 +196,9 @@ export const ANNUAL_CARD_MANIFEST: readonly AnnualCardManifest[] = [
   {
     id: "interests",
     order: 4,
-    title: "兴趣与声音",
-    eyebrow: "YOUR SIGNALS",
-    description: "显式话题、音乐与时长信号",
+    title: "喜好画像",
+    eyebrow: "YOUR PREFERENCES",
+    description: "喜欢与收藏中的显式话题、音乐与时长",
   },
   {
     id: "kept",
@@ -226,9 +226,9 @@ export const ANNUAL_CARD_MANIFEST: readonly AnnualCardManifest[] = [
 export const PERSONAL_SUMMARY_CARD_MANIFEST: readonly AnnualCardManifest[] = [
   { id: "overview", order: 0, title: "样本总览", eyebrow: "CURRENT SAMPLE", description: "当前三类列表的内容与时间覆盖" },
   { id: "rhythm", order: 1, title: "观看作息", eyebrow: "YOUR RHYTHM", description: "有可靠行为时间的观看样本分布" },
-  { id: "monthly", order: 2, title: "月份分布", eyebrow: "THE ARC", description: "有可靠行为时间的样本月度变化" },
+  { id: "monthly", order: 2, title: "偏好变化", eyebrow: "PREFERENCE SHIFT", description: "按播放进度更新时间观察喜欢与收藏变化" },
   { id: "creators", order: 3, title: "创作者宇宙", eyebrow: "YOUR CREATORS", description: "当前样本中的创作者分布" },
-  { id: "interests", order: 4, title: "兴趣与声音", eyebrow: "YOUR SIGNALS", description: "当前样本中的显式话题、音乐与时长" },
+  { id: "interests", order: 4, title: "喜好画像", eyebrow: "YOUR PREFERENCES", description: "喜欢与收藏中的显式话题、音乐与时长" },
   { id: "kept", order: 5, title: "留下来的内容", eyebrow: "WHAT STAYED", description: "三类当前样本的内容交集" },
   { id: "highlights", order: 6, title: "内容高光", eyebrow: "HIGHLIGHTS", description: "从当前样本中选出的代表内容" },
   { id: "summary", order: 7, title: "Bento 总结", eyebrow: "THE RECAP", description: "复用前七张卡片的个人摘要" },
@@ -290,10 +290,8 @@ export interface AnnualRhythmData {
 export interface AnnualMonthPoint {
   month: number;
   label: string;
-  watch: number | null;
   liked: number | null;
   favorite: number | null;
-  watchEvents: number;
   likedEvents: number;
   favoriteEvents: number;
 }
@@ -301,8 +299,8 @@ export interface AnnualMonthPoint {
 export interface AnnualMonthlyData {
   months: AnnualMonthPoint[];
   peakMonth: { month: number; label: string; count: number } | null;
-  seriesAvailability: Record<"watch" | "liked" | "favorite", boolean>;
-  unavailableSeries: Array<"watch" | "liked" | "favorite">;
+  seriesAvailability: Record<"liked" | "favorite", boolean>;
+  unavailableSeries: Array<"liked" | "favorite">;
 }
 
 export interface AnnualCreator {
@@ -455,6 +453,10 @@ const SHORT_TYPE: Record<PersonalRecordType, ShortType> = {
   liked_videos: "liked",
   favorite_videos: "favorite",
 };
+
+function isPreferenceEntry(entry: AnnualIndexedRecord): boolean {
+  return entry.type === "liked_videos" || entry.type === "favorite_videos";
+}
 
 const ACCEPTED_SOURCES = new Set<AnnualOccurredAtSource>(["platform_action", "archive_action"]);
 const MAX_STRING_LENGTH = 500;
@@ -1185,44 +1187,44 @@ function buildMonthlyFromEntries(
   entries: readonly AnnualIndexedRecord[],
   missingReason: string,
 ): { data: AnnualMonthlyData; status: AnnualCardStatus; reason: string | null } {
+  const preferenceEntries = entries.filter(isPreferenceEntry);
   const months: AnnualMonthPoint[] = [];
-  const availability = {} as Record<ShortType, boolean>;
-  for (const type of TYPE_ORDER) availability[SHORT_TYPE[type]] = entries.some((entry) => entry.type === type);
+  const availability = {
+    liked: preferenceEntries.some((entry) => entry.type === "liked_videos"),
+    favorite: preferenceEntries.some((entry) => entry.type === "favorite_videos"),
+  };
   for (let month = 1; month <= 12; month += 1) {
-    const monthEntries = entries.filter((entry) => entry.zoned!.month === month);
-    const counts = {} as Record<ShortType, number>;
-    const events = {} as Record<ShortType, number>;
-    for (const type of TYPE_ORDER) {
-      const typeEntries = monthEntries.filter((entry) => entry.type === type);
-      counts[SHORT_TYPE[type]] = uniqueCount(typeEntries);
-      events[SHORT_TYPE[type]] = typeEntries.length;
-    }
+    const monthEntries = preferenceEntries.filter((entry) => entry.zoned!.month === month);
+    const liked = monthEntries.filter((entry) => entry.type === "liked_videos");
+    const favorite = monthEntries.filter((entry) => entry.type === "favorite_videos");
     months.push({
       month,
       label: `${month}月`,
-      watch: availability.watch ? counts.watch : null,
-      liked: availability.liked ? counts.liked : null,
-      favorite: availability.favorite ? counts.favorite : null,
-      watchEvents: events.watch,
-      likedEvents: events.liked,
-      favoriteEvents: events.favorite,
+      liked: availability.liked ? uniqueCount(liked) : null,
+      favorite: availability.favorite ? uniqueCount(favorite) : null,
+      likedEvents: liked.length,
+      favoriteEvents: favorite.length,
     });
   }
-  const ranked = months.map((month) => ({ month: month.month, label: month.label, count: (month.watch ?? 0) + (month.liked ?? 0) + (month.favorite ?? 0) })).sort((a, b) => b.count - a.count || a.month - b.month);
+  const ranked = months.map((month) => ({
+    month: month.month,
+    label: month.label,
+    count: month.likedEvents + month.favoriteEvents,
+  })).sort((a, b) => b.count - a.count || a.month - b.month);
   const hasSeries = Object.values(availability).some(Boolean);
   return {
     data: {
       months,
       peakMonth: hasSeries && ranked[0] && ranked[0].count > 0 ? ranked[0] : null,
       seriesAvailability: availability,
-      unavailableSeries: (["watch", "liked", "favorite"] as ShortType[]).filter((type) => !availability[type]),
+      unavailableSeries: (["liked", "favorite"] as const).filter((type) => !availability[type]),
     },
     ...cardStatus(hasSeries, missingReason),
   };
 }
 
 function buildMonthly(index: AnnualIndex, year: number): { data: AnnualMonthlyData; status: AnnualCardStatus; reason: string | null } {
-  return buildMonthlyFromEntries(bucketFor(index, year).reliableEntries, "这一年没有可按月比较的行为时间");
+  return buildMonthlyFromEntries(bucketFor(index, year).reliableEntries, "这一年没有可按月比较的喜欢或收藏时间");
 }
 
 function buildCreatorsFromEntries(
@@ -1329,8 +1331,8 @@ function buildInterestsFromEntries(
 
 function buildInterests(index: AnnualIndex, year: number): { data: AnnualInterestsData; status: AnnualCardStatus; reason: string | null } {
   return buildInterestsFromEntries(
-    bucketFor(index, year).reliableUniqueEntries,
-    "年度记录缺少可用的话题、音乐或时长字段",
+    uniqueEntries(bucketFor(index, year).reliableEntries.filter(isPreferenceEntry)),
+    "年度喜欢与收藏记录缺少可用的话题、音乐或时长字段",
   );
 }
 
@@ -1463,6 +1465,7 @@ function sampleNoticesForCard(
   coverage: DataCoverage,
   kept: AnnualKeptData,
   spansYears: boolean,
+  preferenceSpansYears: boolean,
 ): string[] {
   const notices: string[] = [];
   if (coverage.partial) notices.push(...(coverage.warnings.length ? coverage.warnings : ["采集状态为 partial，结论只代表当前样本"]));
@@ -1470,7 +1473,8 @@ function sampleNoticesForCard(
     const withoutReliableTime = coverage.recordCount - coverage.reliableRecordCount;
     if (withoutReliableTime > 0) notices.push(`${withoutReliableTime} 条记录已进入内容统计，但未进入时间图表`);
   }
-  if ((id === "overview" || id === "monthly") && spansYears) notices.push("可靠行为时间跨越多个年份，未合并日历和月份趋势");
+  if (id === "overview" && spansYears) notices.push("可靠行为时间跨越多个年份，未合并日期热力图");
+  if (id === "monthly" && preferenceSpansYears) notices.push("喜欢与收藏时间跨越多个年份，未合并月份趋势");
   if ((id === "kept" || id === "summary") && kept.unknownIdRecordCount > 0) {
     notices.push(`${kept.unknownIdRecordCount} 条记录缺少可比较的 videoId，未进入列表交集`);
   }
@@ -1634,16 +1638,21 @@ export function buildPersonalSummary(
   const reliableEntries = index.entries.filter(isReliableAnnualEntry);
   const reliableYears = new Set(reliableEntries.map((entry) => entry.zoned!.year));
   const spansYears = reliableYears.size > 1;
+  const reliablePreferenceEntries = reliableEntries.filter(isPreferenceEntry);
+  const preferenceSpansYears = new Set(reliablePreferenceEntries.map((entry) => entry.zoned!.year)).size > 1;
   const overviewResult = buildSampleOverview(index);
   const rhythmResult = buildRhythmFromEntries(
     reliableEntries.filter((entry) => entry.type === "watch_history"),
     "当前观看样本不足以判断稳定的观看作息",
   );
-  const monthlyResult = spansYears
-    ? buildMonthlyFromEntries([], "当前样本跨越多个年份，未合并月份趋势")
-    : buildMonthlyFromEntries(reliableEntries, "当前样本没有可按月比较的可靠行为时间");
+  const monthlyResult = preferenceSpansYears
+    ? buildMonthlyFromEntries([], "喜欢与收藏时间跨越多个年份，未合并月份趋势")
+    : buildMonthlyFromEntries(reliablePreferenceEntries, "当前样本没有可按月比较的可靠喜欢或收藏时间");
   const creatorsResult = buildCreatorsFromEntries(index.entries, "当前样本中没有可识别的创作者");
-  const interestsResult = buildInterestsFromEntries(index.uniqueEntries, "当前样本缺少可用的话题、音乐或时长字段");
+  const interestsResult = buildInterestsFromEntries(
+    uniqueEntries(index.entries.filter(isPreferenceEntry)),
+    "喜欢与收藏样本缺少可用的话题、音乐或时长字段",
+  );
   const keptResult = buildKept(index);
   const highlightsResult = buildHighlightsFromEntries(
     reliableEntries,
@@ -1675,7 +1684,7 @@ export function buildPersonalSummary(
   );
   byId.set("summary", makeCard(PERSONAL_SUMMARY_CARD_MANIFEST.find((candidate) => candidate.id === "summary")!, summaryResult));
   const keptData = keptResult.data;
-  for (const [id, card] of byId) card.notices = sampleNoticesForCard(id, index.coverage, keptData, spansYears);
+  for (const [id, card] of byId) card.notices = sampleNoticesForCard(id, index.coverage, keptData, spansYears, preferenceSpansYears);
   const cards = ANNUAL_CARD_IDS.map((id) => ({ ...byId.get(id)! }));
   const nowTimestamp = parseTimestamp(index.now) ?? Date.now();
   return {

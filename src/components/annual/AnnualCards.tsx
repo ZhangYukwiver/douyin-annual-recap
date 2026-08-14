@@ -177,22 +177,21 @@ function RhythmCard({ data, privacy }: { data: AnnualRhythmData; privacy: boolea
 }
 
 function MonthlyCard({ data }: { data: AnnualMonthlyData }) {
-  const unavailableLabels = data.unavailableSeries.map((item) => ({ watch: "观看", liked: "喜欢", favorite: "收藏" })[item]);
+  const unavailableLabels = data.unavailableSeries.map((item) => ({ liked: "喜欢", favorite: "收藏" })[item]);
   return (
     <View style={styles.splitWide}>
       <View style={styles.primaryColumn}>
-        <Text style={styles.statement}>{data.peakMonth ? `${data.peakMonth.label}是当前样本的峰值月，留下 ${formatCount(data.peakMonth.count)} 个去重内容。` : "当前样本还没有可按月归档的可靠记录。"}</Text>
+        <Text style={styles.statement}>{data.peakMonth ? `${data.peakMonth.label}是偏好行为峰值月，共有 ${formatCount(data.peakMonth.count)} 次喜欢与收藏。` : "当前样本还没有可按月归档的播放进度更新时间。"}</Text>
         <MonthlyChart months={data.months} />
       </View>
       <View style={styles.secondaryColumn}>
-        <Text style={styles.sideLabel}>系列时间覆盖</Text>
-        <AvailabilityRow label="观看" available={data.seriesAvailability.watch} color={annualColors.cyan} />
+        <Text style={styles.sideLabel}>偏好时间覆盖</Text>
         <AvailabilityRow label="喜欢" available={data.seriesAvailability.liked} color={annualColors.red} />
         <AvailabilityRow label="收藏" available={data.seriesAvailability.favorite} color={annualColors.gold} />
         <View style={styles.sideRule} />
-        <Text style={styles.sideLabel}>峰值月份</Text>
+        <Text style={styles.sideLabel}>偏好峰值月</Text>
         <Text style={styles.sideBig}>{data.peakMonth?.label ?? "不可分析"}</Text>
-        <Text style={styles.sideDetail}>{unavailableLabels.length ? `${unavailableLabels.join("、")}缺少可靠行为时间，未绘制该系列。` : "三类行为都已进入月度比较。"}</Text>
+        <Text style={styles.sideDetail}>{unavailableLabels.length ? `${unavailableLabels.join("、")}缺少播放进度更新时间，未绘制该系列。` : "喜欢与收藏均已进入偏好变化比较。"}</Text>
       </View>
     </View>
   );
@@ -227,8 +226,8 @@ function InterestsCard({ data, privacy }: { data: AnnualInterestsData; privacy: 
   return (
     <View style={styles.interestLayout}>
       <View style={styles.interestLead}>
-        <Text style={styles.statement}>{topTopic ? `${privacy ? "一个已隐藏话题" : `#${topTopic.name}`}，是当前样本最清晰的显式兴趣信号。` : "没有足够字段，就不拼出一朵想象中的词云。"}</Text>
-        <Text style={styles.sectionNote}>仅统计平台话题、标题中的显式 #话题、音乐和视频时长。</Text>
+        <Text style={styles.statement}>{topTopic ? `${privacy ? "一个已隐藏话题" : `#${topTopic.name}`}，是喜欢与收藏中最清晰的显式偏好信号。` : "喜欢与收藏中没有足够字段，就不拼出想象中的偏好。"}</Text>
+        <Text style={styles.sectionNote}>仅统计喜欢与收藏内容中的平台话题、标题显式 #话题、音乐和视频时长。</Text>
       </View>
       <View style={styles.interestColumns}>
         <View style={styles.interestColumn}>

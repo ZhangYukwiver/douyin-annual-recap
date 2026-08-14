@@ -9,6 +9,7 @@ import {
   type AnnualHighlightsData,
   type AnnualInterestsData,
   type AnnualKeptData,
+  type AnnualMonthlyData,
   type AnnualOverviewData,
   type AnnualRhythmData,
   type AnnualSummaryData,
@@ -63,6 +64,7 @@ describe("annual report domain", () => {
         author: "样本作者",
         authorId: "author-sample",
         occurredAtSource: "unknown",
+        topics: ["旅行"],
       })],
       favorite_videos: [record("favorite-shared", null, {
         videoId: "shared",
@@ -83,7 +85,7 @@ describe("annual report domain", () => {
     const recap = cardData<AnnualSummaryData>(summary, "summary");
     expect(overview.counts).toEqual({ watch: 55, liked: 1, favorite: 1, total: 55, watchEvents: 55, likedEvents: 1, favoriteEvents: 1 });
     expect(creators.top[0]).toMatchObject({ name: "样本作者", count: 55, events: 57 });
-    expect(interests.topics[0]).toEqual({ name: "旅行", count: 55 });
+    expect(interests.topics[0]).toEqual({ name: "旅行", count: 1 });
     expect(kept.allThree).toBe(1);
     expect(highlights.longest?.videoId).toBe("shared");
     expect(highlights.mostEngaged?.videoId).toBe("shared");
@@ -110,7 +112,7 @@ describe("annual report domain", () => {
     expect(overview.activeDays).toBe(2);
     expect(overview.dateRange).toMatchObject({ start: "2024-05-01", end: "2025-06-01" });
     expect(overview.calendar).toEqual([]);
-    expect(summary.monthly).toMatchObject({ status: "insufficient", reason: "当前样本跨越多个年份，未合并月份趋势" });
+    expect(summary.monthly).toMatchObject({ status: "insufficient", reason: "当前样本没有可按月比较的可靠喜欢或收藏时间" });
     expect(highlights.first?.videoId).toBe("older");
     expect(highlights.last?.videoId).toBe("newer");
   });
@@ -149,6 +151,34 @@ describe("annual report domain", () => {
     expect(report2025.coverage.unknownSourceRecordCount).toBe(1);
     expect(report2025.snapshotCoverage.undatedRecordCount).toBe(1);
     expect(report2025.cards.map((card) => card.id)).toEqual(ANNUAL_CARD_IDS);
+  });
+
+  it("keeps watching out of preference changes and preference content", () => {
+    const summary = buildPersonalSummary(recordsOf({
+      watch_history: Array.from({ length: 20 }, (_, index) => record(`watch-${index}`, `2025-12-${String(index + 1).padStart(2, "0")}T00:00:00Z`, {
+        videoId: `watch-${index}`,
+        occurredAtSource: "platform_action",
+        topics: ["不应进入偏好"],
+      })),
+      liked_videos: [
+        record("liked-january", "2025-01-10T00:00:00Z", { videoId: "liked-january", occurredAtSource: "platform_action", topics: ["咖啡"] }),
+        record("liked-february", "2025-02-10T00:00:00Z", { videoId: "liked-february", occurredAtSource: "platform_action", topics: ["手作"] }),
+      ],
+      favorite_videos: [
+        record("favorite-february", "2025-02-11T00:00:00Z", { videoId: "favorite-february", occurredAtSource: "platform_action", topics: ["手作"] }),
+      ],
+    }));
+
+    const monthly = cardData<AnnualMonthlyData>(summary, "monthly");
+    const interests = cardData<AnnualInterestsData>(summary, "interests");
+    expect(summary.monthly.status).toBe("ok");
+    expect(monthly.seriesAvailability).toEqual({ liked: true, favorite: true });
+    expect(monthly.peakMonth).toEqual({ month: 2, label: "2月", count: 2 });
+    expect(monthly.months[11]).toMatchObject({ liked: 0, favorite: 0 });
+    expect(interests.topics).toEqual([
+      { name: "手作", count: 2 },
+      { name: "咖啡", count: 1 },
+    ]);
   });
 
   it("parses timestamps without an offset as Shanghai wall time", () => {
@@ -247,7 +277,13 @@ describe("annual report domain", () => {
       }));
     }
 
-    const report = buildAnnualReport(buildAnnualIndex(recordsOf({ watch_history: watch }), {
+    const report = buildAnnualReport(buildAnnualIndex(recordsOf({
+      watch_history: watch,
+      liked_videos: [
+        record("preference-a", "2025-01-01T04:00:00Z", { videoId: "preference-a", occurredAtSource: "platform_action", topics: ["旅行"] }),
+        record("preference-b", "2025-01-02T04:00:00Z", { videoId: "preference-b", occurredAtSource: "platform_action", title: "#旅行 的一天" }),
+      ],
+    }), {
       now: "2026-01-01T00:00:00+08:00",
     }), 2025);
     const rhythm = cardData<AnnualRhythmData>(report, "rhythm");
