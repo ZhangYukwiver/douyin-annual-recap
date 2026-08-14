@@ -11,25 +11,25 @@ import type {
 } from "../../domain/annualReport";
 
 export const annualColors = {
-  ink: "#17191C",
-  inkMuted: "#5F656B",
-  inkFaint: "#8B9298",
-  paper: "#F5F7F8",
-  surface: "#FFFFFF",
-  line: "#DCE1E5",
-  lineStrong: "#C4CBD1",
-  cyan: "#0B9FA8",
-  cyanSoft: "#D9F3F3",
-  cyanMid: "#77D1D0",
-  red: "#D74257",
-  redSoft: "#FBE5E8",
-  gold: "#C68A18",
-  goldSoft: "#FFF0C9",
-  carbon: "#202429",
-  carbonSoft: "#2A3035",
-  white: "#FFFFFF",
-  warning: "#9B5B12",
-  warningSoft: "#FFF4DE",
+  ink: "#F3F7F8",
+  inkMuted: "#ADB8BE",
+  inkFaint: "#829099",
+  paper: "#0C1115",
+  surface: "#151B20",
+  line: "#263039",
+  lineStrong: "#3A4750",
+  cyan: "#35D0C5",
+  cyanSoft: "#163A3A",
+  cyanMid: "#66BEB8",
+  red: "#FF5C72",
+  redSoft: "#3A1D25",
+  gold: "#F4BC55",
+  goldSoft: "#3A2E19",
+  carbon: "#090D10",
+  carbonSoft: "#171E23",
+  white: "#F7FAFB",
+  warning: "#F0B45E",
+  warningSoft: "#332617",
 } as const;
 
 const TYPE_COLORS = {
@@ -38,12 +38,12 @@ const TYPE_COLORS = {
 } as const;
 
 export function formatCount(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (value === null || value === undefined || !Number.isFinite(value)) return "暂无";
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(value);
 }
 
 export function formatPercent(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (value === null || value === undefined || !Number.isFinite(value)) return "暂无";
   return `${Math.round(value * 100)}%`;
 }
 
@@ -64,10 +64,10 @@ function hashSeed(value: string): number {
 
 function placeholderColors(seed: string): { background: string; foreground: string } {
   const palette = [
-    { background: "#DDF4F3", foreground: "#0A777D" },
-    { background: "#FBE6E9", foreground: "#A82F45" },
-    { background: "#FFF0CD", foreground: "#8B5B0C" },
-    { background: "#E8EDF1", foreground: "#46525B" },
+    { background: "#173333", foreground: "#79E0D8" },
+    { background: "#351C24", foreground: "#FF8B9B" },
+    { background: "#332A18", foreground: "#F7CB78" },
+    { background: "#222A30", foreground: "#B8C5CC" },
   ];
   return palette[hashSeed(seed) % palette.length] ?? palette[0]!;
 }
@@ -130,7 +130,7 @@ export function StatusPill({ status }: { status: AnnualCardStatus }) {
   return (
     <View style={[styles.statusPill, ok ? styles.statusOk : styles.statusInsufficient]} accessibilityRole="text">
       <View style={[styles.statusDot, { backgroundColor: ok ? annualColors.cyan : annualColors.warning }]} />
-      <Text style={[styles.statusText, { color: ok ? "#08777D" : annualColors.warning }]}>{ok ? "可分析" : "数据不足"}</Text>
+      <Text style={[styles.statusText, { color: ok ? annualColors.cyan : annualColors.warning }]}>{ok ? "可分析" : "数据不足"}</Text>
     </View>
   );
 }
@@ -182,7 +182,7 @@ export function CalendarHeatmap({ days }: { days: readonly AnnualCalendarDay[] }
 }
 
 function calendarColor(level: 0 | 1 | 2 | 3 | 4): string {
-  return ["#E8EDF0", "#CBE9E8", "#8FD6D5", "#42B9BA", annualColors.cyan][level] ?? "#E8EDF0";
+  return ["#1D262C", "#1D3A3A", "#25595B", "#2A8E8A", annualColors.cyan][level] ?? "#1D262C";
 }
 
 export function RhythmHeatmap({ cells }: { cells: readonly AnnualHeatmapCell[] }) {
@@ -224,10 +224,10 @@ export function RhythmHeatmap({ cells }: { cells: readonly AnnualHeatmapCell[] }
 }
 
 function rhythmColor(ratio: number): string {
-  if (ratio <= 0) return "#E8EDF0";
-  if (ratio < 0.25) return "#CBE9E8";
-  if (ratio < 0.5) return "#8FD6D5";
-  if (ratio < 0.75) return "#42B9BA";
+  if (ratio <= 0) return "#1D262C";
+  if (ratio < 0.25) return "#1D3A3A";
+  if (ratio < 0.5) return "#25595B";
+  if (ratio < 0.75) return "#2A8E8A";
   return annualColors.cyan;
 }
 
@@ -249,7 +249,7 @@ export function MonthlyChart({ months }: { months: readonly AnnualMonthPoint[] }
   return (
     <View accessibilityRole="image" accessibilityLabel="十二个月喜欢与收藏偏好变化图">
       <Svg width="100%" height={210} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-        {[0, 0.5, 1].map((ratio) => <Line key={ratio} x1={left} x2={width - right} y1={y(max * ratio)} y2={y(max * ratio)} stroke="#E5E9EC" strokeWidth={1} />)}
+        {[0, 0.5, 1].map((ratio) => <Line key={ratio} x1={left} x2={width - right} y1={y(max * ratio)} y2={y(max * ratio)} stroke={annualColors.line} strokeWidth={1} />)}
         {series.map(({ key, color, dash }) => {
           const points = months
             .map((month, index) => month[key] === null ? null : `${x(index)},${y(month[key] ?? 0)}`)
@@ -257,7 +257,7 @@ export function MonthlyChart({ months }: { months: readonly AnnualMonthPoint[] }
             .join(" ");
           return points ? <Polyline key={key} points={points} fill="none" stroke={color} strokeWidth={3} strokeDasharray={dash} strokeLinecap="round" strokeLinejoin="round" /> : null;
         })}
-        {months.map((month, index) => <Line key={month.month} x1={x(index)} x2={x(index)} y1={height - bottom + 4} y2={height - bottom + 10} stroke="#9CA5AC" strokeWidth={1} />)}
+        {months.map((month, index) => <Line key={month.month} x1={x(index)} x2={x(index)} y1={height - bottom + 4} y2={height - bottom + 10} stroke={annualColors.inkFaint} strokeWidth={1} />)}
       </Svg>
       <View style={styles.monthLabels}>
         {months.map((month) => <Text key={month.month} style={styles.monthLabel}>{month.label.replace("月", "")}</Text>)}
@@ -346,22 +346,22 @@ export function MiniBars({
 }
 
 const styles = StyleSheet.create({
-  cover: { alignItems: "center", justifyContent: "center", overflow: "hidden", borderRadius: 6 },
+  cover: { alignItems: "center", justifyContent: "center", overflow: "hidden", borderRadius: 16, borderWidth: 1, borderColor: annualColors.lineStrong },
   coverSmall: { width: 62, height: 62 },
   coverMedium: { width: 104, height: 104 },
-  coverLarge: { width: 220, height: 220 },
-  coverPrivacy: { backgroundColor: "#D9DEE2" },
-  coverUnavailable: { backgroundColor: "#E8EDF0" },
-  privacyMark: { width: 20, height: 14, borderRadius: 3, borderWidth: 2, borderColor: "#69727A", marginBottom: 6 },
-  privacyCoverLabel: { color: "#69727A", fontSize: 11, fontWeight: "700" },
+  coverLarge: { width: 230, height: 230 },
+  coverPrivacy: { backgroundColor: annualColors.carbonSoft },
+  coverUnavailable: { backgroundColor: annualColors.carbonSoft },
+  privacyMark: { width: 20, height: 14, borderRadius: 3, borderWidth: 2, borderColor: annualColors.inkMuted, marginBottom: 6 },
+  privacyCoverLabel: { color: annualColors.inkMuted, fontSize: 11, fontWeight: "700" },
   coverMonogram: { fontSize: 24, fontWeight: "900", letterSpacing: 0 },
   coverPlaceholderLabel: { marginTop: 5, fontSize: 10, fontWeight: "700" },
-  statusPill: { minHeight: 28, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 10, borderRadius: 6 },
+  statusPill: { minHeight: 30, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 11, borderRadius: 999, borderWidth: 1, borderColor: annualColors.lineStrong },
   statusOk: { backgroundColor: annualColors.cyanSoft },
   statusInsufficient: { backgroundColor: annualColors.warningSoft },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 12, fontWeight: "800" },
-  metricBlock: { minWidth: 124, paddingRight: 18, paddingVertical: 8 },
+  metricBlock: { minWidth: 132, paddingHorizontal: 13, paddingVertical: 11, borderWidth: 1, borderColor: annualColors.line, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.025)" },
   metricRule: { width: 28, height: 4, borderRadius: 2, marginBottom: 10 },
   metricLabel: { color: annualColors.inkMuted, fontSize: 12, fontWeight: "700" },
   metricValue: { color: annualColors.ink, fontSize: 26, lineHeight: 31, fontWeight: "900", marginTop: 2 },
@@ -369,7 +369,7 @@ const styles = StyleSheet.create({
   metricDetail: { color: annualColors.inkFaint, fontSize: 11, lineHeight: 16, marginTop: 3 },
   calendarWrap: { width: "100%", marginTop: 8 },
   calendarGrid: { flexDirection: "row", flexWrap: "wrap", gap: 3, alignContent: "flex-start" },
-  calendarCell: { width: 9, height: 9, borderRadius: 2 },
+  calendarCell: { width: 10, height: 10, borderRadius: 3 },
   legendRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 9 },
   legendLabel: { color: annualColors.inkFaint, fontSize: 10, fontWeight: "700" },
   legendCell: { width: 10, height: 10, borderRadius: 2 },
@@ -391,7 +391,7 @@ const styles = StyleSheet.create({
   rankNumber: { width: 26, color: annualColors.inkFaint, fontSize: 12, fontWeight: "900" },
   rankCopy: { flex: 1, minWidth: 0 },
   rankLabel: { color: annualColors.ink, fontSize: 13, fontWeight: "800", marginBottom: 6 },
-  rankTrack: { width: "100%", height: 6, borderRadius: 3, backgroundColor: "#E8EDF0", overflow: "hidden" },
+  rankTrack: { width: "100%", height: 6, borderRadius: 3, backgroundColor: annualColors.line, overflow: "hidden" },
   rankFill: { height: 6, borderRadius: 3 },
   rankValue: { width: 48, color: annualColors.ink, fontSize: 13, fontWeight: "900", textAlign: "right" },
   contentPreview: { minHeight: 112, flexDirection: "row", alignItems: "center", gap: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: annualColors.line, paddingVertical: 8 },
@@ -402,7 +402,7 @@ const styles = StyleSheet.create({
   contentUnavailable: { color: annualColors.inkMuted, fontSize: 13, marginLeft: 14 },
   miniBars: { minHeight: 128, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-around", gap: 18, paddingTop: 8 },
   miniBarGroup: { flex: 1, alignItems: "center", justifyContent: "flex-end" },
-  miniBarTrack: { width: 24, height: 72, justifyContent: "flex-end", borderRadius: 4, backgroundColor: "#E8EDF0", overflow: "hidden" },
+  miniBarTrack: { width: 24, height: 72, justifyContent: "flex-end", borderRadius: 6, backgroundColor: annualColors.line, overflow: "hidden" },
   miniBarFill: { width: 24, borderRadius: 4 },
   miniBarValue: { color: annualColors.ink, fontSize: 12, fontWeight: "900", marginTop: 6 },
   miniBarLabel: { color: annualColors.inkMuted, fontSize: 11, fontWeight: "700", marginTop: 3 },

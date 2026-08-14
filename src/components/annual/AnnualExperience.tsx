@@ -155,7 +155,7 @@ export function AnnualExperience({
   return (
     <View testID="annual-experience" style={styles.root} {...({ onWheel: handleWheel } as Record<string, unknown>)}>
       <View style={styles.rail}>
-        <View style={styles.railBrand}><PanelLeft color={annualColors.white} size={19} strokeWidth={2.2} /></View>
+        <View style={styles.railBrand}><PanelLeft color={annualColors.carbon} size={19} strokeWidth={2.2} /></View>
         <Text style={styles.railBrandLabel}>总结</Text>
         <View style={styles.railItems}>
           {railItems.map((item, index) => {
@@ -170,7 +170,7 @@ export function AnnualExperience({
                 onPress={() => navigateTo(index)}
                 style={({ pressed }) => [styles.railButton, selected && styles.railButtonSelected, pressed && styles.pressed, webPointer]}
               >
-                <Icon color={selected ? annualColors.cyan : "#AAB3B9"} size={17} strokeWidth={2} />
+                <Icon color={selected ? annualColors.cyan : annualColors.inkFaint} size={17} strokeWidth={2} />
                 <Text style={[styles.railLabel, selected && styles.railLabelSelected]} numberOfLines={1}>{index === 0 ? "总结" : String(index).padStart(2, "0")}</Text>
               </Pressable>
             );
@@ -178,16 +178,20 @@ export function AnnualExperience({
         </View>
         <View style={styles.railBottom}>
           <Pressable accessibilityRole="button" accessibilityLabel="前往记录" onPress={onOpenRecords} style={({ pressed }) => [styles.railUtility, pressed && styles.pressed, webPointer]}>
-            <FileText color="#AAB3B9" size={17} /><Text style={styles.railUtilityLabel}>记录</Text>
+            <FileText color={annualColors.inkFaint} size={17} /><Text style={styles.railUtilityLabel}>记录</Text>
           </Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="前往数据源" onPress={onOpenSources} style={({ pressed }) => [styles.railUtility, pressed && styles.pressed, webPointer]}>
-            <Database color="#AAB3B9" size={17} /><Text style={styles.railUtilityLabel}>数据源</Text>
+            <Database color={annualColors.inkFaint} size={17} /><Text style={styles.railUtilityLabel}>数据源</Text>
           </Pressable>
         </View>
       </View>
       <View style={styles.mainColumn}>
+        <View style={styles.ambient}>
+          <View style={[styles.ambientOrb, styles.ambientOrbTop]} />
+          <View style={[styles.ambientOrb, styles.ambientOrbBottom]} />
+        </View>
         <View style={styles.topbar}>
-          <View style={styles.topbarContext}><CalendarRange color={annualColors.cyan} size={18} /><Text style={styles.topbarContextText}>本地个人总结</Text><Text style={styles.topbarContextHint}>· 时间图表按 {report.timezone}</Text></View>
+          <View style={styles.topbarContext}><CalendarRange color={annualColors.cyan} size={18} /><Text style={styles.topbarContextText}>本地个人总结</Text><Text style={styles.topbarContextHint}>时间图表按 {report.timezone}</Text></View>
           <View style={styles.topbarActions}>
             <View style={styles.sampleBadge} accessibilityRole="text">
               <Text style={styles.sampleBadgeTitle}>{report.periodLabel}</Text>
@@ -251,7 +255,7 @@ function WidthGate({ onOpenRecords, onOpenSources }: { onOpenRecords?: () => voi
         <Text style={styles.gateTitle}>把窗口打开到 1024px，个人总结才会展开。</Text>
         <Text style={styles.gateBody}>个人总结使用全屏卡片和图表。当前窗口太窄，先去记录或数据源查看内容，数据仍然只保存在本地。</Text>
         <View style={styles.gateActions}>
-          <Pressable accessibilityRole="button" onPress={onOpenRecords} style={({ pressed }) => [styles.gateButton, styles.gateButtonPrimary, pressed && styles.buttonPressed, webPointer]}><FileText color={annualColors.white} size={17} /><Text style={styles.gateButtonPrimaryText}>前往记录</Text></Pressable>
+          <Pressable accessibilityRole="button" onPress={onOpenRecords} style={({ pressed }) => [styles.gateButton, styles.gateButtonPrimary, pressed && styles.buttonPressed, webPointer]}><FileText color={annualColors.carbon} size={17} /><Text style={styles.gateButtonPrimaryText}>前往记录</Text></Pressable>
           <Pressable accessibilityRole="button" onPress={onOpenSources} style={({ pressed }) => [styles.gateButton, styles.gateButtonSecondary, pressed && styles.buttonPressed, webPointer]}><Database color={annualColors.ink} size={17} /><Text style={styles.gateButtonSecondaryText}>前往数据源</Text></Pressable>
         </View>
       </View>
@@ -268,7 +272,7 @@ function EmptyAnnualState({ loading, onOpenRecords, onOpenSources }: { loading: 
         <Text style={styles.emptyTitle}>{loading ? "正在准备当前样本…" : "还没有可总结的记录。"}</Text>
         <Text style={styles.gateBody}>{loading ? "当前页面不会访问外部 AI 或私有接口。" : "先从数据源读取记录，或导入 JSON / ZIP 归档。无需行为时间，这里也会自动出现封面和八张卡片。"}</Text>
         <View style={styles.gateActions}>
-          <Pressable accessibilityRole="button" onPress={onOpenSources} style={({ pressed }) => [styles.gateButton, styles.gateButtonPrimary, pressed && styles.buttonPressed, webPointer]}><Database color={annualColors.white} size={17} /><Text style={styles.gateButtonPrimaryText}>打开数据源</Text></Pressable>
+          <Pressable accessibilityRole="button" onPress={onOpenSources} style={({ pressed }) => [styles.gateButton, styles.gateButtonPrimary, pressed && styles.buttonPressed, webPointer]}><Database color={annualColors.carbon} size={17} /><Text style={styles.gateButtonPrimaryText}>打开数据源</Text></Pressable>
           <Pressable accessibilityRole="button" onPress={onOpenRecords} style={({ pressed }) => [styles.gateButton, styles.gateButtonSecondary, pressed && styles.buttonPressed, webPointer]}><FileText color={annualColors.ink} size={17} /><Text style={styles.gateButtonSecondaryText}>查看记录</Text></Pressable>
         </View>
       </View>
@@ -293,55 +297,59 @@ const webPointer = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : n
 
 const styles = StyleSheet.create({
   root: { flex: 1, flexDirection: "row", width: "100%", minHeight: "100%", backgroundColor: annualColors.paper },
-  rail: { width: 88, flexShrink: 0, alignItems: "center", paddingTop: 18, paddingBottom: 14, backgroundColor: annualColors.carbon },
-  railBrand: { width: 34, height: 34, alignItems: "center", justifyContent: "center", borderRadius: 8, backgroundColor: annualColors.cyan },
-  railBrandLabel: { color: "#D8E1E5", fontSize: 10, fontWeight: "900", marginTop: 7 },
-  railItems: { flex: 1, width: "100%", alignItems: "center", gap: 5, marginTop: 24 },
-  railButton: { width: 66, minHeight: 48, alignItems: "center", justifyContent: "center", gap: 4, borderRadius: 7 },
-  railButtonSelected: { backgroundColor: annualColors.carbonSoft },
-  railLabel: { maxWidth: 58, color: "#AAB3B9", fontSize: 10, fontWeight: "800", textAlign: "center" },
+  rail: { width: 92, flexShrink: 0, alignItems: "center", paddingTop: 18, paddingBottom: 14, borderRightWidth: 1, borderRightColor: annualColors.line, backgroundColor: annualColors.carbon },
+  railBrand: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: 12, backgroundColor: annualColors.cyan },
+  railBrandLabel: { color: annualColors.inkMuted, fontSize: 10, fontWeight: "900", marginTop: 7 },
+  railItems: { flex: 1, width: "100%", alignItems: "center", gap: 5, marginTop: 22 },
+  railButton: { flex: 1, width: 68, minHeight: 0, maxHeight: 48, alignItems: "center", justifyContent: "center", gap: 4, borderWidth: 1, borderColor: "transparent", borderRadius: 12 },
+  railButtonSelected: { borderColor: annualColors.lineStrong, backgroundColor: annualColors.cyanSoft },
+  railLabel: { maxWidth: 58, color: annualColors.inkFaint, fontSize: 10, fontWeight: "800", textAlign: "center" },
   railLabelSelected: { color: annualColors.white },
   railBottom: { width: "100%", alignItems: "center", gap: 4 },
-  railUtility: { width: 68, minHeight: 44, alignItems: "center", justifyContent: "center", gap: 3, borderRadius: 7 },
-  railUtilityLabel: { color: "#AAB3B9", fontSize: 10, fontWeight: "800" },
-  mainColumn: { flex: 1, minWidth: 0, backgroundColor: annualColors.paper },
-  topbar: { height: 74, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 30, borderBottomWidth: 1, borderBottomColor: annualColors.line, backgroundColor: "rgba(255,255,255,0.94)", zIndex: 20 },
+  railUtility: { width: 68, minHeight: 44, alignItems: "center", justifyContent: "center", gap: 3, borderRadius: 12 },
+  railUtilityLabel: { color: annualColors.inkFaint, fontSize: 10, fontWeight: "800" },
+  mainColumn: { position: "relative", flex: 1, minWidth: 0, overflow: "hidden", backgroundColor: annualColors.paper },
+  ambient: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, overflow: "hidden", pointerEvents: "none" },
+  ambientOrb: { position: "absolute", borderRadius: 999, backgroundColor: annualColors.cyan },
+  ambientOrbTop: { width: 520, height: 520, top: -360, right: -120, opacity: 0.12 },
+  ambientOrbBottom: { width: 420, height: 420, bottom: -300, left: 120, opacity: 0.07 },
+  topbar: { height: 68, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 28, borderBottomWidth: 1, borderBottomColor: annualColors.line, backgroundColor: "rgba(9,13,16,0.92)", zIndex: 20 },
   topbarContext: { flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 },
   topbarContextText: { color: annualColors.ink, fontSize: 13, fontWeight: "900" },
   topbarContextHint: { color: annualColors.inkFaint, fontSize: 11 },
   topbarActions: { flexDirection: "row", alignItems: "center", gap: 10 },
-  sampleBadge: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, borderWidth: 1, borderColor: annualColors.lineStrong, borderRadius: 7, backgroundColor: annualColors.surface },
+  sampleBadge: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, borderWidth: 1, borderColor: annualColors.lineStrong, borderRadius: 12, backgroundColor: annualColors.surface },
   sampleBadgeTitle: { color: annualColors.ink, fontSize: 13, fontWeight: "900" },
   sampleBadgeHint: { color: annualColors.inkFaint, fontSize: 11, fontWeight: "700" },
-  privacyButton: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 13, borderWidth: 1, borderColor: annualColors.lineStrong, borderRadius: 7, backgroundColor: annualColors.surface },
+  privacyButton: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 13, borderWidth: 1, borderColor: annualColors.lineStrong, borderRadius: 12, backgroundColor: annualColors.surface },
   privacyButtonActive: { borderColor: annualColors.cyan, backgroundColor: annualColors.cyanSoft },
   privacyButtonText: { color: annualColors.ink, fontSize: 12, fontWeight: "900" },
-  viewport: { position: "relative", overflow: "hidden", flex: 1 },
+  viewport: { position: "relative", overflow: "hidden", flex: 1, zIndex: 1 },
   pageLayer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, overflow: "hidden" },
-  footerNav: { height: 62, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 30, borderTopWidth: 1, borderTopColor: annualColors.line, backgroundColor: annualColors.paper },
-  pageButton: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, borderRadius: 6 },
+  footerNav: { height: 58, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 28, borderTopWidth: 1, borderTopColor: annualColors.line, backgroundColor: "rgba(9,13,16,0.92)", zIndex: 20 },
+  pageButton: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, borderRadius: 12 },
   pageButtonDisabled: { opacity: 0.38 },
   pageButtonText: { color: annualColors.ink, fontSize: 12, fontWeight: "900" },
   dots: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 4 },
-  dotButton: { width: 24, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 4 },
+  dotButton: { width: 26, height: 36, alignItems: "center", justifyContent: "center", borderRadius: 8 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: annualColors.lineStrong },
   dotActive: { width: 22, borderRadius: 3, backgroundColor: annualColors.cyan },
-  pressed: { opacity: 0.7 },
-  buttonPressed: { opacity: 0.68 },
+  pressed: { opacity: 0.72, transform: [{ scale: 0.97 }] },
+  buttonPressed: { opacity: 0.72, transform: [{ scale: 0.97 }] },
   gateRoot: { flex: 1, minHeight: "100%", alignItems: "center", justifyContent: "center", padding: 28, backgroundColor: annualColors.paper },
-  gateContent: { width: "100%", maxWidth: 620, padding: 36, borderLeftWidth: 5, borderLeftColor: annualColors.cyan, backgroundColor: annualColors.surface },
-  gateMark: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: 8, backgroundColor: annualColors.carbon },
+  gateContent: { width: "100%", maxWidth: 620, padding: 38, borderWidth: 1, borderLeftWidth: 5, borderColor: annualColors.line, borderLeftColor: annualColors.cyan, borderRadius: 22, backgroundColor: annualColors.surface },
+  gateMark: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: 14, backgroundColor: annualColors.carbon },
   gateEyebrow: { color: annualColors.cyan, fontSize: 11, fontWeight: "900", marginTop: 18 },
   gateTitle: { color: annualColors.ink, fontSize: 28, lineHeight: 36, fontWeight: "900", marginTop: 8 },
   gateBody: { color: annualColors.inkMuted, fontSize: 14, lineHeight: 23, marginTop: 14 },
   gateActions: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 24 },
-  gateButton: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 16, borderRadius: 7 },
-  gateButtonPrimary: { backgroundColor: annualColors.carbon },
+  gateButton: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 17, borderRadius: 12 },
+  gateButtonPrimary: { backgroundColor: annualColors.cyan },
   gateButtonSecondary: { borderWidth: 1, borderColor: annualColors.lineStrong, backgroundColor: annualColors.surface },
-  gateButtonPrimaryText: { color: annualColors.white, fontSize: 13, fontWeight: "900" },
+  gateButtonPrimaryText: { color: annualColors.carbon, fontSize: 13, fontWeight: "900" },
   gateButtonSecondaryText: { color: annualColors.ink, fontSize: 13, fontWeight: "900" },
   emptyRoot: { flex: 1, minHeight: "100%", alignItems: "center", justifyContent: "center", padding: 28, backgroundColor: annualColors.paper },
-  emptyContent: { width: "100%", maxWidth: 620, padding: 36, borderTopWidth: 5, borderTopColor: annualColors.cyan, backgroundColor: annualColors.surface },
-  emptyIcon: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: 8, backgroundColor: annualColors.cyanSoft },
+  emptyContent: { width: "100%", maxWidth: 620, padding: 38, borderWidth: 1, borderTopWidth: 5, borderColor: annualColors.line, borderTopColor: annualColors.cyan, borderRadius: 22, backgroundColor: annualColors.surface },
+  emptyIcon: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: 14, backgroundColor: annualColors.cyanSoft },
   emptyTitle: { color: annualColors.ink, fontSize: 28, lineHeight: 36, fontWeight: "900", marginTop: 8 },
 });

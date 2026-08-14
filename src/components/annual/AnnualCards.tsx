@@ -96,7 +96,6 @@ export function AnnualReportCardPage({ report, privacy, pageNumber, totalPages, 
     <PageCanvas pageNumber={pageNumber} totalPages={totalPages} label={`${card.title}，${card.status === "ok" ? "可分析" : "数据不足"}`}>
       <View style={styles.cardHeader}>
         <View style={styles.cardHeadingCopy}>
-          <Text style={styles.eyebrow}>{card.eyebrow}</Text>
           <Text style={styles.cardTitle}>{card.title}</Text>
           <Text style={styles.cardDescription}>{card.description}</Text>
         </View>
@@ -310,8 +309,11 @@ function SummaryCard({ data, privacy, periodLabel }: { data: AnnualSummaryData; 
 function PageCanvas({ children, pageNumber, totalPages, label }: { children: React.ReactNode; pageNumber: number; totalPages: number; label: string }) {
   return (
     <View style={styles.pageCanvas} accessibilityRole="summary" accessibilityLabel={label}>
-      <View style={styles.pageContent}>{children}</View>
-      <Text style={styles.pageCounter}>{String(pageNumber + 1).padStart(2, "0")} / {String(totalPages).padStart(2, "0")}</Text>
+      <View style={styles.pageSurface}>
+        <View style={styles.surfaceAccent} />
+        <View style={styles.pageContent}>{children}</View>
+        <Text style={styles.pageCounter}>{String(pageNumber + 1).padStart(2, "0")} / {String(totalPages).padStart(2, "0")}</Text>
+      </View>
     </View>
   );
 }
@@ -344,11 +346,11 @@ function Fact({ icon, label, value }: { icon: React.ReactNode; label: string; va
 }
 
 function AvailabilityRow({ label, available, color }: { label: string; available: boolean; color: string }) {
-  return <View style={styles.availabilityRow}><View style={[styles.availabilitySwatch, { backgroundColor: color }]} /><Text style={styles.availabilityLabel}>{label}</Text><Text style={[styles.availabilityState, { color: available ? "#08777D" : annualColors.warning }]}>{available ? "可分析" : "不可分析"}</Text></View>;
+  return <View style={styles.availabilityRow}><View style={[styles.availabilitySwatch, { backgroundColor: color }]} /><Text style={styles.availabilityLabel}>{label}</Text><Text style={[styles.availabilityState, { color: available ? annualColors.cyan : annualColors.warning }]}>{available ? "可分析" : "不可分析"}</Text></View>;
 }
 
 function SetBlock({ label, value, records, color, icon }: { label: string; value: number; records: number; color: string; icon: React.ReactNode }) {
-  return <View style={[styles.setBlock, { borderTopColor: color }]}>{icon}<Text style={styles.setLabel}>{label}</Text><Text style={styles.setValue}>{formatCount(value)}</Text><Text style={styles.setDetail}>可比较 videoId · 原始列表 {formatCount(records)} 条</Text></View>;
+  return <View style={[styles.setBlock, { borderTopColor: color, backgroundColor: `${color}12` }]}>{icon}<Text style={styles.setLabel}>{label}</Text><Text style={styles.setValue}>{formatCount(value)}</Text><Text style={styles.setDetail}>可比较 videoId · 原始列表 {formatCount(records)} 条</Text></View>;
 }
 
 function Intersection({ label, value, color, emphasized = false }: { label: string; value: number; color: string; emphasized?: boolean }) {
@@ -369,39 +371,41 @@ function HighlightTile({ label, item, detail, privacy }: { label: string; item: 
 }
 
 function BentoBlock({ label, value, detail, color, wide = false, text = false }: { label: string; value: string; detail: string; color: string; wide?: boolean; text?: boolean }) {
-  return <View style={[styles.bentoBlock, wide && styles.bentoWide, { borderTopColor: color }]}><Text style={styles.bentoLabel}>{label}</Text><Text style={[styles.bentoValue, text && styles.bentoValueText]} numberOfLines={text ? 2 : 1}>{value}</Text><Text style={styles.bentoDetail}>{detail}</Text></View>;
+  return <View style={[styles.bentoBlock, wide && styles.bentoWide, { borderTopColor: color, backgroundColor: `${color}12` }]}><Text style={styles.bentoLabel}>{label}</Text><Text style={[styles.bentoValue, text && styles.bentoValueText]} numberOfLines={text ? 2 : 1}>{value}</Text><Text style={styles.bentoDetail}>{detail}</Text></View>;
 }
 
 const styles = StyleSheet.create({
-  pageCanvas: { flex: 1, width: "100%", maxWidth: 1420, alignSelf: "center", paddingHorizontal: 44, paddingTop: 28, paddingBottom: 30 },
-  pageContent: { flex: 1, minHeight: 0, justifyContent: "center" },
-  pageCounter: { position: "absolute", right: 44, bottom: 14, color: annualColors.inkFaint, fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"] },
+  pageCanvas: { flex: 1, width: "100%", maxWidth: 1420, alignSelf: "center", paddingHorizontal: 34, paddingVertical: 14 },
+  pageSurface: { position: "relative", flex: 1, minHeight: 0, overflow: "hidden", borderWidth: 1, borderColor: annualColors.line, borderRadius: 24, backgroundColor: "rgba(20,27,32,0.92)" },
+  surfaceAccent: { position: "absolute", top: 0, left: 0, width: 180, height: 4, borderBottomRightRadius: 4, backgroundColor: annualColors.cyan },
+  pageContent: { flex: 1, minHeight: 0, justifyContent: "center", paddingHorizontal: 28, paddingTop: 24, paddingBottom: 32 },
+  pageCounter: { position: "absolute", right: 26, bottom: 16, color: annualColors.inkFaint, fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"] },
   eyebrow: { color: annualColors.cyan, fontSize: 11, fontWeight: "900", textTransform: "uppercase", letterSpacing: 0 },
-  coverLayout: { flexDirection: "row", alignItems: "center", gap: 52 },
+  coverLayout: { flexDirection: "row", alignItems: "center", gap: 48 },
   coverCopy: { flex: 1, minWidth: 0 },
-  coverVisual: { width: 350, alignItems: "stretch" },
+  coverVisual: { width: 360, alignItems: "stretch" },
   coverMetaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  coverYear: { color: annualColors.ink, fontSize: 80, lineHeight: 86, fontWeight: "900", marginTop: 18, fontVariant: ["tabular-nums"], letterSpacing: 0 },
-  coverTitle: { color: annualColors.ink, fontSize: 34, lineHeight: 42, fontWeight: "900", marginTop: 4, letterSpacing: 0 },
+  coverYear: { color: annualColors.ink, fontSize: 66, lineHeight: 72, fontWeight: "900", marginTop: 18, fontVariant: ["tabular-nums"], letterSpacing: 0 },
+  coverTitle: { color: annualColors.ink, fontSize: 32, lineHeight: 40, fontWeight: "900", marginTop: 5, letterSpacing: 0 },
   coverLead: { maxWidth: 620, color: annualColors.inkMuted, fontSize: 15, lineHeight: 24, marginTop: 18 },
   coverMetrics: { flexDirection: "row", flexWrap: "wrap", gap: 16, marginTop: 28 },
-  coverFrame: { padding: 24, backgroundColor: annualColors.carbon, borderRadius: 8 },
+  coverFrame: { padding: 18, borderWidth: 1, borderColor: annualColors.lineStrong, backgroundColor: annualColors.carbon, borderRadius: 18 },
   coverFrameCopy: { marginTop: 18 },
-  coverFrameLabel: { color: "#8FD6D5", fontSize: 11, fontWeight: "800" },
+  coverFrameLabel: { color: annualColors.cyan, fontSize: 11, fontWeight: "800" },
   coverFrameTitle: { color: annualColors.white, fontSize: 19, lineHeight: 27, fontWeight: "900", marginTop: 7 },
-  coverFrameMeta: { color: "#B8C0C6", fontSize: 12, marginTop: 8 },
-  cardHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 24 },
+  coverFrameMeta: { color: annualColors.inkMuted, fontSize: 12, marginTop: 8 },
+  cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 24 },
   cardHeadingCopy: { flex: 1, minWidth: 0 },
-  cardTitle: { color: annualColors.ink, fontSize: 30, lineHeight: 38, fontWeight: "900", marginTop: 7, letterSpacing: 0 },
+  cardTitle: { color: annualColors.ink, fontSize: 31, lineHeight: 39, fontWeight: "900", letterSpacing: 0 },
   cardDescription: { color: annualColors.inkMuted, fontSize: 13, lineHeight: 20, marginTop: 4 },
-  noticeBand: { minHeight: 36, justifyContent: "center", marginTop: 12, paddingHorizontal: 12, borderLeftWidth: 3, borderLeftColor: annualColors.warning, backgroundColor: annualColors.warningSoft },
+  noticeBand: { minHeight: 36, justifyContent: "center", marginTop: 12, paddingHorizontal: 13, borderWidth: 1, borderLeftWidth: 3, borderColor: annualColors.line, borderLeftColor: annualColors.warning, borderRadius: 10, backgroundColor: annualColors.warningSoft },
   noticeText: { color: annualColors.warning, fontSize: 11, lineHeight: 17, fontWeight: "700" },
   cardContent: { flex: 1, minHeight: 0, justifyContent: "center", marginTop: 18 },
   statement: { color: annualColors.ink, fontSize: 22, lineHeight: 31, fontWeight: "900", maxWidth: 760, letterSpacing: 0 },
   sectionNote: { color: annualColors.inkMuted, fontSize: 11, lineHeight: 17, marginTop: 5 },
-  splitWide: { flexDirection: "row", gap: 36, alignItems: "stretch" },
+  splitWide: { flexDirection: "row", gap: 28, alignItems: "stretch" },
   primaryColumn: { flex: 1.75, minWidth: 0 },
-  secondaryColumn: { flex: 0.75, minWidth: 260, paddingLeft: 26, borderLeftWidth: 1, borderLeftColor: annualColors.line, justifyContent: "center" },
+  secondaryColumn: { flex: 0.75, minWidth: 270, padding: 22, borderWidth: 1, borderColor: annualColors.line, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.025)", justifyContent: "center" },
   metricRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 16 },
   sectionDivider: { height: 1, backgroundColor: annualColors.line, marginVertical: 14 },
   sectionHeadingRow: { flexDirection: "row", alignItems: "center", gap: 8 },
@@ -412,7 +416,7 @@ const styles = StyleSheet.create({
   sideDetail: { color: annualColors.inkMuted, fontSize: 11, lineHeight: 17, marginTop: 6 },
   sideRule: { width: 38, height: 4, borderRadius: 2, backgroundColor: annualColors.cyan, marginVertical: 22 },
   inlineFacts: { flexDirection: "row", gap: 12, marginTop: 16 },
-  fact: { flex: 1, minWidth: 0, minHeight: 80, paddingTop: 10, borderTopWidth: 1, borderTopColor: annualColors.line },
+  fact: { flex: 1, minWidth: 0, minHeight: 82, padding: 11, borderWidth: 1, borderColor: annualColors.line, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.025)" },
   factIcon: { marginBottom: 6 },
   factLabel: { color: annualColors.inkMuted, fontSize: 10, fontWeight: "700" },
   factValue: { color: annualColors.ink, fontSize: 15, fontWeight: "900", marginTop: 4 },
@@ -427,11 +431,11 @@ const styles = StyleSheet.create({
   iconHeading: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
   interestLayout: { gap: 20 },
   interestLead: { maxWidth: 850 },
-  interestColumns: { flexDirection: "row", gap: 26 },
-  interestColumn: { flex: 1, minWidth: 0, paddingRight: 20, borderRightWidth: 1, borderRightColor: annualColors.line },
+  interestColumns: { flexDirection: "row", gap: 14 },
+  interestColumn: { flex: 1, minWidth: 0, padding: 16, borderWidth: 1, borderColor: annualColors.line, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.025)" },
   topicWrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 14 },
-  topicChip: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, borderRadius: 6, backgroundColor: annualColors.redSoft },
-  topicName: { color: "#9D2F42", fontSize: 11, fontWeight: "800" },
+  topicChip: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, borderRadius: 9, backgroundColor: annualColors.redSoft },
+  topicName: { color: "#FF9AA8", fontSize: 11, fontWeight: "800" },
   topicCount: { color: annualColors.red, fontSize: 11, fontWeight: "900" },
   musicRow: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: annualColors.line },
   musicCopy: { flex: 1, minWidth: 0 },
@@ -440,18 +444,18 @@ const styles = StyleSheet.create({
   musicCount: { color: annualColors.ink, fontSize: 12, fontWeight: "900" },
   snapshotTitleRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
   setRow: { flexDirection: "row", gap: 16, marginTop: 24 },
-  setBlock: { flex: 1, minHeight: 138, padding: 16, borderTopWidth: 4, backgroundColor: annualColors.surface, borderBottomWidth: 1, borderBottomColor: annualColors.line },
+  setBlock: { flex: 1, minHeight: 138, padding: 16, borderWidth: 1, borderTopWidth: 4, borderColor: annualColors.line, borderRadius: 16 },
   setLabel: { color: annualColors.inkMuted, fontSize: 11, fontWeight: "800", marginTop: 10 },
   setValue: { color: annualColors.ink, fontSize: 30, lineHeight: 36, fontWeight: "900", marginTop: 3 },
   setDetail: { color: annualColors.inkFaint, fontSize: 10, lineHeight: 15, marginTop: 4 },
-  intersectionBand: { minHeight: 96, flexDirection: "row", alignItems: "center", marginTop: 18, borderTopWidth: 1, borderBottomWidth: 1, borderColor: annualColors.line },
+  intersectionBand: { minHeight: 96, flexDirection: "row", alignItems: "center", overflow: "hidden", marginTop: 16, borderWidth: 1, borderColor: annualColors.line, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.025)" },
   intersectionItem: { flex: 1, alignItems: "center", justifyContent: "center", borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: annualColors.line },
-  intersectionEmphasis: { backgroundColor: "#E8F6F5", alignSelf: "stretch" },
+  intersectionEmphasis: { backgroundColor: annualColors.cyanSoft, alignSelf: "stretch" },
   intersectionMark: { width: 22, height: 4, borderRadius: 2, marginBottom: 7 },
   intersectionLabel: { color: annualColors.inkMuted, fontSize: 10, fontWeight: "800" },
   intersectionValue: { color: annualColors.ink, fontSize: 21, fontWeight: "900", marginTop: 4 },
   highlightGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 18 },
-  highlightTile: { width: "32%", minWidth: 260, minHeight: 82, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, paddingRight: 10, borderTopWidth: 1, borderTopColor: annualColors.lineStrong },
+  highlightTile: { width: "32%", minWidth: 260, minHeight: 86, flexDirection: "row", alignItems: "center", gap: 12, padding: 10, borderWidth: 1, borderColor: annualColors.line, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.025)" },
   highlightCopy: { flex: 1, minWidth: 0 },
   highlightLabel: { color: annualColors.cyan, fontSize: 10, fontWeight: "900" },
   highlightTitle: { color: annualColors.ink, fontSize: 12, lineHeight: 17, fontWeight: "800", marginTop: 4 },
@@ -459,15 +463,15 @@ const styles = StyleSheet.create({
   summaryKicker: { color: annualColors.cyan, fontSize: 11, fontWeight: "900" },
   summaryTitle: { color: annualColors.ink, fontSize: 34, lineHeight: 42, fontWeight: "900", marginTop: 7, letterSpacing: 0 },
   bentoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 20 },
-  bentoBlock: { width: "31.8%", minHeight: 108, padding: 14, borderTopWidth: 4, borderBottomWidth: 1, borderBottomColor: annualColors.line, backgroundColor: annualColors.surface },
+  bentoBlock: { width: "31.8%", minHeight: 108, padding: 14, borderWidth: 1, borderTopWidth: 4, borderColor: annualColors.line, borderRadius: 16 },
   bentoWide: { width: "31.8%" },
   bentoLabel: { color: annualColors.inkMuted, fontSize: 10, fontWeight: "800" },
   bentoValue: { color: annualColors.ink, fontSize: 28, lineHeight: 34, fontWeight: "900", marginTop: 6 },
   bentoValueText: { fontSize: 17, lineHeight: 22 },
   bentoDetail: { color: annualColors.inkFaint, fontSize: 10, lineHeight: 15, marginTop: 3 },
   summaryFootnote: { color: annualColors.inkFaint, fontSize: 10, marginTop: 10 },
-  coverageStrip: { minHeight: 66, flexDirection: "row", alignItems: "center", gap: 20, marginTop: 16, paddingHorizontal: 16, borderWidth: 1, borderColor: annualColors.line, backgroundColor: annualColors.surface },
-  coverageStripCompact: { marginTop: 12, backgroundColor: "transparent", borderColor: annualColors.lineStrong },
+  coverageStrip: { minHeight: 66, flexDirection: "row", alignItems: "center", gap: 20, marginTop: 16, paddingHorizontal: 16, borderWidth: 1, borderColor: annualColors.line, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.025)" },
+  coverageStripCompact: { marginTop: 12, backgroundColor: annualColors.carbonSoft, borderColor: annualColors.lineStrong },
   coverageValue: { color: annualColors.ink, fontSize: 16, fontWeight: "900", fontVariant: ["tabular-nums"] },
   coverageLabel: { color: annualColors.inkMuted, fontSize: 9, fontWeight: "700", marginTop: 3 },
   coverageDivider: { width: 1, height: 30, backgroundColor: annualColors.line },
