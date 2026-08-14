@@ -273,7 +273,7 @@ function RecordsView({
             </Pressable>
           ) : null}
           <Pressable
-            accessibilityLabel="清除当前记录"
+            accessibilityLabel="清除本地记录缓存"
             accessibilityRole="button"
             disabled={collectorBusy}
             onPress={onClear}
@@ -381,6 +381,7 @@ interface SourcesViewProps {
   pickingArchive: boolean;
   onChangeCollectorUrl: (value: string) => void;
   onChangePairingCode: (value: string) => void;
+  onClearCache: () => void;
   onConnect: () => Promise<void>;
   onDisconnect: () => Promise<void>;
   onStartObservation: () => Promise<void>;
@@ -404,6 +405,7 @@ function SourcesView({
   pickingArchive,
   onChangeCollectorUrl,
   onChangePairingCode,
+  onClearCache,
   onConnect,
   onDisconnect,
   onStartObservation,
@@ -527,6 +529,23 @@ function SourcesView({
           >
             <History color={colors.secondaryText} size={18} />
             <Text style={styles.accountSwitchText}>无界面读取新记录（实验）</Text>
+          </Pressable>
+        ) : null}
+
+        {connected ? (
+          <Pressable
+            accessibilityLabel="清除本地记录缓存"
+            accessibilityRole="button"
+            disabled={busy || observing}
+            onPress={onClearCache}
+            style={({ pressed }) => [
+              styles.accountSwitchButton,
+              (busy || observing) && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Trash2 color={colors.secondaryText} size={18} />
+            <Text style={styles.accountSwitchText}>清除本地缓存</Text>
           </Pressable>
         ) : null}
 
@@ -927,9 +946,9 @@ function AppContent() {
 
   function clearCurrentRecords() {
     confirmAlert(
-      "清除本地记录",
-      "将移除当前采集结果，不会清除抖音账号中的记录。",
-      "清除",
+      "清除本地缓存",
+      "将清除本地保存的观看、喜欢和收藏记录。抖音登录状态、Cookie 和账号中的记录不会受影响；下一次读取将重新获取全部可见记录。",
+      "清除缓存",
       (confirmed) => {
         if (!confirmed) return;
         if (collectorToken) {
@@ -1030,6 +1049,7 @@ function AppContent() {
               setPairingCode(value);
               setCollectorError(null);
             }}
+            onClearCache={clearCurrentRecords}
             onConnect={connectCollector}
             onDisconnect={disconnectCollector}
             onStartObservation={() => collectorToken ? beginObservation(collectorUrl, collectorToken) : Promise.resolve()}

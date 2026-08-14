@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearCollectorRecords,
   getCollectorRecords,
   LocalCollectorError,
   getCollectorStatus,
@@ -64,6 +65,27 @@ describe("local collector client", () => {
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer session-secret" }) }),
     );
     expect(fetchMock.mock.calls[0]?.[0]).not.toContain("session-secret");
+  });
+
+  it("clears the local record cache through the authenticated endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      schemaVersion: 2,
+      updatedAt: "2026-08-14T00:00:00.000Z",
+      records: { watch_history: [], liked_videos: [], favorite_videos: [] },
+      warnings: [],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snapshot = await clearCollectorRecords("http://127.0.0.1:4765", "session-secret");
+
+    expect(snapshot.records).toEqual({ watch_history: [], liked_videos: [], favorite_videos: [] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4765/v1/records",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({ Authorization: "Bearer session-secret" }),
+      }),
+    );
   });
 
   it("starts and stops manual observation through local authenticated endpoints", async () => {
