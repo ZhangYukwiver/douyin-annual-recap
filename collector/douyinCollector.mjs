@@ -15,7 +15,7 @@ import {
   invalidateDirectHistoryTemplate,
   loadDirectHistoryTemplate,
 } from "./directHistory.mjs";
-import { CollectorAdapterError, RecordAccumulator, matchDouyinEndpoint } from "./normalizer.mjs";
+import { CollectorAdapterError, RecordAccumulator, matchDouyinEndpoint, mergeRecords } from "./normalizer.mjs";
 import {
   createEndpointProgress,
   isEndpointComplete,
@@ -1142,6 +1142,7 @@ export class DouyinCollector {
         new Set(incremental ? existingRecords[type].map((record) => record.id) : []),
       ]));
       const newIds = new Map(REQUIRED_TYPES.map((type) => [type, new Set()]));
+      const rejectedIds = new Map(REQUIRED_TYPES.map((type) => [type, new Set()]));
       const pageCounts = {};
       let missingViewTimes = 0;
       for (const [type, endpointUrl] of [
@@ -1154,7 +1155,8 @@ export class DouyinCollector {
           pageCounts[type] = await this.collectDirectList(context, type, async (payload, pageCount) => {
             this.assertSyncActive(runId);
             const result = accumulator.addResponse(endpoint, payload);
-            for (const id of result.recordIds) if (!knownIds.get(type).has(id)) newIds.get(type).add(id);
+            for (const id of result.acceptedRecordIds) if (!knownIds.get(type).has(id)) newIds.get(type).add(id);
+            for (const id of result.rejectedRecordIds) rejectedIds.get(type).add(id);
             const pageRecords = accumulator.snapshot().records;
             this.updateStatus({
               phase: type,
@@ -1162,7 +1164,10 @@ export class DouyinCollector {
                 ? `正在读取${TYPE_LABELS[type]}新增记录（第 ${pageCount} 页，新增 ${newIds.get(type).size} 条）`
                 : `正在无界面读取${TYPE_LABELS[type]}（第 ${pageCount} 页，${pageRecords[type].length} 条）`,
               counts: incremental
-                ? Object.fromEntries(REQUIRED_TYPES.map((kind) => [kind, existingRecords[kind].length + newIds.get(kind).size]))
+                ? Object.fromEntries(REQUIRED_TYPES.map((kind) => [kind,
+                    existingRecords[kind].filter((record) => !rejectedIds.get(kind).has(record.id)).length
+                      + newIds.get(kind).size,
+                  ]))
                 : recordCounts(pageRecords),
             });
             return !result.recordIds.some((id) => knownIds.get(type).has(id));
@@ -1182,7 +1187,8 @@ export class DouyinCollector {
           const payload = await this.readDirectHistory(context, cursor);
           this.assertSyncActive(runId);
           const result = accumulator.addResponse(endpoint, payload);
-          for (const id of result.recordIds) if (!knownIds.get(type).has(id)) newIds.get(type).add(id);
+          for (const id of result.acceptedRecordIds) if (!knownIds.get(type).has(id)) newIds.get(type).add(id);
+          for (const id of result.rejectedRecordIds) rejectedIds.get(type).add(id);
           pageCounts[type] += 1;
           if (type === "watch_history") missingViewTimes += countMissingDirectHistoryViewTimes(payload);
           if (result.pageFingerprint && pageFingerprints.has(result.pageFingerprint)) {
@@ -1199,7 +1205,10 @@ export class DouyinCollector {
               ? `正在读取${TYPE_LABELS[type]}新增记录（第 ${pageCounts[type]} 页，新增 ${newIds.get(type).size} 条）`
               : `正在直接读取${TYPE_LABELS[type]}（第 ${pageCounts[type]} 页，${pageRecords[type].length} 条）`,
             counts: incremental
-              ? Object.fromEntries(REQUIRED_TYPES.map((kind) => [kind, existingRecords[kind].length + newIds.get(kind).size]))
+              ? Object.fromEntries(REQUIRED_TYPES.map((kind) => [kind,
+                  existingRecords[kind].filter((record) => !rejectedIds.get(kind).has(record.id)).length
+                    + newIds.get(kind).size,
+                ]))
               : recordCounts(pageRecords),
           });
           if (result.recordIds.some((id) => knownIds.get(type).has(id))) break;
@@ -1212,10 +1221,22 @@ export class DouyinCollector {
         }
       }
       const fetchedRecords = accumulator.snapshot().records;
+      const fetchedById = new Map(REQUIRED_TYPES.map((type) => [
+        type,
+        new Map(fetchedRecords[type].map((record) => [record.id, record])),
+      ]));
       const normalized = incremental
         ? Object.fromEntries(REQUIRED_TYPES.map((type) => [
             type,
-            [...fetchedRecords[type].filter((record) => !knownIds.get(type).has(record.id)), ...existingRecords[type]],
+            [
+              ...fetchedRecords[type].filter((record) => !knownIds.get(type).has(record.id)),
+              ...existingRecords[type]
+                .filter((record) => !rejectedIds.get(type).has(record.id))
+                .map((record) => {
+                  const fresh = fetchedById.get(type).get(record.id);
+                  return fresh ? mergeRecords(record, fresh) : record;
+                }),
+            ],
           ]))
         : fetchedRecords;
       const newCounts = Object.fromEntries(REQUIRED_TYPES.map((type) => [type, newIds.get(type).size]));

@@ -5,6 +5,9 @@
       "aweme_id": "demo-favorite-001",
       "desc": "#手作 示例收藏记录",
       "collect_time": 1740787200,
+      "play_progress": {
+        "last_modified_time": 1740873600
+      },
       "author": {
         "uid": "demo-author-c",
         "nickname": "示例创作者丙"

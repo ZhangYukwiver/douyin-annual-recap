@@ -563,6 +563,14 @@ describe("DouyinCollector direct records", () => {
       occurredAtSource: "unknown",
       url: "https://www.douyin.com/video/history-old",
       videoId: "history-old",
+    }, {
+      id: "watch_history:history-low:2023-11-14T21:13:20.000Z",
+      title: "低于阈值的旧观看",
+      author: null,
+      occurredAt: "2023-11-14T21:13:20.000Z",
+      occurredAtSource: "platform_action",
+      url: "https://www.douyin.com/video/history-low",
+      videoId: "history-low",
     }];
     initial.records.liked_videos = [{
       id: "liked_videos:liked-old",
@@ -598,6 +606,12 @@ describe("DouyinCollector direct records", () => {
       status_code: 0,
       aweme_list: [
         { aweme_id: "history-new", history_info: { view_time: 1_700_003_600 } },
+        {
+          aweme_id: "history-low",
+          history_info: { view_time: 1_699_996_400 },
+          play_progress: { play_progress: 500 },
+          video: { duration: 10_000 },
+        },
         { aweme_id: "history-old", history_info: { view_time: 1_700_000_000 } },
       ],
       has_more: 1,
@@ -607,7 +621,13 @@ describe("DouyinCollector direct records", () => {
       const prefix = type === "liked_videos" ? "liked" : "favorite";
       const shouldContinue = await onPage({
         status_code: 0,
-        aweme_list: [{ aweme_id: `${prefix}-new` }, { aweme_id: `${prefix}-old` }],
+        aweme_list: [
+          { aweme_id: `${prefix}-new` },
+          {
+            aweme_id: `${prefix}-old`,
+            play_progress: { last_modified_time: 1_700_000_000 },
+          },
+        ],
         has_more: 1,
         ...(type === "liked_videos" ? { max_cursor: "1" } : { cursor: "1" }),
       }, 1);
@@ -620,8 +640,17 @@ describe("DouyinCollector direct records", () => {
     expect(collector.readDirectHistory).toHaveBeenCalledTimes(1);
     expect(collector.snapshot.records.watch_history).toHaveLength(3);
     expect(collector.snapshot.records.watch_history.map((record) => record.id)).toContain("watch_history:history-old");
+    expect(collector.snapshot.records.watch_history.map((record) => record.videoId)).not.toContain("history-low");
     expect(collector.snapshot.records.liked_videos).toHaveLength(2);
     expect(collector.snapshot.records.favorite_videos).toHaveLength(2);
+    expect(collector.snapshot.records.liked_videos.find((record) => record.videoId === "liked-old")).toMatchObject({
+      occurredAt: "2023-11-14T22:13:20.000Z",
+      occurredAtSource: "platform_action",
+    });
+    expect(collector.snapshot.records.favorite_videos.find((record) => record.videoId === "favorite-old")).toMatchObject({
+      occurredAt: "2023-11-14T22:13:20.000Z",
+      occurredAtSource: "platform_action",
+    });
     expect(collector.status.message).toBe("已读取新增记录（观看 1、点赞 1、收藏 1）");
     expect(store.save).toHaveBeenCalledTimes(1);
   });

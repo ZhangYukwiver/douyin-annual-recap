@@ -77,6 +77,34 @@ describe("normalizeDouyinResponse", () => {
     expect(result.pagination).toEqual({ hasMore: false, cursor: null });
   });
 
+  it.each([
+    ["喜欢", "https://www.douyin.com/aweme/v1/web/aweme/favorite/", "digg_time"],
+    ["收藏", "https://www.douyin.com/aweme/v1/web/aweme/listcollection/", "collect_time"],
+  ])("uses play progress update time for %s records", (_label, url, legacyTimeField) => {
+    const endpoint = matchDouyinEndpoint(url);
+    const result = normalizeDouyinResponse(endpoint, {
+      status_code: 0,
+      aweme_list: [{
+        aweme_id: "with-progress-time",
+        [legacyTimeField]: 1_700_000_000,
+        play_progress: { last_modified_time: 1_700_100_000 },
+      }, {
+        aweme_id: "without-progress-time",
+        [legacyTimeField]: 1_700_000_000,
+      }],
+      has_more: false,
+    });
+
+    expect(result.records[0]).toMatchObject({
+      occurredAt: new Date(1_700_100_000 * 1_000).toISOString(),
+      occurredAtSource: "platform_action",
+    });
+    expect(result.records[1]).toMatchObject({
+      occurredAt: null,
+      occurredAtSource: "unknown",
+    });
+  });
+
   it("uses a dedicated history event timestamp when present", () => {
     const endpoint = matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/history/read/");
     const result = normalizeDouyinResponse(endpoint, {
@@ -248,6 +276,42 @@ describe("normalizeDouyinResponse", () => {
 });
 
 describe("RecordAccumulator", () => {
+  it("drops collected watch records below ten percent while keeping the boundary and unknown progress", () => {
+    const endpoint = matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/history/read/");
+    const accumulator = new RecordAccumulator();
+    const result = accumulator.addResponse(endpoint, {
+      status_code: 0,
+      aweme_list: [{
+        aweme_id: "below-ten",
+        play_progress: { play_progress: 999 },
+        video: { duration: 10_000 },
+      }, {
+        aweme_id: "exactly-ten",
+        play_progress: { play_progress: 1_000 },
+        video: { duration: 10_000 },
+      }, {
+        aweme_id: "unknown-progress",
+        video: { duration: 10_000 },
+      }],
+      has_more: false,
+    });
+
+    expect(result.pageSize).toBe(3);
+    expect(result.rejectedRecordIds).toEqual(["watch_history:below-ten"]);
+    expect(result.acceptedRecordIds).toEqual([
+      "watch_history:exactly-ten",
+      "watch_history:unknown-progress",
+    ]);
+    expect(accumulator.snapshot().records.watch_history.map((record) => record.videoId)).toEqual([
+      "exactly-ten",
+      "unknown-progress",
+    ]);
+    expect(accumulator.snapshot().records.watch_history[0]?.watchProgress).toEqual({
+      watchedSeconds: 1,
+      percent: 10,
+    });
+  });
+
   it("deduplicates records received across pages", () => {
     const endpoint = matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/collects/video/list/");
     const accumulator = new RecordAccumulator();

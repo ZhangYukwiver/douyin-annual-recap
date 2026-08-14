@@ -6,6 +6,9 @@
         "aweme_id": "demo-liked-001",
         "desc": "示例喜欢记录",
         "digg_time": 1738368000,
+        "play_progress": {
+          "last_modified_time": 1738454400
+        },
         "create_time": 1704067200,
         "author": {
           "uid": "demo-author-b",

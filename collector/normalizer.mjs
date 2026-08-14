@@ -10,6 +10,7 @@ const ENDPOINT_BY_PATH = new Map([
 
 const RECORD_TYPES = ["watch_history", "liked_videos", "favorite_videos"];
 const RELIABLE_EVENT_SOURCES = new Set(["platform_action", "archive_action"]);
+const MIN_WATCH_PROGRESS_PERCENT = 10;
 const MAX_RECORDS_PER_TYPE = 50_000;
 const MAX_STRING_LENGTH = 500;
 const MAX_URL_LENGTH = 2_048;
@@ -142,6 +143,7 @@ function watchHistoryEventId(videoId, occurredAt, source) {
 function eventTimestamp(item, recordType, mappedHistoryTime) {
   if (!isObject(item)) return { value: null, source: "unknown" };
   const history = firstObject(item, "history_info") ?? firstObject(item, "historyInfo");
+  const playback = firstObject(item, "play_progress") ?? firstObject(item, "playProgress");
   const candidates = recordType === "watch_history"
     ? [
         mappedHistoryTime,
@@ -149,9 +151,7 @@ function eventTimestamp(item, recordType, mappedHistoryTime) {
         history?.history_time, item.view_time, item.watch_time,
         item.history_time, item.last_view_time, item.event_time,
       ]
-    : recordType === "liked_videos"
-      ? [item.digg_time, item.like_time, item.like_at, item.favorite_time, item.event_time]
-      : [item.collect_time, item.favorite_time, item.collect_at, item.last_collect_time, item.event_time];
+    : [playback?.last_modified_time, playback?.lastModifiedTime];
 
   for (const candidate of candidates) {
     const normalized = normalizeTimestamp(candidate);
@@ -307,14 +307,17 @@ function normalizeStats(item) {
 
 function normalizeProgress(item, durationSeconds) {
   const history = firstObject(item, "history_info") ?? firstObject(item, "historyInfo");
-  if (!history) return null;
+  const playback = firstObject(item, "play_progress") ?? firstObject(item, "playProgress");
+  if (!history && !playback) return null;
   const result = {};
-  const watched = normalizeDuration(
-    history.watched_duration ?? history.watchedDuration ?? history.watch_duration ?? history.view_duration,
-    "milliseconds",
-  );
+  const watchedValue = history?.watched_duration ?? history?.watchedDuration ?? history?.watch_duration ?? history?.view_duration
+    ?? playback?.play_progress ?? playback?.playProgress;
+  const watched = normalizeDuration(watchedValue, "milliseconds");
   if (watched !== null) result.watchedSeconds = watched;
-  const percent = normalizePercent(history.play_progress ?? history.playProgress ?? history.progress ?? history.percent);
+  let percent = normalizePercent(history?.play_progress ?? history?.playProgress ?? history?.progress ?? history?.percent);
+  if (percent === null && watched !== null && durationSeconds > 0) {
+    percent = Math.min(100, Math.round(Number(watchedValue) / 1_000 / durationSeconds * 10_000) / 100);
+  }
   if (percent !== null) result.percent = percent;
   if (result.watchedSeconds === undefined && durationSeconds !== null && percent !== null) {
     result.watchedSeconds = Math.round(durationSeconds * percent / 100 * 100) / 100;
@@ -678,11 +681,18 @@ export class RecordAccumulator {
         pagination: normalized.pagination,
       };
     }
+    const acceptedRecords = endpoint.kind === "watch_history"
+      ? normalized.records.filter((record) => record.watchProgress?.percent === undefined
+        || record.watchProgress.percent >= MIN_WATCH_PROGRESS_PERCENT)
+      : normalized.records;
+    const acceptedIds = new Set(acceptedRecords.map((record) => record.id));
     return {
-      added: this.addRecords(endpoint.kind, normalized.records),
+      added: this.addRecords(endpoint.kind, acceptedRecords),
       pageSize: normalized.records.length,
       pageFingerprint: fingerprintRecordPage(normalized.records),
       recordIds: normalized.records.map((record) => record.id),
+      acceptedRecordIds: [...acceptedIds],
+      rejectedRecordIds: normalized.records.flatMap((record) => acceptedIds.has(record.id) ? [] : [record.id]),
       type: endpoint.kind,
       pagination: normalized.pagination,
     };
