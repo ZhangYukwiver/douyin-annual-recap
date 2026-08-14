@@ -65,7 +65,7 @@ describe("CollectorStore", () => {
         warnings: ["legacy warning"],
       });
       expect(loaded.records.watch_history[0]).toMatchObject({
-        id: "watch_history:legacy-video",
+        id: "watch_history:legacy-video:2024-12-31T16:00:00.000Z",
         videoId: "legacy-video",
         title: "legacy record",
         occurredAtSource: "platform_action",

@@ -91,6 +91,21 @@ describe("normalizeDouyinResponse", () => {
     });
 
     expect(result.records[0]?.occurredAt).toBe("2023-11-14T22:13:20.000Z");
+    expect(result.records[0]?.id).toBe("watch_history:734002:2023-11-14T22:13:20.000Z");
+  });
+
+  it("maps the history response aweme_date timestamps by video id", () => {
+    const endpoint = matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/history/read/");
+    const result = normalizeDouyinResponse(endpoint, {
+      status_code: 0,
+      aweme_list: [{ aweme_id: "734003", caption: "历史记录" }],
+      aweme_date: { "734003": 1_700_000_000_123 },
+    });
+
+    expect(result.records[0]).toMatchObject({
+      occurredAt: "2023-11-14T22:13:20.123Z",
+      occurredAtSource: "platform_action",
+    });
   });
 
   it("accepts empty favorite lists as a successful response", () => {
@@ -291,7 +306,10 @@ describe("RecordAccumulator", () => {
       aweme_list: [{ aweme_id: "merge-1", statistics: { play_count: 25 } }],
     });
 
-    expect(accumulator.snapshot().records.watch_history[0]).toMatchObject({
+    const records = accumulator.snapshot().records.watch_history;
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      id: "watch_history:merge-1:2023-11-14T22:13:20.000Z",
       title: "new title #new",
       author: "Creator",
       authorId: "creator-1",
@@ -300,5 +318,46 @@ describe("RecordAccumulator", () => {
       topics: ["old", "new"],
       stats: { playCount: 25, diggCount: 1 },
     });
+  });
+
+  it("keeps separate watch events while migrating a timestamped legacy id", () => {
+    const endpoint = matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/history/read/");
+    const accumulator = new RecordAccumulator({
+      watch_history: [{
+        id: "watch_history:repeat-1:1700000000",
+        title: "旧记录",
+        author: null,
+        occurredAt: "2023-11-14T22:13:20.000Z",
+        occurredAtSource: "archive_action",
+        url: "https://www.douyin.com/video/repeat-1",
+      }],
+      liked_videos: [],
+      favorite_videos: [],
+    });
+
+    accumulator.addResponse(endpoint, {
+      status_code: 0,
+      aweme_list: [{
+        aweme_id: "repeat-1",
+        desc: "同一次观看的新元数据",
+        history_info: { view_time: 1_700_000_000 },
+      }, {
+        aweme_id: "repeat-1",
+        desc: "一小时后再次观看",
+        history_info: { view_time: 1_700_003_600 },
+      }],
+    });
+    accumulator.addResponse(endpoint, {
+      status_code: 0,
+      aweme_list: [{ aweme_id: "repeat-1", desc: "无法归属到某次观看的稀疏响应" }],
+    });
+
+    const records = accumulator.snapshot().records.watch_history;
+    expect(records).toHaveLength(2);
+    expect(records.map((record) => record.id)).toEqual([
+      "watch_history:repeat-1:2023-11-14T23:13:20.000Z",
+      "watch_history:repeat-1:2023-11-14T22:13:20.000Z",
+    ]);
+    expect(records[1]?.title).toBe("同一次观看的新元数据");
   });
 });

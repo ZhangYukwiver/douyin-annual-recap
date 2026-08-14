@@ -7,6 +7,7 @@ import {
   normalizeCollectorBaseUrl,
   parseLaunchPairingCode,
   pairCollector,
+  startDirectRecordsSync,
   startCollectorObservation,
   stopCollectorObservation,
 } from "./localCollector";
@@ -88,6 +89,29 @@ describe("local collector client", () => {
       "http://127.0.0.1:4765/v1/observe",
       "http://127.0.0.1:4765/v1/observe/stop",
     ]);
+  });
+
+  it("starts the loopback-only direct history experiment through its fixed endpoint", async () => {
+    const statusPayload = {
+      state: "collecting",
+      phase: "watch_history",
+      message: "正在直接读取全部可见观看历史",
+      counts: { watch_history: 0, liked_videos: 0, favorite_videos: 0 },
+      updatedAt: null,
+      browserOpen: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      started: true,
+      status: statusPayload,
+    }), { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startDirectRecordsSync("http://127.0.0.1:4765", "session-secret"))
+      .resolves.toMatchObject({ phase: "watch_history" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4765/v1/experimental/records-direct",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("rejects unreasonable count values from the service", async () => {

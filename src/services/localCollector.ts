@@ -421,6 +421,12 @@ export async function startCollectorSync(baseUrl: string, token: string): Promis
   return parseStatus(value.status);
 }
 
+export async function startDirectRecordsSync(baseUrl: string, token: string): Promise<CollectorStatus> {
+  const value = await requestJson(baseUrl, "/v1/experimental/records-direct", { method: "POST" }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回直接读取状态。");
+  return parseStatus(value.status);
+}
+
 export async function startCollectorObservation(baseUrl: string, token: string): Promise<CollectorStatus> {
   const value = await requestJson(baseUrl, "/v1/observe", { method: "POST" }, token);
   if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回监听状态。");

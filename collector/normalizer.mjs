@@ -9,6 +9,7 @@ const ENDPOINT_BY_PATH = new Map([
 ]);
 
 const RECORD_TYPES = ["watch_history", "liked_videos", "favorite_videos"];
+const RELIABLE_EVENT_SOURCES = new Set(["platform_action", "archive_action"]);
 const MAX_RECORDS_PER_TYPE = 50_000;
 const MAX_STRING_LENGTH = 500;
 const MAX_URL_LENGTH = 2_048;
@@ -132,11 +133,18 @@ function normalizeTimestamp(value) {
     : null;
 }
 
-function eventTimestamp(item, recordType) {
+function watchHistoryEventId(videoId, occurredAt, source) {
+  return videoId && occurredAt && RELIABLE_EVENT_SOURCES.has(source)
+    ? `watch_history:${videoId}:${occurredAt}`
+    : null;
+}
+
+function eventTimestamp(item, recordType, mappedHistoryTime) {
   if (!isObject(item)) return { value: null, source: "unknown" };
   const history = firstObject(item, "history_info") ?? firstObject(item, "historyInfo");
   const candidates = recordType === "watch_history"
     ? [
+        mappedHistoryTime,
         history?.view_time, history?.watch_time,
         history?.history_time, item.view_time, item.watch_time,
         item.history_time, item.last_view_time, item.event_time,
@@ -325,7 +333,7 @@ function normalizeMediaType(item) {
   return null;
 }
 
-function normalizeAweme(item, recordType) {
+function normalizeAweme(item, recordType, historyDates) {
   if (!isObject(item)) return null;
   const author = firstObject(item, "author");
   const shareInfo = firstObject(item, "share_info");
@@ -335,14 +343,19 @@ function normalizeAweme(item, recordType) {
   const title = firstString(item.desc, item.caption, item.item_title, item.preview_title) ?? "未命名视频";
   const authorName = firstString(author?.nickname, author?.unique_id, item.author_name);
   const rawShareUrl = firstString(item.share_url, shareInfo?.share_url);
-  const event = eventTimestamp(item, recordType);
+  const mappedHistoryTime = historyDates && Object.hasOwn(historyDates, awemeId)
+    ? historyDates[awemeId]
+    : undefined;
+  const event = eventTimestamp(item, recordType, mappedHistoryTime);
   const video = firstObject(item, "video");
   const durationSeconds = normalizeDuration(
     video?.duration ?? item.duration ?? item.duration_seconds ?? item.durationSeconds,
     video?.duration !== undefined ? "milliseconds" : "auto",
   );
   const result = {
-    id: `${recordType}:${awemeId}`,
+    id: recordType === "watch_history"
+      ? watchHistoryEventId(awemeId, event.value, event.source) ?? `${recordType}:${awemeId}`
+      : `${recordType}:${awemeId}`,
     title,
     author: authorName,
     occurredAt: event.value,
@@ -403,10 +416,23 @@ function normalizeRecordUrl(value) {
   return null;
 }
 
-function deriveVideoId(record) {
+function videoIdFromWatchHistoryId(id, occurredAt) {
+  if (!id.startsWith("watch_history:")) return null;
+  const body = id.slice("watch_history:".length);
+  if (!occurredAt) return body.slice(0, 200) || null;
+  const timestamped = body.match(/^(.+?)(?::|@|\|)(\d{10,13}|\d{4}-\d{2}-\d{2}[T ].+)$/u);
+  if (timestamped?.[1] && normalizeTimestamp(timestamped[2]) === occurredAt) {
+    return timestamped[1].slice(0, 200);
+  }
+  return body.slice(0, 200) || null;
+}
+
+function deriveVideoId(record, occurredAt = null) {
   const direct = normalizeOptionalString(record.videoId, 200);
   if (direct) return direct;
   const id = normalizeOptionalString(record.id, 300);
+  const watchHistoryId = id ? videoIdFromWatchHistoryId(id, occurredAt) : null;
+  if (watchHistoryId) return watchHistoryId;
   if (id && /^[^:]+:(.+)$/u.test(id)) return id.replace(/^[^:]+:/u, "").slice(0, 200);
   const url = normalizeRecordUrl(record.url);
   if (url) {
@@ -455,25 +481,28 @@ function normalizeProgressObject(value) {
 /** Normalize a record received from the local collector or a persisted file. */
 export function normalizeRecord(value, timestampSource = "unknown") {
   if (!isObject(value)) return null;
-  const id = normalizeOptionalString(value.id, 300);
+  const rawId = normalizeOptionalString(value.id, 300);
   const title = normalizeOptionalString(value.title) ?? "Untitled video";
-  if (!id) return null;
+  if (!rawId) return null;
+  const occurredAt = normalizeTimestamp(value.occurredAt);
+  const source = ["platform_action", "archive_action", "unknown"].includes(value.occurredAtSource)
+    ? value.occurredAtSource
+    : occurredAt && RELIABLE_EVENT_SOURCES.has(timestampSource)
+      ? timestampSource
+      : "unknown";
+  const videoId = deriveVideoId(value, occurredAt);
   const result = {
-    id,
+    id: rawId.startsWith("watch_history:")
+      ? watchHistoryEventId(videoId, occurredAt, source) ?? rawId
+      : rawId,
     title,
     author: normalizeOptionalString(value.author),
-    occurredAt: normalizeTimestamp(value.occurredAt),
+    occurredAt,
     url: normalizeRecordUrl(value.url),
   };
-  const videoId = deriveVideoId(value);
   if (videoId) result.videoId = videoId;
   const authorId = normalizeOptionalString(value.authorId, 200);
   const authorAvatarUrl = normalizeImageUrl(value.authorAvatarUrl ?? value.authorAvatar ?? value.avatarUrl);
-  const source = ["platform_action", "archive_action", "unknown"].includes(value.occurredAtSource)
-    ? value.occurredAtSource
-    : result.occurredAt && (timestampSource === "platform_action" || timestampSource === "archive_action")
-      ? timestampSource
-      : "unknown";
   const publishedAt = normalizeTimestamp(value.publishedAt);
   const coverUrl = normalizeImageUrl(value.coverUrl ?? value.cover);
   const mediaType = ["video", "image", "live", "unknown"].includes(value.mediaType) ? value.mediaType : null;
@@ -611,8 +640,11 @@ export function normalizeDouyinResponse(endpoint, payload) {
     throw new CollectorAdapterError("schema_changed", "视频响应缺少 aweme_list。请更新采集器适配器。");
   }
 
+  const historyDates = endpoint.kind === "watch_history" && isObject(firstValue(payload, "aweme_date"))
+    ? firstValue(payload, "aweme_date")
+    : null;
   const records = items.flatMap((item) => {
-    const record = normalizeAweme(item, endpoint.kind);
+    const record = normalizeAweme(item, endpoint.kind, historyDates);
     return record ? [record] : [];
   });
   if (items.length > 0 && records.length === 0) {
@@ -658,20 +690,50 @@ export class RecordAccumulator {
 
   addRecords(type, records) {
     if (!RECORD_TYPES.includes(type)) return 0;
-    const existing = new Map(this.records[type].flatMap((record) => {
-      const normalized = normalizeRecord(record);
-      return normalized ? [[normalized.id, normalized]] : [];
-    }));
-    const before = existing.size;
-    for (const rawRecord of records) {
+    const existing = new Map();
+    const normalizeForType = (rawRecord) => {
       const record = normalizeRecord(rawRecord);
-      if (!record) continue;
-      if (existing.size >= MAX_RECORDS_PER_TYPE && !existing.has(record.id)) {
-        this.truncatedTypes.add(type);
-        break;
+      if (!record || type !== "watch_history" || !record.videoId) return record;
+      const eventId = watchHistoryEventId(record.videoId, record.occurredAt, record.occurredAtSource);
+      return { ...record, id: eventId ?? `watch_history:${record.videoId}` };
+    };
+    const ingest = (rawRecords, trackTruncation) => {
+      const normalized = rawRecords.map(normalizeForType).filter(Boolean);
+      const ordered = type === "watch_history"
+        ? normalized.sort((left, right) => Number(Boolean(watchHistoryEventId(right.videoId, right.occurredAt, right.occurredAtSource)))
+          - Number(Boolean(watchHistoryEventId(left.videoId, left.occurredAt, left.occurredAtSource))))
+        : normalized;
+      for (let record of ordered) {
+        const eventId = type === "watch_history"
+          ? watchHistoryEventId(record.videoId, record.occurredAt, record.occurredAtSource)
+          : null;
+        if (eventId) {
+          const placeholderId = `watch_history:${record.videoId}`;
+          if (existing.has(placeholderId)) {
+            record = mergeRecords(existing.get(placeholderId), record);
+            existing.delete(placeholderId);
+          }
+        } else if (type === "watch_history" && record.videoId) {
+          const reliableMatches = [...existing.values()].filter((candidate) =>
+            candidate.videoId === record.videoId
+            && Boolean(watchHistoryEventId(candidate.videoId, candidate.occurredAt, candidate.occurredAtSource)));
+          if (reliableMatches.length === 1) {
+            const [target] = reliableMatches;
+            existing.set(target.id, mergeRecords(target, { ...record, id: target.id, occurredAt: null }));
+            continue;
+          }
+          if (reliableMatches.length > 1) continue;
+        }
+        if (trackTruncation && existing.size >= MAX_RECORDS_PER_TYPE && !existing.has(record.id)) {
+          this.truncatedTypes.add(type);
+          break;
+        }
+        existing.set(record.id, mergeRecords(existing.get(record.id), record));
       }
-      existing.set(record.id, mergeRecords(existing.get(record.id), record));
-    }
+    };
+    ingest(this.records[type], false);
+    const before = existing.size;
+    ingest(records, true);
     this.records[type] = [...existing.values()].sort((left, right) => {
       const leftTime = left.occurredAt ? Date.parse(left.occurredAt) : 0;
       const rightTime = right.occurredAt ? Date.parse(right.occurredAt) : 0;

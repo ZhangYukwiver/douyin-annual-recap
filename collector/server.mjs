@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
-import { access, mkdir } from "node:fs/promises";
+import { access, chmod, mkdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
 import { randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
+
+import { chromium } from "playwright-core";
 
 import { DouyinCollector } from "./douyinCollector.mjs";
 import { CollectorStore } from "./store.mjs";
@@ -71,6 +73,7 @@ async function findChromeExecutable() {
     programFiles && path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
     programFilesX86 && path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    chromium.executablePath(),
     "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
     "/usr/bin/chromium",
@@ -85,6 +88,10 @@ function localLanAddresses() {
     }
   }
   return [...new Set(addresses)];
+}
+
+function isLoopbackAddress(value) {
+  return value === "127.0.0.1" || value === "::1" || value === "::ffff:127.0.0.1";
 }
 
 function constantTimeStringEqual(left, right) {
@@ -187,7 +194,8 @@ async function main() {
   }
 
   const dataDirectory = path.join(projectDirectory, ".local-data");
-  await mkdir(dataDirectory, { recursive: true });
+  await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
+  await chmod(dataDirectory, 0o700);
   const store = new CollectorStore(dataDirectory);
   const collector = new DouyinCollector({ executablePath, dataDirectory, store });
   await collector.initialize();
@@ -251,6 +259,13 @@ async function main() {
       sendJson(response, 200, collector.getSnapshot());
     } else if (request.method === "POST" && url.pathname === "/v1/sync") {
       const started = collector.startSync();
+      sendJson(response, started ? 202 : 200, { started, status: collector.getStatus() });
+    } else if (request.method === "POST" && url.pathname === "/v1/experimental/records-direct") {
+      if (!isLoopbackAddress(request.socket.remoteAddress)) {
+        sendJson(response, 403, { error: "loopback_only" });
+        return;
+      }
+      const started = collector.startDirectRecords();
       sendJson(response, started ? 202 : 200, { started, status: collector.getStatus() });
     } else if (request.method === "POST" && url.pathname === "/v1/observe") {
       const started = collector.startObservation();
