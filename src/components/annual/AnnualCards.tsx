@@ -52,39 +52,39 @@ export interface AnnualPageContentProps {
 export function AnnualCoverPage({ report, privacy, pageNumber, totalPages }: AnnualPageContentProps) {
   const overview = report.overview.data as AnnualOverviewData;
   const highlights = report.highlights.data as AnnualHighlightsData;
-  const hero = highlights.first ?? highlights.peakDay ?? highlights.last;
+  const hero = highlights.first ?? highlights.peakDay ?? highlights.last ?? highlights.longest ?? highlights.mostEngaged;
   const reportStatus = report.status === "ok" ? "ok" : "insufficient";
   return (
-    <PageCanvas pageNumber={pageNumber} totalPages={totalPages} label={`${report.periodLabel}年度回顾封面`}>
+    <PageCanvas pageNumber={pageNumber} totalPages={totalPages} label={`${report.periodLabel}个人总结封面`}>
       <View style={styles.coverLayout}>
         <View style={styles.coverCopy}>
           <View style={styles.coverMetaRow}>
-            <Text style={styles.eyebrow}>DOUYIN / ANNUAL RECAP</Text>
+            <Text style={styles.eyebrow}>DOUYIN / PERSONAL SUMMARY</Text>
             <StatusPill status={reportStatus} />
           </View>
-          <Text style={styles.coverYear}>{report.year}</Text>
-          <Text style={styles.coverTitle}>这一年，内容留下了形状。</Text>
+          <Text style={styles.coverYear}>当前样本</Text>
+          <Text style={styles.coverTitle}>这些内容，留下了现在的形状。</Text>
           <Text style={styles.coverLead}>
             {overview.counts.total > 0
-              ? `${formatCount(overview.counts.total)} 个有可靠行为时间的独立视频，组成一份只在本地生成的年度回顾。`
-              : "当前数据还不足以描出年度轨迹。报告会保留边界，也不会拿发布时间代替你的行为时间。"}
+              ? `${formatCount(overview.counts.total)} 个去重内容，组成一份只在本地生成的个人总结。`
+              : "当前还没有可总结的记录。读取任意一类样本后，这里就会自动更新。"}
           </Text>
           <View style={styles.coverMetrics}>
-            <MetricBlock label="独立视频" value={formatCount(overview.counts.total)} detail="三类行为去重后" accent={annualColors.ink} large />
-            <MetricBlock label="活跃日期" value={formatCount(overview.activeDays)} detail="上海时区" accent={annualColors.cyan} large />
-            <MetricBlock label="时间覆盖" value={`${formatCount(report.coverage.reliableRecordCount)}/${formatCount(report.coverage.recordCount)}`} detail="可分析记录 / 总记录" accent={annualColors.gold} large />
+            <MetricBlock label="去重内容" value={formatCount(overview.counts.total)} detail="三类当前样本合并" accent={annualColors.ink} large />
+            <MetricBlock label="有时间日期" value={formatCount(overview.activeDays)} detail="上海时区" accent={annualColors.cyan} large />
+            <MetricBlock label="时间覆盖" value={`${formatCount(report.snapshotCoverage.reliableRecordCount)}/${formatCount(report.snapshotCoverage.recordCount)}`} detail="可靠时间 / 样本记录" accent={annualColors.gold} large />
           </View>
         </View>
         <View style={styles.coverVisual}>
           <View style={styles.coverFrame}>
             <CoverImage uri={hero?.coverUrl} title={hero?.title} privacy={privacy} size="large" />
             <View style={styles.coverFrameCopy}>
-              <Text style={styles.coverFrameLabel}>{privacy ? "年度内容已隐藏" : hero ? "从第一条可靠记录开始" : "等待第一条可靠记录"}</Text>
-              <Text style={styles.coverFrameTitle} numberOfLines={2}>{privacy ? "隐私模式已开启" : hero?.title ?? "你的年度封面将在这里出现"}</Text>
+              <Text style={styles.coverFrameLabel}>{privacy ? "样本内容已隐藏" : hero ? "当前样本代表内容" : "等待第一条样本"}</Text>
+              <Text style={styles.coverFrameTitle} numberOfLines={2}>{privacy ? "隐私模式已开启" : hero?.title ?? "你的个人总结封面将在这里出现"}</Text>
               <Text style={styles.coverFrameMeta}>{privacy ? "标题、作者与图片节点均已替换" : hero?.author ?? "作者未知"}</Text>
             </View>
           </View>
-          <CoverageStrip coverage={report.coverage} compact />
+          <CoverageStrip coverage={report.snapshotCoverage} compact />
         </View>
       </View>
     </PageCanvas>
@@ -96,13 +96,12 @@ export function AnnualReportCardPage({ report, privacy, pageNumber, totalPages, 
     <PageCanvas pageNumber={pageNumber} totalPages={totalPages} label={`${card.title}，${card.status === "ok" ? "可分析" : "数据不足"}`}>
       <View style={styles.cardHeader}>
         <View style={styles.cardHeadingCopy}>
-          <Text style={styles.eyebrow}>{card.eyebrow}</Text>
           <Text style={styles.cardTitle}>{card.title}</Text>
           <Text style={styles.cardDescription}>{card.description}</Text>
         </View>
         <StatusPill status={card.status} />
       </View>
-      <CardNotice card={card} coverage={card.id === "kept" ? report.snapshotCoverage : report.coverage} />
+      <CardNotice card={card} privacy={privacy} />
       <View style={styles.cardContent}>{renderCard(card, report, privacy)}</View>
     </PageCanvas>
   );
@@ -110,7 +109,7 @@ export function AnnualReportCardPage({ report, privacy, pageNumber, totalPages, 
 
 function renderCard(card: AnnualCard, report: AnnualReport, privacy: boolean) {
   switch (card.id) {
-    case "overview": return <OverviewCard data={card.data as AnnualOverviewData} />;
+    case "overview": return <OverviewCard data={card.data as AnnualOverviewData} coverage={report.snapshotCoverage} />;
     case "rhythm": return <RhythmCard data={card.data as AnnualRhythmData} privacy={privacy} />;
     case "monthly": return <MonthlyCard data={card.data as AnnualMonthlyData} />;
     case "creators": return <CreatorsCard data={card.data as AnnualCreatorsData} privacy={privacy} />;
@@ -121,12 +120,12 @@ function renderCard(card: AnnualCard, report: AnnualReport, privacy: boolean) {
   }
 }
 
-function OverviewCard({ data }: { data: AnnualOverviewData }) {
+function OverviewCard({ data, coverage }: { data: AnnualOverviewData; coverage: DataCoverage }) {
   return (
     <View style={styles.splitWide}>
       <View style={styles.primaryColumn}>
         <Text style={styles.statement}>
-          {data.counts.total > 0 ? `${formatCount(data.counts.total)} 个独立视频，把这一年点亮了 ${formatCount(data.activeDays)} 天。` : "没有可靠时间，就不替这一年下结论。"}
+          {data.counts.total > 0 ? `${formatCount(data.counts.total)} 个去重内容，组成这份当前样本。` : "读取任意一类记录后，这里就会形成样本总览。"}
         </Text>
         <View style={styles.metricRow}>
           <MetricBlock label="观看" value={formatCount(data.counts.watch)} detail="独立视频" accent={annualColors.cyan} />
@@ -135,7 +134,7 @@ function OverviewCard({ data }: { data: AnnualOverviewData }) {
           <MetricBlock label="活跃日" value={formatCount(data.activeDays)} detail="至少一条可靠记录" accent={annualColors.ink} />
         </View>
         <View style={styles.sectionDivider} />
-        <View style={styles.sectionHeadingRow}><CalendarDays color={annualColors.cyan} size={18} strokeWidth={2} /><Text style={styles.sectionHeading}>全年日历热力图</Text></View>
+        <View style={styles.sectionHeadingRow}><CalendarDays color={annualColors.cyan} size={18} strokeWidth={2} /><Text style={styles.sectionHeading}>样本日期热力图</Text></View>
         <CalendarHeatmap days={data.calendar} />
       </View>
       <View style={styles.secondaryColumn}>
@@ -145,7 +144,7 @@ function OverviewCard({ data }: { data: AnnualOverviewData }) {
         <View style={styles.sideRule} />
         <Text style={styles.sideLabel}>实际日期范围</Text>
         <Text style={styles.sideMedium}>{data.dateRange ? `${formatDate(data.dateRange.start)} 至 ${formatDate(data.dateRange.end)}` : "无可用范围"}</Text>
-        <Text style={styles.sideDetail}>观看活跃日 {formatCount(data.watchActiveDays)} 天</Text>
+        <Text style={styles.sideDetail}>观看活跃日 {formatCount(data.watchActiveDays)} 天 · 时间覆盖 {formatPercent(coverage.reliableDateRatio)}</Text>
       </View>
     </View>
   );
@@ -177,22 +176,21 @@ function RhythmCard({ data, privacy }: { data: AnnualRhythmData; privacy: boolea
 }
 
 function MonthlyCard({ data }: { data: AnnualMonthlyData }) {
-  const unavailableLabels = data.unavailableSeries.map((item) => ({ watch: "观看", liked: "喜欢", favorite: "收藏" })[item]);
+  const unavailableLabels = data.unavailableSeries.map((item) => ({ liked: "喜欢", favorite: "收藏" })[item]);
   return (
     <View style={styles.splitWide}>
       <View style={styles.primaryColumn}>
-        <Text style={styles.statement}>{data.peakMonth ? `${data.peakMonth.label}冲到了年度峰值，留下 ${formatCount(data.peakMonth.count)} 个独立视频。` : "十二个月都在等一条可按月归档的可靠记录。"}</Text>
+        <Text style={styles.statement}>{data.peakMonth ? `${data.peakMonth.label}是偏好行为峰值月，共有 ${formatCount(data.peakMonth.count)} 次喜欢与收藏。` : "当前样本还没有可按月归档的播放进度更新时间。"}</Text>
         <MonthlyChart months={data.months} />
       </View>
       <View style={styles.secondaryColumn}>
-        <Text style={styles.sideLabel}>系列时间覆盖</Text>
-        <AvailabilityRow label="观看" available={data.seriesAvailability.watch} color={annualColors.cyan} />
+        <Text style={styles.sideLabel}>偏好时间覆盖</Text>
         <AvailabilityRow label="喜欢" available={data.seriesAvailability.liked} color={annualColors.red} />
         <AvailabilityRow label="收藏" available={data.seriesAvailability.favorite} color={annualColors.gold} />
         <View style={styles.sideRule} />
-        <Text style={styles.sideLabel}>峰值月份</Text>
+        <Text style={styles.sideLabel}>偏好峰值月</Text>
         <Text style={styles.sideBig}>{data.peakMonth?.label ?? "不可分析"}</Text>
-        <Text style={styles.sideDetail}>{unavailableLabels.length ? `${unavailableLabels.join("、")}缺少可靠行为时间，未绘制该系列。` : "三类行为都已进入月度比较。"}</Text>
+        <Text style={styles.sideDetail}>{unavailableLabels.length ? `${unavailableLabels.join("、")}缺少播放进度更新时间，未绘制该系列。` : "喜欢与收藏均已进入偏好变化比较。"}</Text>
       </View>
     </View>
   );
@@ -204,7 +202,7 @@ function CreatorsCard({ data, privacy }: { data: AnnualCreatorsData; privacy: bo
   return (
     <View style={styles.splitWide}>
       <View style={styles.primaryColumn}>
-        <Text style={styles.statement}>{top[0] ? `${privacy ? "一位已隐藏的创作者" : top[0].name}，成为这一年出现最多的名字。` : "创作者信息还没有形成可比较的年度排行。"}</Text>
+        <Text style={styles.statement}>{top[0] ? `${privacy ? "一位已隐藏的创作者" : top[0].name}，是当前样本中出现最多的名字。` : "当前样本还没有形成可比较的创作者排行。"}</Text>
         <View style={styles.rankList}>
           {top.length ? top.map((creator) => <RankBar key={`${creator.authorId ?? creator.name}:${creator.rank}`} rank={creator.rank} label={privacy ? `创作者 ${String(creator.rank).padStart(2, "0")}` : creator.name} value={creator.count} share={creator.share} max={max} />) : <Text style={styles.emptyInline}>暂无可识别创作者</Text>}
         </View>
@@ -227,8 +225,8 @@ function InterestsCard({ data, privacy }: { data: AnnualInterestsData; privacy: 
   return (
     <View style={styles.interestLayout}>
       <View style={styles.interestLead}>
-        <Text style={styles.statement}>{topTopic ? `${privacy ? "一个已隐藏话题" : `#${topTopic.name}`}，是这一年最清晰的显式兴趣信号。` : "没有足够字段，就不拼出一朵想象中的词云。"}</Text>
-        <Text style={styles.sectionNote}>仅统计平台话题、标题中的显式 #话题、音乐和视频时长。</Text>
+        <Text style={styles.statement}>{topTopic ? `${privacy ? "一个已隐藏话题" : `#${topTopic.name}`}，是喜欢与收藏中最清晰的显式偏好信号。` : "喜欢与收藏中没有足够字段，就不拼出想象中的偏好。"}</Text>
+        <Text style={styles.sectionNote}>仅统计喜欢与收藏内容中的平台话题、标题显式 #话题、音乐和视频时长。</Text>
       </View>
       <View style={styles.interestColumns}>
         <View style={styles.interestColumn}>
@@ -236,14 +234,14 @@ function InterestsCard({ data, privacy }: { data: AnnualInterestsData; privacy: 
           <View style={styles.topicWrap}>{topicLabels.length ? topicLabels.map((topic, index) => <View key={`${topic.name}:${index}`} style={styles.topicChip}><Text style={styles.topicName}>{privacy ? `话题 ${index + 1}` : `#${topic.name}`}</Text><Text style={styles.topicCount}>{formatCount(topic.count)}</Text></View>) : <Text style={styles.emptyInline}>话题字段不足</Text>}</View>
         </View>
         <View style={styles.interestColumn}>
-          <View style={styles.sectionHeadingRow}><Music2 size={18} color={annualColors.gold} /><Text style={styles.sectionHeading}>年度声音</Text></View>
+          <View style={styles.sectionHeadingRow}><Music2 size={18} color={annualColors.gold} /><Text style={styles.sectionHeading}>样本声音</Text></View>
           {data.music.slice(0, 4).map((music, index) => <View style={styles.musicRow} key={`${music.id ?? music.title}:${index}`}><Disc3 size={16} color={annualColors.gold} /><View style={styles.musicCopy}><Text style={styles.musicTitle} numberOfLines={1}>{privacy ? `音乐 ${index + 1}` : music.title}</Text><Text style={styles.musicMeta}>{privacy ? "来源已隐藏" : music.author ?? "作者未知"}</Text></View><Text style={styles.musicCount}>{formatCount(music.count)}</Text></View>)}
           {!data.music.length ? <Text style={styles.emptyInline}>音乐字段不足</Text> : null}
         </View>
         <View style={styles.interestColumn}>
           <View style={styles.sectionHeadingRow}><Clock3 size={18} color={annualColors.cyan} /><Text style={styles.sectionHeading}>视频时长</Text></View>
-          <MiniBars values={durationValues} colors={[annualColors.cyanMid, annualColors.cyan, annualColors.gold, annualColors.red]} labels={data.durations.map((item) => item.label.replace("秒以内", "秒").replace("秒至 1 分钟", "秒–1分").replace("1 至 5 分钟", "1–5分").replace("5 分钟以上", "5分+"))} />
-          <Text style={styles.sectionNote}>中位数 {data.durationStats.medianSeconds === null ? "—" : `${Math.round(data.durationStats.medianSeconds)} 秒`} · 有效时长 {formatCount(data.durationStats.count)} 条</Text>
+          <MiniBars values={durationValues} colors={[annualColors.cyanMid, annualColors.cyan, annualColors.gold, annualColors.red]} labels={data.durations.map((item) => item.label.replace("秒以内", "秒").replace("秒至 1 分钟", "秒至1分").replace("1 至 5 分钟", "1至5分").replace("5 分钟以上", "5分+"))} />
+          <Text style={styles.sectionNote}>中位数 {data.durationStats.medianSeconds === null ? "暂无" : `${Math.round(data.durationStats.medianSeconds)} 秒`} · 有效时长 {formatCount(data.durationStats.count)} 条</Text>
         </View>
       </View>
     </View>
@@ -253,7 +251,7 @@ function InterestsCard({ data, privacy }: { data: AnnualInterestsData; privacy: 
 function KeptCard({ data }: { data: AnnualKeptData }) {
   return (
     <View>
-      <View style={styles.snapshotTitleRow}><Library size={22} color={annualColors.ink} /><View><Text style={styles.statement}>{data.allThree > 0 ? `${formatCount(data.allThree)} 个视频，同时出现在观看、喜欢与收藏中。` : "三份列表已经就位，但三者交集暂时为空。"}</Text><Text style={styles.sectionNote}>这是全部已采集列表的内容快照，不是年度转化漏斗。</Text></View></View>
+      <View style={styles.snapshotTitleRow}><Library size={22} color={annualColors.ink} /><View><Text style={styles.statement}>{data.allThree > 0 ? `${formatCount(data.allThree)} 个视频，同时出现在观看、喜欢与收藏中。` : "三份列表已经就位，但三者交集暂时为空。"}</Text><Text style={styles.sectionNote}>这是三类当前样本的内容快照，不是转化漏斗。</Text></View></View>
       <View style={styles.setRow}>
         <SetBlock label="观看历史" value={data.sets.watch.videoIds.length} records={data.sets.watch.recordCount} color={annualColors.cyan} icon={<Eye size={21} color={annualColors.cyan} />} />
         <SetBlock label="喜欢列表" value={data.sets.liked.videoIds.length} records={data.sets.liked.recordCount} color={annualColors.red} icon={<Heart size={21} color={annualColors.red} />} />
@@ -280,7 +278,7 @@ function HighlightsCard({ data, privacy }: { data: AnnualHighlightsData; privacy
   ];
   return (
     <View>
-      <Text style={styles.statement}>五个确定性坐标，把年度高光落回真实内容。</Text>
+      <Text style={styles.statement}>五个确定性坐标，把样本高光落回真实内容。</Text>
       <Text style={styles.sectionNote}>并列时按稳定规则排序；互动项只是平台统计快照之和，不代表官方排名。</Text>
       <View style={styles.highlightGrid}>{items.map((entry) => <HighlightTile key={entry.label} label={entry.label} item={entry.item} detail={entry.detail} privacy={privacy} />)}</View>
     </View>
@@ -293,14 +291,14 @@ function SummaryCard({ data, privacy, periodLabel }: { data: AnnualSummaryData; 
   return (
     <View>
       <Text style={styles.summaryKicker}>{periodLabel} / ALL SIGNALS</Text>
-      <Text style={styles.summaryTitle}>这是你的年度内容坐标。</Text>
+      <Text style={styles.summaryTitle}>这是你的当前内容坐标。</Text>
       <View style={styles.bentoGrid}>
-        <BentoBlock label="可靠年度内容" value={formatCount(data.metrics.totalUniqueVideos)} detail="独立视频" color={annualColors.cyan} wide />
+        <BentoBlock label="当前样本内容" value={formatCount(data.metrics.totalUniqueVideos)} detail="去重内容" color={annualColors.cyan} wide />
         <BentoBlock label="活跃日期" value={formatCount(data.metrics.activeDays)} detail="上海时区" color={annualColors.ink} />
         <BentoBlock label="不同创作者" value={formatCount(data.metrics.creatorCount)} detail="未知作者未进入排行" color={annualColors.red} />
-        <BentoBlock label="年度创作者" value={topCreator} detail={data.metrics.topCreator ? `${formatCount(data.metrics.topCreator.count)} 个独立视频` : "数据不足"} color={annualColors.red} text />
+        <BentoBlock label="样本创作者" value={topCreator} detail={data.metrics.topCreator ? `${formatCount(data.metrics.topCreator.count)} 个独立视频` : "数据不足"} color={annualColors.red} text />
         <BentoBlock label="显式话题" value={topTopic} detail={data.metrics.topTopic ? `${formatCount(data.metrics.topTopic.count)} 次信号` : "字段不足"} color={annualColors.gold} text />
-        <BentoBlock label="三份列表都留下" value={formatCount(data.metrics.allThree)} detail="全部已采集内容快照" color={annualColors.cyan} />
+        <BentoBlock label="三份列表都留下" value={formatCount(data.metrics.allThree)} detail="当前样本内容快照" color={annualColors.cyan} />
       </View>
       <CoverageStrip coverage={data.coverage} />
       <Text style={styles.summaryFootnote}>本页只复用前七页结果，没有重新扫描或重算原始记录。</Text>
@@ -311,33 +309,34 @@ function SummaryCard({ data, privacy, periodLabel }: { data: AnnualSummaryData; 
 function PageCanvas({ children, pageNumber, totalPages, label }: { children: React.ReactNode; pageNumber: number; totalPages: number; label: string }) {
   return (
     <View style={styles.pageCanvas} accessibilityRole="summary" accessibilityLabel={label}>
-      <View style={styles.pageContent}>{children}</View>
-      <Text style={styles.pageCounter}>{String(pageNumber + 1).padStart(2, "0")} / {String(totalPages).padStart(2, "0")}</Text>
+      <View style={styles.pageSurface}>
+        <View style={styles.surfaceAccent} />
+        <View style={styles.pageContent}>{children}</View>
+        <Text style={styles.pageCounter}>{String(pageNumber + 1).padStart(2, "0")} / {String(totalPages).padStart(2, "0")}</Text>
+      </View>
     </View>
   );
 }
 
-function CardNotice({ card, coverage }: { card: AnnualCard; coverage: DataCoverage }) {
+function CardNotice({ card, privacy }: { card: AnnualCard; privacy: boolean }) {
   const notes: string[] = [];
   if (card.reason) notes.push(card.reason);
   notes.push(...card.notices);
-  if (coverage.partial) notes.push("采集状态为 partial，结论只代表当前已采集范围");
-  if (coverage.undatedRecordCount > 0) notes.push(`${formatCount(coverage.undatedRecordCount)} 条记录没有可用行为时间`);
-  if (coverage.unknownSourceRecordCount > 0) notes.push(`${formatCount(coverage.unknownSourceRecordCount)} 条时间来源不可靠`);
-  notes.push(...coverage.warnings);
-  const unique = [...new Set(notes)].slice(0, 3);
+  const unique = [...new Set(notes)];
   if (!unique.length) return null;
-  return <View style={styles.noticeBand} accessibilityRole="alert"><Text style={styles.noticeText}>{unique.join(" · ")}</Text></View>;
+  if (privacy) return <View style={styles.noticeBand} accessibilityRole="alert"><Text style={styles.noticeText}>有 {unique.length} 条数据提示，关闭隐私模式后查看</Text></View>;
+  const visible = [...unique.slice(0, 3), ...(unique.length > 3 ? [`另有 ${unique.length - 3} 条提示`] : [])];
+  return <View style={styles.noticeBand} accessibilityRole="alert"><Text style={styles.noticeText}>{visible.join(" · ")}</Text></View>;
 }
 
 function CoverageStrip({ coverage, compact = false }: { coverage: DataCoverage; compact?: boolean }) {
   return (
     <View style={[styles.coverageStrip, compact && styles.coverageStripCompact]} accessibilityRole="text">
-      <View><Text style={styles.coverageValue}>{formatCount(coverage.reliableRecordCount)}</Text><Text style={styles.coverageLabel}>可分析记录</Text></View>
+      <View><Text style={styles.coverageValue}>{formatCount(coverage.recordCount)}</Text><Text style={styles.coverageLabel}>样本记录</Text></View>
       <View style={styles.coverageDivider} />
-      <View><Text style={styles.coverageValue}>{formatCount(coverage.recordCount)}</Text><Text style={styles.coverageLabel}>总记录</Text></View>
+      <View><Text style={styles.coverageValue}>{formatCount(coverage.uniqueVideoCount)}</Text><Text style={styles.coverageLabel}>去重内容</Text></View>
       <View style={styles.coverageDivider} />
-      <View><Text style={styles.coverageValue}>{formatCount(coverage.undatedRecordCount + coverage.unknownSourceRecordCount)}</Text><Text style={styles.coverageLabel}>时间不可用</Text></View>
+      <View><Text style={styles.coverageValue}>{formatCount(coverage.reliableRecordCount)}</Text><Text style={styles.coverageLabel}>有可靠时间</Text></View>
     </View>
   );
 }
@@ -347,11 +346,11 @@ function Fact({ icon, label, value }: { icon: React.ReactNode; label: string; va
 }
 
 function AvailabilityRow({ label, available, color }: { label: string; available: boolean; color: string }) {
-  return <View style={styles.availabilityRow}><View style={[styles.availabilitySwatch, { backgroundColor: color }]} /><Text style={styles.availabilityLabel}>{label}</Text><Text style={[styles.availabilityState, { color: available ? "#08777D" : annualColors.warning }]}>{available ? "可分析" : "不可分析"}</Text></View>;
+  return <View style={styles.availabilityRow}><View style={[styles.availabilitySwatch, { backgroundColor: color }]} /><Text style={styles.availabilityLabel}>{label}</Text><Text style={[styles.availabilityState, { color: available ? annualColors.cyan : annualColors.warning }]}>{available ? "可分析" : "不可分析"}</Text></View>;
 }
 
 function SetBlock({ label, value, records, color, icon }: { label: string; value: number; records: number; color: string; icon: React.ReactNode }) {
-  return <View style={[styles.setBlock, { borderTopColor: color }]}>{icon}<Text style={styles.setLabel}>{label}</Text><Text style={styles.setValue}>{formatCount(value)}</Text><Text style={styles.setDetail}>可比较 videoId · 原始列表 {formatCount(records)} 条</Text></View>;
+  return <View style={[styles.setBlock, { borderTopColor: color, backgroundColor: `${color}12` }]}>{icon}<Text style={styles.setLabel}>{label}</Text><Text style={styles.setValue}>{formatCount(value)}</Text><Text style={styles.setDetail}>可比较 videoId · 原始列表 {formatCount(records)} 条</Text></View>;
 }
 
 function Intersection({ label, value, color, emphasized = false }: { label: string; value: number; color: string; emphasized?: boolean }) {
@@ -372,39 +371,41 @@ function HighlightTile({ label, item, detail, privacy }: { label: string; item: 
 }
 
 function BentoBlock({ label, value, detail, color, wide = false, text = false }: { label: string; value: string; detail: string; color: string; wide?: boolean; text?: boolean }) {
-  return <View style={[styles.bentoBlock, wide && styles.bentoWide, { borderTopColor: color }]}><Text style={styles.bentoLabel}>{label}</Text><Text style={[styles.bentoValue, text && styles.bentoValueText]} numberOfLines={text ? 2 : 1}>{value}</Text><Text style={styles.bentoDetail}>{detail}</Text></View>;
+  return <View style={[styles.bentoBlock, wide && styles.bentoWide, { borderTopColor: color, backgroundColor: `${color}12` }]}><Text style={styles.bentoLabel}>{label}</Text><Text style={[styles.bentoValue, text && styles.bentoValueText]} numberOfLines={text ? 2 : 1}>{value}</Text><Text style={styles.bentoDetail}>{detail}</Text></View>;
 }
 
 const styles = StyleSheet.create({
-  pageCanvas: { flex: 1, width: "100%", maxWidth: 1420, alignSelf: "center", paddingHorizontal: 44, paddingTop: 28, paddingBottom: 30 },
-  pageContent: { flex: 1, minHeight: 0, justifyContent: "center" },
-  pageCounter: { position: "absolute", right: 44, bottom: 14, color: annualColors.inkFaint, fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"] },
+  pageCanvas: { flex: 1, width: "100%", maxWidth: 1420, alignSelf: "center", paddingHorizontal: 34, paddingVertical: 14 },
+  pageSurface: { position: "relative", flex: 1, minHeight: 0, overflow: "hidden", borderWidth: 1, borderColor: annualColors.line, borderRadius: 24, backgroundColor: "rgba(20,27,32,0.92)" },
+  surfaceAccent: { position: "absolute", top: 0, left: 0, width: 180, height: 4, borderBottomRightRadius: 4, backgroundColor: annualColors.cyan },
+  pageContent: { flex: 1, minHeight: 0, justifyContent: "center", paddingHorizontal: 28, paddingTop: 24, paddingBottom: 32 },
+  pageCounter: { position: "absolute", right: 26, bottom: 16, color: annualColors.inkFaint, fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"] },
   eyebrow: { color: annualColors.cyan, fontSize: 11, fontWeight: "900", textTransform: "uppercase", letterSpacing: 0 },
-  coverLayout: { flexDirection: "row", alignItems: "center", gap: 52 },
+  coverLayout: { flexDirection: "row", alignItems: "center", gap: 48 },
   coverCopy: { flex: 1, minWidth: 0 },
-  coverVisual: { width: 350, alignItems: "stretch" },
+  coverVisual: { width: 360, alignItems: "stretch" },
   coverMetaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  coverYear: { color: annualColors.ink, fontSize: 80, lineHeight: 86, fontWeight: "900", marginTop: 18, fontVariant: ["tabular-nums"], letterSpacing: 0 },
-  coverTitle: { color: annualColors.ink, fontSize: 34, lineHeight: 42, fontWeight: "900", marginTop: 4, letterSpacing: 0 },
+  coverYear: { color: annualColors.ink, fontSize: 66, lineHeight: 72, fontWeight: "900", marginTop: 18, fontVariant: ["tabular-nums"], letterSpacing: 0 },
+  coverTitle: { color: annualColors.ink, fontSize: 32, lineHeight: 40, fontWeight: "900", marginTop: 5, letterSpacing: 0 },
   coverLead: { maxWidth: 620, color: annualColors.inkMuted, fontSize: 15, lineHeight: 24, marginTop: 18 },
   coverMetrics: { flexDirection: "row", flexWrap: "wrap", gap: 16, marginTop: 28 },
-  coverFrame: { padding: 24, backgroundColor: annualColors.carbon, borderRadius: 8 },
+  coverFrame: { padding: 18, borderWidth: 1, borderColor: annualColors.lineStrong, backgroundColor: annualColors.carbon, borderRadius: 18 },
   coverFrameCopy: { marginTop: 18 },
-  coverFrameLabel: { color: "#8FD6D5", fontSize: 11, fontWeight: "800" },
+  coverFrameLabel: { color: annualColors.cyan, fontSize: 11, fontWeight: "800" },
   coverFrameTitle: { color: annualColors.white, fontSize: 19, lineHeight: 27, fontWeight: "900", marginTop: 7 },
-  coverFrameMeta: { color: "#B8C0C6", fontSize: 12, marginTop: 8 },
-  cardHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 24 },
+  coverFrameMeta: { color: annualColors.inkMuted, fontSize: 12, marginTop: 8 },
+  cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 24 },
   cardHeadingCopy: { flex: 1, minWidth: 0 },
-  cardTitle: { color: annualColors.ink, fontSize: 30, lineHeight: 38, fontWeight: "900", marginTop: 7, letterSpacing: 0 },
+  cardTitle: { color: annualColors.ink, fontSize: 31, lineHeight: 39, fontWeight: "900", letterSpacing: 0 },
   cardDescription: { color: annualColors.inkMuted, fontSize: 13, lineHeight: 20, marginTop: 4 },
-  noticeBand: { minHeight: 36, justifyContent: "center", marginTop: 12, paddingHorizontal: 12, borderLeftWidth: 3, borderLeftColor: annualColors.warning, backgroundColor: annualColors.warningSoft },
+  noticeBand: { minHeight: 36, justifyContent: "center", marginTop: 12, paddingHorizontal: 13, borderWidth: 1, borderLeftWidth: 3, borderColor: annualColors.line, borderLeftColor: annualColors.warning, borderRadius: 10, backgroundColor: annualColors.warningSoft },
   noticeText: { color: annualColors.warning, fontSize: 11, lineHeight: 17, fontWeight: "700" },
   cardContent: { flex: 1, minHeight: 0, justifyContent: "center", marginTop: 18 },
   statement: { color: annualColors.ink, fontSize: 22, lineHeight: 31, fontWeight: "900", maxWidth: 760, letterSpacing: 0 },
   sectionNote: { color: annualColors.inkMuted, fontSize: 11, lineHeight: 17, marginTop: 5 },
-  splitWide: { flexDirection: "row", gap: 36, alignItems: "stretch" },
+  splitWide: { flexDirection: "row", gap: 28, alignItems: "stretch" },
   primaryColumn: { flex: 1.75, minWidth: 0 },
-  secondaryColumn: { flex: 0.75, minWidth: 260, paddingLeft: 26, borderLeftWidth: 1, borderLeftColor: annualColors.line, justifyContent: "center" },
+  secondaryColumn: { flex: 0.75, minWidth: 270, padding: 22, borderWidth: 1, borderColor: annualColors.line, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.025)", justifyContent: "center" },
   metricRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 16 },
   sectionDivider: { height: 1, backgroundColor: annualColors.line, marginVertical: 14 },
   sectionHeadingRow: { flexDirection: "row", alignItems: "center", gap: 8 },
@@ -415,7 +416,7 @@ const styles = StyleSheet.create({
   sideDetail: { color: annualColors.inkMuted, fontSize: 11, lineHeight: 17, marginTop: 6 },
   sideRule: { width: 38, height: 4, borderRadius: 2, backgroundColor: annualColors.cyan, marginVertical: 22 },
   inlineFacts: { flexDirection: "row", gap: 12, marginTop: 16 },
-  fact: { flex: 1, minWidth: 0, minHeight: 80, paddingTop: 10, borderTopWidth: 1, borderTopColor: annualColors.line },
+  fact: { flex: 1, minWidth: 0, minHeight: 82, padding: 11, borderWidth: 1, borderColor: annualColors.line, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.025)" },
   factIcon: { marginBottom: 6 },
   factLabel: { color: annualColors.inkMuted, fontSize: 10, fontWeight: "700" },
   factValue: { color: annualColors.ink, fontSize: 15, fontWeight: "900", marginTop: 4 },
@@ -430,11 +431,11 @@ const styles = StyleSheet.create({
   iconHeading: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
   interestLayout: { gap: 20 },
   interestLead: { maxWidth: 850 },
-  interestColumns: { flexDirection: "row", gap: 26 },
-  interestColumn: { flex: 1, minWidth: 0, paddingRight: 20, borderRightWidth: 1, borderRightColor: annualColors.line },
+  interestColumns: { flexDirection: "row", gap: 14 },
+  interestColumn: { flex: 1, minWidth: 0, padding: 16, borderWidth: 1, borderColor: annualColors.line, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.025)" },
   topicWrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 14 },
-  topicChip: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, borderRadius: 6, backgroundColor: annualColors.redSoft },
-  topicName: { color: "#9D2F42", fontSize: 11, fontWeight: "800" },
+  topicChip: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, borderRadius: 9, backgroundColor: annualColors.redSoft },
+  topicName: { color: "#FF9AA8", fontSize: 11, fontWeight: "800" },
   topicCount: { color: annualColors.red, fontSize: 11, fontWeight: "900" },
   musicRow: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: annualColors.line },
   musicCopy: { flex: 1, minWidth: 0 },
@@ -443,18 +444,18 @@ const styles = StyleSheet.create({
   musicCount: { color: annualColors.ink, fontSize: 12, fontWeight: "900" },
   snapshotTitleRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
   setRow: { flexDirection: "row", gap: 16, marginTop: 24 },
-  setBlock: { flex: 1, minHeight: 138, padding: 16, borderTopWidth: 4, backgroundColor: annualColors.surface, borderBottomWidth: 1, borderBottomColor: annualColors.line },
+  setBlock: { flex: 1, minHeight: 138, padding: 16, borderWidth: 1, borderTopWidth: 4, borderColor: annualColors.line, borderRadius: 16 },
   setLabel: { color: annualColors.inkMuted, fontSize: 11, fontWeight: "800", marginTop: 10 },
   setValue: { color: annualColors.ink, fontSize: 30, lineHeight: 36, fontWeight: "900", marginTop: 3 },
   setDetail: { color: annualColors.inkFaint, fontSize: 10, lineHeight: 15, marginTop: 4 },
-  intersectionBand: { minHeight: 96, flexDirection: "row", alignItems: "center", marginTop: 18, borderTopWidth: 1, borderBottomWidth: 1, borderColor: annualColors.line },
+  intersectionBand: { minHeight: 96, flexDirection: "row", alignItems: "center", overflow: "hidden", marginTop: 16, borderWidth: 1, borderColor: annualColors.line, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.025)" },
   intersectionItem: { flex: 1, alignItems: "center", justifyContent: "center", borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: annualColors.line },
-  intersectionEmphasis: { backgroundColor: "#E8F6F5", alignSelf: "stretch" },
+  intersectionEmphasis: { backgroundColor: annualColors.cyanSoft, alignSelf: "stretch" },
   intersectionMark: { width: 22, height: 4, borderRadius: 2, marginBottom: 7 },
   intersectionLabel: { color: annualColors.inkMuted, fontSize: 10, fontWeight: "800" },
   intersectionValue: { color: annualColors.ink, fontSize: 21, fontWeight: "900", marginTop: 4 },
   highlightGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 18 },
-  highlightTile: { width: "32%", minWidth: 260, minHeight: 82, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, paddingRight: 10, borderTopWidth: 1, borderTopColor: annualColors.lineStrong },
+  highlightTile: { width: "32%", minWidth: 260, minHeight: 86, flexDirection: "row", alignItems: "center", gap: 12, padding: 10, borderWidth: 1, borderColor: annualColors.line, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.025)" },
   highlightCopy: { flex: 1, minWidth: 0 },
   highlightLabel: { color: annualColors.cyan, fontSize: 10, fontWeight: "900" },
   highlightTitle: { color: annualColors.ink, fontSize: 12, lineHeight: 17, fontWeight: "800", marginTop: 4 },
@@ -462,15 +463,15 @@ const styles = StyleSheet.create({
   summaryKicker: { color: annualColors.cyan, fontSize: 11, fontWeight: "900" },
   summaryTitle: { color: annualColors.ink, fontSize: 34, lineHeight: 42, fontWeight: "900", marginTop: 7, letterSpacing: 0 },
   bentoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 20 },
-  bentoBlock: { width: "31.8%", minHeight: 108, padding: 14, borderTopWidth: 4, borderBottomWidth: 1, borderBottomColor: annualColors.line, backgroundColor: annualColors.surface },
+  bentoBlock: { width: "31.8%", minHeight: 108, padding: 14, borderWidth: 1, borderTopWidth: 4, borderColor: annualColors.line, borderRadius: 16 },
   bentoWide: { width: "31.8%" },
   bentoLabel: { color: annualColors.inkMuted, fontSize: 10, fontWeight: "800" },
   bentoValue: { color: annualColors.ink, fontSize: 28, lineHeight: 34, fontWeight: "900", marginTop: 6 },
   bentoValueText: { fontSize: 17, lineHeight: 22 },
   bentoDetail: { color: annualColors.inkFaint, fontSize: 10, lineHeight: 15, marginTop: 3 },
   summaryFootnote: { color: annualColors.inkFaint, fontSize: 10, marginTop: 10 },
-  coverageStrip: { minHeight: 66, flexDirection: "row", alignItems: "center", gap: 20, marginTop: 16, paddingHorizontal: 16, borderWidth: 1, borderColor: annualColors.line, backgroundColor: annualColors.surface },
-  coverageStripCompact: { marginTop: 12, backgroundColor: "transparent", borderColor: annualColors.lineStrong },
+  coverageStrip: { minHeight: 66, flexDirection: "row", alignItems: "center", gap: 20, marginTop: 16, paddingHorizontal: 16, borderWidth: 1, borderColor: annualColors.line, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.025)" },
+  coverageStripCompact: { marginTop: 12, backgroundColor: annualColors.carbonSoft, borderColor: annualColors.lineStrong },
   coverageValue: { color: annualColors.ink, fontSize: 16, fontWeight: "900", fontVariant: ["tabular-nums"] },
   coverageLabel: { color: annualColors.inkMuted, fontSize: 9, fontWeight: "700", marginTop: 3 },
   coverageDivider: { width: 1, height: 30, backgroundColor: annualColors.line },

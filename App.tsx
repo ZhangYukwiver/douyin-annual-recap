@@ -37,12 +37,7 @@ import {
 
 import { AnnualExperience } from "./src/components/annual";
 import { StatusBadge } from "./src/components/StatusBadge";
-import {
-  buildAnnualIndex,
-  buildAnnualReport,
-  type AnnualIndex,
-  type AnnualReport,
-} from "./src/domain/annualReport";
+import { buildPersonalSummary } from "./src/domain/annualReport";
 import {
   describeArchiveInspection,
   type PersonalArchiveInspection,
@@ -64,8 +59,10 @@ import {
   getDefaultCollectorBaseUrl,
   LocalCollectorError,
   normalizeCollectorBaseUrl,
+  parseLaunchPairingCode,
   pairCollector,
   startCollectorSync,
+  startDirectRecordsSync,
   startCollectorObservation,
   stopCollectorObservation,
   switchCollectorAccount,
@@ -78,7 +75,7 @@ import {
 } from "./src/services/importPersonalArchive";
 import { colors } from "./src/theme";
 
-type ViewKey = "annual" | "records" | "sources";
+type ViewKey = "summary" | "records" | "sources";
 type BadgeState = "ready" | "not_configured" | "invalid" | "manual_action";
 
 interface SelectedArchive {
@@ -103,7 +100,7 @@ const recordIcons = {
 } satisfies Record<PersonalRecordType, typeof History>;
 
 const navigationItems = [
-  { id: "annual", label: "年度", icon: Sparkles },
+  { id: "summary", label: "总结", icon: Sparkles },
   { id: "records", label: "记录", icon: History },
   { id: "sources", label: "数据源", icon: Link2 },
 ] as const;
@@ -112,6 +109,37 @@ const TERMINAL_COLLECTOR_STATES = new Set(["idle", "complete", "partial", "error
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function showAlert(title: string, message: string) {
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    window.alert(`${title}\n\n${message}`);
+    return;
+  }
+  Alert.alert(title, message);
+}
+
+function confirmAlert(
+  title: string,
+  message: string,
+  confirmText: string,
+  onDecision: (confirmed: boolean) => void,
+  destructive = false,
+) {
+  let settled = false;
+  const settle = (confirmed: boolean) => {
+    if (settled) return;
+    settled = true;
+    onDecision(confirmed);
+  };
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    settle(window.confirm(`${title}\n\n${message}`));
+    return;
+  }
+  Alert.alert(title, message, [
+    { text: "取消", style: "cancel", onPress: () => settle(false) },
+    { text: confirmText, style: destructive ? "destructive" : "default", onPress: () => settle(true) },
+  ], { cancelable: true, onDismiss: () => settle(false) });
 }
 
 function formatBytes(value: number | null): string {
@@ -233,7 +261,7 @@ function RecordsView({
           </View>
           {collectorConnected ? (
             <Pressable
-              accessibilityLabel="重新同步"
+              accessibilityLabel="重新读取全部可见记录"
               accessibilityRole="button"
               disabled={collectorBusy}
               onPress={() => void onSync()}
@@ -245,7 +273,7 @@ function RecordsView({
             </Pressable>
           ) : null}
           <Pressable
-            accessibilityLabel="清除当前记录"
+            accessibilityLabel="清除本地记录缓存"
             accessibilityRole="button"
             disabled={collectorBusy}
             onPress={onClear}
@@ -310,7 +338,7 @@ function RecordsView({
                 {collectorConnected
                   ? <RefreshCw color={colors.surface} size={17} />
                   : <Link2 color={colors.surface} size={17} />}
-                <Text style={styles.primaryButtonText}>{collectorConnected ? "同步" : "连接采集器"}</Text>
+                <Text style={styles.primaryButtonText}>{collectorConnected ? "读取记录" : "连接采集器"}</Text>
               </>
             )}
           </Pressable>
@@ -353,10 +381,12 @@ interface SourcesViewProps {
   pickingArchive: boolean;
   onChangeCollectorUrl: (value: string) => void;
   onChangePairingCode: (value: string) => void;
+  onClearCache: () => void;
   onConnect: () => Promise<void>;
   onDisconnect: () => Promise<void>;
   onStartObservation: () => Promise<void>;
   onStopObservation: () => Promise<void>;
+  onStartDirectHistory: () => void;
   onStartSync: () => void;
   onSwitchAccount: () => void;
   onPickArchive: () => Promise<void>;
@@ -375,10 +405,12 @@ function SourcesView({
   pickingArchive,
   onChangeCollectorUrl,
   onChangePairingCode,
+  onClearCache,
   onConnect,
   onDisconnect,
   onStartObservation,
   onStopObservation,
+  onStartDirectHistory,
   onStartSync,
   onSwitchAccount,
   onPickArchive,
@@ -461,13 +493,14 @@ function SourcesView({
           {connected ? (
             <>
               <Pressable
-                accessibilityLabel="自动同步"
+                accessibilityLabel="自动读取全部可见记录"
                 accessibilityRole="button"
                 disabled={busy || observing}
                 onPress={onStartSync}
-                style={({ pressed }) => [styles.secondaryIconButton, (busy || observing) && styles.disabled, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.sampleButton, (busy || observing) && styles.disabled, pressed && styles.pressed]}
               >
                 <Play color={colors.secondaryText} size={18} />
+                <Text style={styles.sampleButtonText}>读取记录</Text>
               </Pressable>
               <Pressable
                 accessibilityLabel="断开采集器"
@@ -481,6 +514,40 @@ function SourcesView({
             </>
           ) : null}
         </View>
+
+        {connected ? (
+          <Pressable
+            accessibilityLabel="无界面读取新增记录"
+            accessibilityRole="button"
+            disabled={busy || observing}
+            onPress={onStartDirectHistory}
+            style={({ pressed }) => [
+              styles.accountSwitchButton,
+              (busy || observing) && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            <History color={colors.secondaryText} size={18} />
+            <Text style={styles.accountSwitchText}>无界面读取新记录（实验）</Text>
+          </Pressable>
+        ) : null}
+
+        {connected ? (
+          <Pressable
+            accessibilityLabel="清除本地记录缓存"
+            accessibilityRole="button"
+            disabled={busy || observing}
+            onPress={onClearCache}
+            style={({ pressed }) => [
+              styles.accountSwitchButton,
+              (busy || observing) && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Trash2 color={colors.secondaryText} size={18} />
+            <Text style={styles.accountSwitchText}>清除本地缓存</Text>
+          </Pressable>
+        ) : null}
 
         {connected ? (
           <Pressable
@@ -540,7 +607,7 @@ function SourcesView({
 }
 
 function AppContent() {
-  const [activeView, setActiveView] = useState<ViewKey>(() => Platform.OS === "web" ? "annual" : "records");
+  const [activeView, setActiveView] = useState<ViewKey>(() => Platform.OS === "web" ? "summary" : "records");
   const [activeRecord, setActiveRecord] = useState<PersonalRecordType>("watch_history");
   const [selectedArchive, setSelectedArchive] = useState<SelectedArchive | null>(null);
   const [pickingArchive, setPickingArchive] = useState(false);
@@ -552,12 +619,6 @@ function AppContent() {
   const [collectorBusy, setCollectorBusy] = useState(false);
   const [switchingAccount, setSwitchingAccount] = useState(false);
   const [collectorError, setCollectorError] = useState<string | null>(null);
-  const [annualIndex, setAnnualIndex] = useState<AnnualIndex | null>(null);
-  const [annualIndexLoading, setAnnualIndexLoading] = useState(false);
-  const [annualReport, setAnnualReport] = useState<AnnualReport | null>(null);
-  const [annualReportLoading, setAnnualReportLoading] = useState(false);
-  const [requestedAnnualYear, setRequestedAnnualYear] = useState<number | null>(null);
-  const annualReportCache = useRef(new WeakMap<AnnualIndex, Map<number, AnnualReport>>());
   const importRequest = useRef(0);
   const pollRequest = useRef(0);
   const connectingRef = useRef(false);
@@ -567,6 +628,19 @@ function AppContent() {
   useEffect(() => () => {
     pollRequest.current += 1;
     importRequest.current += 1;
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return undefined;
+    const hostname = window.location.hostname.replace(/^\[|\]$/gu, "");
+    const code = ["localhost", "127.0.0.1", "::1"].includes(hostname)
+      ? parseLaunchPairingCode(window.location.hash)
+      : null;
+    if (!code) return undefined;
+
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`);
+    void connectCollector(code, true);
+    return undefined;
   }, []);
 
   const displaySnapshot: DisplaySnapshot | null = collectorSnapshot
@@ -585,7 +659,8 @@ function AppContent() {
         }
       : null;
 
-  const annualIndexOptions = useMemo(() => {
+  const personalSummary = useMemo(() => {
+    if (Platform.OS !== "web" || !displaySnapshot) return null;
     const collectionState = displaySnapshot?.source === "collector"
       ? collectorStatus?.state === "complete"
         ? "complete"
@@ -593,83 +668,12 @@ function AppContent() {
           ? "partial"
           : "unknown"
       : "unknown";
-    return {
+    return buildPersonalSummary(displaySnapshot.records, {
       source: displaySnapshot?.source,
       collectionState,
       warnings: displaySnapshot?.warnings ?? [],
-    } as const;
-  }, [collectorStatus, displaySnapshot?.source, displaySnapshot?.warnings]);
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || !displaySnapshot) {
-      setAnnualIndex(null);
-      setAnnualIndexLoading(false);
-      return undefined;
-    }
-
-    let cancelled = false;
-    setAnnualIndex(null);
-    setAnnualIndexLoading(true);
-    const task = setTimeout(() => {
-      const nextIndex = buildAnnualIndex(displaySnapshot.records, annualIndexOptions);
-      if (!cancelled) {
-        setAnnualIndex(nextIndex);
-        setAnnualIndexLoading(false);
-      }
-    }, 0);
-    return () => {
-      cancelled = true;
-      clearTimeout(task);
-    };
-  }, [annualIndexOptions, displaySnapshot?.records]);
-
-  const fallbackAnnualYear = useMemo(() => {
-    const currentYear = Number(new Intl.DateTimeFormat("en-US", {
-      timeZone: "Asia/Shanghai",
-      year: "numeric",
-    }).format(new Date()));
-    return currentYear - 1;
-  }, []);
-  const annualYear = annualIndex
-    ? requestedAnnualYear !== null && annualIndex.availableYears.includes(requestedAnnualYear)
-      ? requestedAnnualYear
-      : annualIndex.defaultYear ?? fallbackAnnualYear
-    : null;
-
-  useEffect(() => {
-    if (!annualIndex || annualIndex.entries.length === 0 || annualYear === null) {
-      setAnnualReport(null);
-      setAnnualReportLoading(false);
-      return undefined;
-    }
-
-    const cached = annualReportCache.current.get(annualIndex)?.get(annualYear);
-    if (cached) {
-      setAnnualReport(cached);
-      setAnnualReportLoading(false);
-      return undefined;
-    }
-
-    let cancelled = false;
-    setAnnualReport(null);
-    setAnnualReportLoading(true);
-    const task = setTimeout(() => {
-      const nextReport = buildAnnualReport(annualIndex, annualYear);
-      if (!cancelled) {
-        const reports = annualReportCache.current.get(annualIndex) ?? new Map<number, AnnualReport>();
-        reports.set(annualYear, nextReport);
-        annualReportCache.current.set(annualIndex, reports);
-        setAnnualReport(nextReport);
-        setAnnualReportLoading(false);
-      }
-    }, 0);
-    return () => {
-      cancelled = true;
-      clearTimeout(task);
-    };
-  }, [annualIndex, annualYear]);
-
-  const visibleAnnualReport = annualReport?.year === annualYear ? annualReport : null;
+    });
+  }, [collectorStatus?.state, displaySnapshot?.records, displaySnapshot?.source, displaySnapshot?.warnings]);
 
   async function refreshCollectorSnapshot(baseUrl: string, token: string, requestId?: number): Promise<boolean> {
     const snapshot = await getCollectorRecords(baseUrl, token);
@@ -704,17 +708,19 @@ function AppContent() {
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(message);
-      Alert.alert("无法读取同步状态", message);
+      showAlert("无法读取同步状态", message);
     }
   }
 
-  async function beginSync(baseUrl: string, token: string) {
+  async function beginSync(baseUrl: string, token: string, directHistory = false) {
     const requestId = pollRequest.current + 1;
     pollRequest.current = requestId;
     setCollectorBusy(true);
     setCollectorError(null);
     try {
-      const status = await startCollectorSync(baseUrl, token);
+      const status = directHistory
+        ? await startDirectRecordsSync(baseUrl, token)
+        : await startCollectorSync(baseUrl, token);
       if (pollRequest.current !== requestId) return;
       setCollectorStatus(status);
       void pollCollector(baseUrl, token, requestId);
@@ -723,7 +729,7 @@ function AppContent() {
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(message);
-      Alert.alert("无法开始同步", message);
+      showAlert(directHistory ? "无法直接读取记录" : "无法开始同步", message);
     }
   }
 
@@ -742,7 +748,7 @@ function AppContent() {
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(message);
-      Alert.alert("无法启动手动监听", message);
+      showAlert("无法启动手动监听", message);
     }
   }
 
@@ -763,11 +769,11 @@ function AppContent() {
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(message);
-      Alert.alert("无法停止手动监听", message);
+      showAlert("无法停止手动监听", message);
     }
   }
 
-  async function connectCollector() {
+  async function connectCollector(code = pairingCode, automatic = false) {
     if (collectorToken || connectingRef.current) return;
     connectingRef.current = true;
     const requestId = pollRequest.current + 1;
@@ -779,7 +785,7 @@ function AppContent() {
     try {
       normalizedUrl = normalizeCollectorBaseUrl(collectorUrl);
       await checkCollectorHealth(normalizedUrl);
-      pairedToken = await pairCollector(normalizedUrl, pairingCode);
+      pairedToken = await pairCollector(normalizedUrl, code);
       if (pollRequest.current !== requestId) return;
       setCollectorUrl(normalizedUrl);
       setCollectorToken(pairedToken);
@@ -792,7 +798,7 @@ function AppContent() {
       setCollectorUrl(normalizedUrl);
       setCollectorStatus(status);
       setCollectorSnapshot(snapshot);
-      setActiveView("sources");
+      if (!automatic) setActiveView("sources");
       if (TERMINAL_COLLECTOR_STATES.has(status.state)) {
         setCollectorBusy(false);
       } else {
@@ -814,20 +820,28 @@ function AppContent() {
   function confirmAutomaticSync() {
     if (!collectorToken || collectorBusy || collectorStatus?.state === "observing" || syncConfirmationOpenRef.current) return;
     syncConfirmationOpenRef.current = true;
-    Alert.alert(
-      "开始自动同步",
-      "将由专用浏览器打开个人列表、切换标签并滚动加载数据。仅监听网页自行返回的响应。",
-      [
-        { text: "取消", style: "cancel", onPress: () => { syncConfirmationOpenRef.current = false; } },
-        {
-          text: "开始",
-          onPress: () => {
-            syncConfirmationOpenRef.current = false;
-            void beginSync(collectorUrl, collectorToken);
-          },
-        },
-      ],
-      { cancelable: true, onDismiss: () => { syncConfirmationOpenRef.current = false; } },
+    confirmAlert(
+      "开始读取全部可见记录",
+      "将由专用浏览器依次打开观看、点赞和收藏列表，并持续滚动到各列表当前可见的末页。",
+      "开始",
+      (confirmed) => {
+        syncConfirmationOpenRef.current = false;
+        if (confirmed) void beginSync(collectorUrl, collectorToken);
+      },
+    );
+  }
+
+  function confirmDirectHistorySync() {
+    if (!collectorToken || collectorBusy || collectorStatus?.state === "observing" || syncConfirmationOpenRef.current) return;
+    syncConfirmationOpenRef.current = true;
+    confirmAlert(
+      "实验性直接读取",
+      "首次会读取全部可见记录；已有一次成功的无界面读取后，只读取到本地已知记录为止，并合并本次新增内容。不会弹出浏览器，也不需要你手动打开或滚动列表。",
+      "读取新记录",
+      (confirmed) => {
+        syncConfirmationOpenRef.current = false;
+        if (confirmed) void beginSync(collectorUrl, collectorToken, true);
+      },
     );
   }
 
@@ -872,7 +886,7 @@ function AppContent() {
       const message = collectorErrorMessage(error);
       setCollectorBusy(false);
       setCollectorError(message);
-      Alert.alert("无法切换账号", message);
+      showAlert("无法切换账号", message);
     } finally {
       setSwitchingAccount(false);
     }
@@ -881,20 +895,14 @@ function AppContent() {
   function confirmAccountSwitch() {
     if (accountSwitchConfirmationOpenRef.current) return;
     accountSwitchConfirmationOpenRef.current = true;
-    Alert.alert(
+    confirmAlert(
       "切换抖音账号",
       "将清除专用浏览器的登录会话和本地采集结果，随后打开专用浏览器进入手动监听，等待你登录新账号。不会影响抖音账号中的记录。",
-      [
-        { text: "取消", style: "cancel", onPress: () => { accountSwitchConfirmationOpenRef.current = false; } },
-        {
-          text: "切换",
-          onPress: () => {
-            accountSwitchConfirmationOpenRef.current = false;
-            void performAccountSwitch();
-          },
-        },
-      ],
-      { cancelable: true, onDismiss: () => { accountSwitchConfirmationOpenRef.current = false; } },
+      "切换",
+      (confirmed) => {
+        accountSwitchConfirmationOpenRef.current = false;
+        if (confirmed) void performAccountSwitch();
+      },
     );
   }
 
@@ -926,53 +934,53 @@ function AppContent() {
         } catch (error) {
           if (importRequest.current !== requestId) return;
           setSelectedArchive({ ...archive, inspection: { status: "failed" } });
-          Alert.alert("无法读取备用文件", describePersonalArchiveError(error));
+          showAlert("无法读取备用文件", describePersonalArchiveError(error));
         }
       }
     } catch {
-      Alert.alert("无法选择文件", "请检查文件访问权限后重试。");
+      showAlert("无法选择文件", "请检查文件访问权限后重试。");
     } finally {
       if (importRequest.current === requestId) setPickingArchive(false);
     }
   }
 
   function clearCurrentRecords() {
-    Alert.alert("清除本地记录", "将移除当前采集结果，不会清除抖音账号中的记录。", [
-      { text: "取消", style: "cancel" },
-      {
-        text: "清除",
-        style: "destructive",
-        onPress: () => {
-          if (collectorToken) {
-            const requestId = pollRequest.current + 1;
-            const token = collectorToken;
-            pollRequest.current = requestId;
-            setCollectorBusy(true);
-            setCollectorError(null);
-            void (async () => {
-              try {
-                const snapshot = await clearCollectorRecords(collectorUrl, token);
-                if (pollRequest.current !== requestId) return;
-                setCollectorSnapshot(snapshot);
-                const status = await getCollectorStatus(collectorUrl, token);
-                if (pollRequest.current !== requestId) return;
-                setCollectorStatus(status);
-              } catch (error) {
-                if (pollRequest.current !== requestId) return;
-                const message = collectorErrorMessage(error);
-                setCollectorError(message);
-                Alert.alert("无法清除记录", message);
-              } finally {
-                if (pollRequest.current === requestId) setCollectorBusy(false);
-              }
-            })();
-          } else {
-            importRequest.current += 1;
-            setSelectedArchive(null);
-          }
-        },
+    confirmAlert(
+      "清除本地缓存",
+      "将清除本地保存的观看、喜欢和收藏记录。抖音登录状态、Cookie 和账号中的记录不会受影响；下一次读取将重新获取全部可见记录。",
+      "清除缓存",
+      (confirmed) => {
+        if (!confirmed) return;
+        if (collectorToken) {
+          const requestId = pollRequest.current + 1;
+          const token = collectorToken;
+          pollRequest.current = requestId;
+          setCollectorBusy(true);
+          setCollectorError(null);
+          void (async () => {
+            try {
+              const snapshot = await clearCollectorRecords(collectorUrl, token);
+              if (pollRequest.current !== requestId) return;
+              setCollectorSnapshot(snapshot);
+              const status = await getCollectorStatus(collectorUrl, token);
+              if (pollRequest.current !== requestId) return;
+              setCollectorStatus(status);
+            } catch (error) {
+              if (pollRequest.current !== requestId) return;
+              const message = collectorErrorMessage(error);
+              setCollectorError(message);
+              showAlert("无法清除记录", message);
+            } finally {
+              if (pollRequest.current === requestId) setCollectorBusy(false);
+            }
+          })();
+        } else {
+          importRequest.current += 1;
+          setSelectedArchive(null);
+        }
       },
-    ]);
+      true,
+    );
   }
 
   async function openRecord(url: string) {
@@ -980,26 +988,22 @@ function AppContent() {
       if (!(await Linking.canOpenURL(url))) throw new Error("unsupported_url");
       await Linking.openURL(url);
     } catch {
-      Alert.alert("无法打开视频", "该记录中的链接当前不可用。");
+      showAlert("无法打开视频", "该记录中的链接当前不可用。");
     }
   }
 
   const visibleNavigationItems = Platform.OS === "web"
     ? navigationItems
-    : navigationItems.filter((item) => item.id !== "annual");
+    : navigationItems.filter((item) => item.id !== "summary");
 
   return (
     <SafeAreaView edges={["top", "bottom"]} style={styles.safeArea}>
       <StatusBar style="dark" />
-      {Platform.OS === "web" && activeView === "annual" ? (
+      {Platform.OS === "web" && activeView === "summary" ? (
         <AnnualExperience
-          loading={annualIndexLoading || annualReportLoading || Boolean(annualIndex?.entries.length && visibleAnnualReport === null)}
           onOpenRecords={() => setActiveView("records")}
           onOpenSources={() => setActiveView("sources")}
-          onSelectYear={setRequestedAnnualYear}
-          report={visibleAnnualReport}
-          selectedYear={annualYear}
-          years={annualIndex?.availableYears ?? []}
+          report={personalSummary}
         />
       ) : (
         <View style={styles.appFrame}>
@@ -1045,10 +1049,12 @@ function AppContent() {
               setPairingCode(value);
               setCollectorError(null);
             }}
+            onClearCache={clearCurrentRecords}
             onConnect={connectCollector}
             onDisconnect={disconnectCollector}
             onStartObservation={() => collectorToken ? beginObservation(collectorUrl, collectorToken) : Promise.resolve()}
             onStopObservation={() => collectorToken ? endObservation(collectorUrl, collectorToken) : Promise.resolve()}
+            onStartDirectHistory={confirmDirectHistorySync}
             onStartSync={confirmAutomaticSync}
             onSwitchAccount={confirmAccountSwitch}
             onPickArchive={pickArchive}
@@ -1307,6 +1313,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.surface,
   },
+  sampleButton: {
+    minWidth: 102,
+    height: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 20,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  sampleButtonText: { color: colors.secondaryText, fontSize: 12, fontWeight: "700" },
   accountSwitchButton: {
     width: "100%",
     height: 48,

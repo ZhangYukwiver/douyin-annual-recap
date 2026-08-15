@@ -86,6 +86,10 @@ export function getDefaultCollectorBaseUrl(): string {
   return process.env.EXPO_PUBLIC_COLLECTOR_BASE_URL?.trim() || "http://127.0.0.1:4765";
 }
 
+export function parseLaunchPairingCode(hash: string): string | null {
+  return /^#pair=(\d{8})$/u.exec(hash)?.[1] ?? null;
+}
+
 const MAX_RECORD_STRING = 500;
 const MAX_RECORD_URL = 2_048;
 const IMAGE_HOST_SUFFIXES = [
@@ -414,6 +418,12 @@ export async function getCollectorRecords(baseUrl: string, token: string): Promi
 export async function startCollectorSync(baseUrl: string, token: string): Promise<CollectorStatus> {
   const value = await requestJson(baseUrl, "/v1/sync", { method: "POST" }, token);
   if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回同步状态。");
+  return parseStatus(value.status);
+}
+
+export async function startDirectRecordsSync(baseUrl: string, token: string): Promise<CollectorStatus> {
+  const value = await requestJson(baseUrl, "/v1/experimental/records-direct", { method: "POST" }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回直接读取状态。");
   return parseStatus(value.status);
 }
 

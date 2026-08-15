@@ -75,5 +75,6 @@ export function isEndpointComplete(progress) {
     && progress.processedCount === progress.matchedCount
     && progress.terminalSeen
     && !progress.cursorStalled
-    && !progress.paginationMissing);
+    && !progress.paginationMissing
+    && !progress.repeatedPageFingerprint);
 }

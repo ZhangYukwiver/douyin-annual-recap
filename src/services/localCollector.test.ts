@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearCollectorRecords,
   getCollectorRecords,
   LocalCollectorError,
   getCollectorStatus,
   normalizeCollectorBaseUrl,
+  parseLaunchPairingCode,
   pairCollector,
+  startDirectRecordsSync,
   startCollectorObservation,
   stopCollectorObservation,
 } from "./localCollector";
@@ -24,6 +27,14 @@ describe("normalizeCollectorBaseUrl", () => {
     expect(() => normalizeCollectorBaseUrl("http://example.com:4765")).toThrowError(LocalCollectorError);
     expect(() => normalizeCollectorBaseUrl("https://example.com:4765")).toThrowError(LocalCollectorError);
     expect(() => normalizeCollectorBaseUrl("https://user:pass@example.com")).toThrowError(LocalCollectorError);
+  });
+});
+
+describe("parseLaunchPairingCode", () => {
+  it("only accepts one exact 8-digit launch code", () => {
+    expect(parseLaunchPairingCode("#pair=12345678")).toBe("12345678");
+    expect(parseLaunchPairingCode("#pair=1234567")).toBeNull();
+    expect(parseLaunchPairingCode("#pair=12345678&token=secret")).toBeNull();
   });
 });
 
@@ -56,6 +67,27 @@ describe("local collector client", () => {
     expect(fetchMock.mock.calls[0]?.[0]).not.toContain("session-secret");
   });
 
+  it("clears the local record cache through the authenticated endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      schemaVersion: 2,
+      updatedAt: "2026-08-14T00:00:00.000Z",
+      records: { watch_history: [], liked_videos: [], favorite_videos: [] },
+      warnings: [],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snapshot = await clearCollectorRecords("http://127.0.0.1:4765", "session-secret");
+
+    expect(snapshot.records).toEqual({ watch_history: [], liked_videos: [], favorite_videos: [] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4765/v1/records",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({ Authorization: "Bearer session-secret" }),
+      }),
+    );
+  });
+
   it("starts and stops manual observation through local authenticated endpoints", async () => {
     const statusPayload = {
       state: "observing",
@@ -79,6 +111,29 @@ describe("local collector client", () => {
       "http://127.0.0.1:4765/v1/observe",
       "http://127.0.0.1:4765/v1/observe/stop",
     ]);
+  });
+
+  it("starts the loopback-only direct history experiment through its fixed endpoint", async () => {
+    const statusPayload = {
+      state: "collecting",
+      phase: "watch_history",
+      message: "正在直接读取全部可见观看历史",
+      counts: { watch_history: 0, liked_videos: 0, favorite_videos: 0 },
+      updatedAt: null,
+      browserOpen: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      started: true,
+      status: statusPayload,
+    }), { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startDirectRecordsSync("http://127.0.0.1:4765", "session-secret"))
+      .resolves.toMatchObject({ phase: "watch_history" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4765/v1/experimental/records-direct",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("rejects unreasonable count values from the service", async () => {

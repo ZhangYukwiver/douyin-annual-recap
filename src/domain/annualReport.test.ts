@@ -4,9 +4,12 @@ import {
   ANNUAL_CARD_IDS,
   buildAnnualIndex,
   buildAnnualReport,
+  buildPersonalSummary,
   type AnnualCreatorsData,
+  type AnnualHighlightsData,
   type AnnualInterestsData,
   type AnnualKeptData,
+  type AnnualMonthlyData,
   type AnnualOverviewData,
   type AnnualRhythmData,
   type AnnualSummaryData,
@@ -44,6 +47,76 @@ function cardData<T>(report: ReturnType<typeof buildAnnualReport>, id: string): 
 }
 
 describe("annual report domain", () => {
+  it("summarizes all current records without requiring dates", () => {
+    const watch = Array.from({ length: 55 }, (_, index) => record(`watch-${index}`, null, {
+      videoId: index === 0 ? "shared" : `watch-${index}`,
+      author: "样本作者",
+      authorId: "author-sample",
+      occurredAtSource: "unknown",
+      topics: ["旅行"],
+      durationSeconds: index === 0 ? 180 : 30,
+      stats: index === 0 ? { diggCount: 20, commentCount: 5 } : null,
+    }));
+    const summary = buildPersonalSummary(recordsOf({
+      watch_history: watch,
+      liked_videos: [record("liked-shared", null, {
+        videoId: "shared",
+        author: "样本作者",
+        authorId: "author-sample",
+        occurredAtSource: "unknown",
+        topics: ["旅行"],
+      })],
+      favorite_videos: [record("favorite-shared", null, {
+        videoId: "shared",
+        author: "样本作者",
+        authorId: "author-sample",
+        occurredAtSource: "unknown",
+      })],
+    }));
+
+    expect(summary.status).toBe("ok");
+    expect(summary.periodLabel).toBe("当前样本");
+    expect(summary.cards.map((card) => card.id)).toEqual(ANNUAL_CARD_IDS);
+    const overview = cardData<AnnualOverviewData>(summary, "overview");
+    const creators = cardData<AnnualCreatorsData>(summary, "creators");
+    const interests = cardData<AnnualInterestsData>(summary, "interests");
+    const kept = cardData<AnnualKeptData>(summary, "kept");
+    const highlights = cardData<AnnualHighlightsData>(summary, "highlights");
+    const recap = cardData<AnnualSummaryData>(summary, "summary");
+    expect(overview.counts).toEqual({ watch: 55, liked: 1, favorite: 1, total: 55, watchEvents: 55, likedEvents: 1, favoriteEvents: 1 });
+    expect(creators.top[0]).toMatchObject({ name: "样本作者", count: 55, events: 57 });
+    expect(interests.topics[0]).toEqual({ name: "旅行", count: 1 });
+    expect(kept.allThree).toBe(1);
+    expect(highlights.longest?.videoId).toBe("shared");
+    expect(highlights.mostEngaged?.videoId).toBe("shared");
+    expect(recap.metrics.totalUniqueVideos).toBe(55);
+    expect(summary.overview.status).toBe("ok");
+    expect(summary.rhythm.status).toBe("insufficient");
+    expect(summary.monthly.status).toBe("insufficient");
+    expect(summary.highlights.status).toBe("ok");
+    expect(summary.overview.notices).toContain("57 条记录已进入内容统计，但未进入时间图表");
+  });
+
+  it("keeps cross-year samples together while leaving annual charts unmerged", () => {
+    const summary = buildPersonalSummary(recordsOf({
+      watch_history: [
+        record("older", "2024-05-01T00:00:00Z", { videoId: "older", occurredAtSource: "platform_action" }),
+        record("newer", "2025-06-01T00:00:00Z", { videoId: "newer", occurredAtSource: "platform_action" }),
+      ],
+      liked_videos: [record("undated", null, { videoId: "undated", occurredAtSource: "unknown", topics: ["样本"] })],
+    }));
+
+    const overview = cardData<AnnualOverviewData>(summary, "overview");
+    const highlights = cardData<AnnualHighlightsData>(summary, "highlights");
+    expect(overview.counts.total).toBe(3);
+    expect(overview.activeDays).toBe(2);
+    expect(overview.dateRange).toMatchObject({ start: "2024-05-01", end: "2025-06-01" });
+    expect(overview.calendar).toEqual([]);
+    expect(summary.monthly).toMatchObject({ status: "insufficient", reason: "当前样本没有可按月比较的可靠喜欢或收藏时间" });
+    expect(highlights.first?.videoId).toBe("older");
+    expect(highlights.last?.videoId).toBe("newer");
+  });
+
   it("buckets strict action times at the Asia/Shanghai year boundary", () => {
     const records = recordsOf({
       watch_history: [
@@ -78,6 +151,34 @@ describe("annual report domain", () => {
     expect(report2025.coverage.unknownSourceRecordCount).toBe(1);
     expect(report2025.snapshotCoverage.undatedRecordCount).toBe(1);
     expect(report2025.cards.map((card) => card.id)).toEqual(ANNUAL_CARD_IDS);
+  });
+
+  it("keeps watching out of preference changes and preference content", () => {
+    const summary = buildPersonalSummary(recordsOf({
+      watch_history: Array.from({ length: 20 }, (_, index) => record(`watch-${index}`, `2025-12-${String(index + 1).padStart(2, "0")}T00:00:00Z`, {
+        videoId: `watch-${index}`,
+        occurredAtSource: "platform_action",
+        topics: ["不应进入偏好"],
+      })),
+      liked_videos: [
+        record("liked-january", "2025-01-10T00:00:00Z", { videoId: "liked-january", occurredAtSource: "platform_action", topics: ["咖啡"] }),
+        record("liked-february", "2025-02-10T00:00:00Z", { videoId: "liked-february", occurredAtSource: "platform_action", topics: ["手作"] }),
+      ],
+      favorite_videos: [
+        record("favorite-february", "2025-02-11T00:00:00Z", { videoId: "favorite-february", occurredAtSource: "platform_action", topics: ["手作"] }),
+      ],
+    }));
+
+    const monthly = cardData<AnnualMonthlyData>(summary, "monthly");
+    const interests = cardData<AnnualInterestsData>(summary, "interests");
+    expect(summary.monthly.status).toBe("ok");
+    expect(monthly.seriesAvailability).toEqual({ liked: true, favorite: true });
+    expect(monthly.peakMonth).toEqual({ month: 2, label: "2月", count: 2 });
+    expect(monthly.months[11]).toMatchObject({ liked: 0, favorite: 0 });
+    expect(interests.topics).toEqual([
+      { name: "手作", count: 2 },
+      { name: "咖啡", count: 1 },
+    ]);
   });
 
   it("parses timestamps without an offset as Shanghai wall time", () => {
@@ -176,7 +277,13 @@ describe("annual report domain", () => {
       }));
     }
 
-    const report = buildAnnualReport(buildAnnualIndex(recordsOf({ watch_history: watch }), {
+    const report = buildAnnualReport(buildAnnualIndex(recordsOf({
+      watch_history: watch,
+      liked_videos: [
+        record("preference-a", "2025-01-01T04:00:00Z", { videoId: "preference-a", occurredAtSource: "platform_action", topics: ["旅行"] }),
+        record("preference-b", "2025-01-02T04:00:00Z", { videoId: "preference-b", occurredAtSource: "platform_action", title: "#旅行 的一天" }),
+      ],
+    }), {
       now: "2026-01-01T00:00:00+08:00",
     }), 2025);
     const rhythm = cardData<AnnualRhythmData>(report, "rhythm");
@@ -192,6 +299,27 @@ describe("annual report domain", () => {
     expect(summary.metrics.activeDays).toBe(overview.activeDays);
     expect(summary.metrics.topCreator).toEqual(creators.top[0]);
     expect(summary.metrics.topTopic).toEqual(interests.topics[0]);
+  });
+
+  it("fills a missing authorId only from the same video", () => {
+    const report = buildAnnualReport(buildAnnualIndex(recordsOf({
+      watch_history: [
+        record("known", "2025-01-01T00:00:00Z", { videoId: "shared", author: "同一作者", authorId: "author-a", occurredAtSource: "platform_action" }),
+        record("alias", "2025-01-02T00:00:00Z", { videoId: "alias", author: "同一作者", occurredAtSource: "platform_action" }),
+        record("same-name-a", "2025-01-03T00:00:00Z", { videoId: "same-name-a", author: "重名作者", authorId: "author-b", occurredAtSource: "platform_action" }),
+        record("same-name-b", "2025-01-04T00:00:00Z", { videoId: "same-name-b", author: "重名作者", authorId: "author-c", occurredAtSource: "platform_action" }),
+        record("name-only", "2025-01-05T00:00:00Z", { videoId: "name-only", author: "仅姓名作者", occurredAtSource: "platform_action" }),
+      ],
+      liked_videos: [
+        record("shared-like", "2025-01-06T00:00:00Z", { videoId: "shared", author: "同一作者", occurredAtSource: "platform_action" }),
+      ],
+    })), 2025);
+    const creators = cardData<AnnualCreatorsData>(report, "creators");
+
+    expect(creators.creatorCount).toBe(5);
+    expect(creators.top.find((creator) => creator.authorId === "author-a")).toMatchObject({ name: "同一作者", count: 1, events: 2 });
+    expect(creators.top.filter((creator) => creator.name === "同一作者")).toHaveLength(2);
+    expect(creators.top.filter((creator) => creator.name === "重名作者").map((creator) => creator.authorId)).toEqual(["author-b", "author-c"]);
   });
 
   it("returns explicit empty and current-year states", () => {
