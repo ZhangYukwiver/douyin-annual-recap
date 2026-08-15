@@ -13,6 +13,7 @@ import {
   buildUnsignedHistoryUrl,
   captureDirectHistoryTemplate,
   collectDirectRecordPages,
+  directSignerProcessConfiguration,
   fetchDirectHistoryPage,
 } from "./directHistory.mjs";
 
@@ -89,6 +90,63 @@ function fakeContext({ cookies = sessionCookies, payload, status = 200 } = {}) {
   };
   return { context, isolatedRequest, requestFactory, response };
 }
+
+describe("direct signer process", () => {
+  const runtimeDirectory = path.join(tmpdir(), "direct signer runtime");
+  const runnerPath = path.join(tmpdir(), "direct signer runner.cjs");
+  const executablePath = path.join(tmpdir(), "runtime.exe");
+
+  it("uses a hidden permission-limited Node subprocess on Windows", () => {
+    const configuration = directSignerProcessConfiguration({
+      platform: "win32",
+      executablePath,
+      runtimeDirectory,
+      runnerPath,
+    });
+
+    expect(configuration.command).toBe(path.resolve(executablePath));
+    expect(configuration.args).toEqual([
+      "--permission",
+      `--allow-fs-read=${path.resolve(runtimeDirectory)}`,
+      `--allow-fs-read=${path.resolve(runnerPath)}`,
+      path.resolve(runnerPath),
+      path.resolve(runtimeDirectory),
+    ]);
+    expect(configuration.options).toMatchObject({
+      cwd: path.resolve(runtimeDirectory),
+      env: expect.objectContaining({ ELECTRON_RUN_AS_NODE: "1", LANG: "C", LC_ALL: "C", TZ: "UTC" }),
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    expect(configuration.options.env).not.toHaveProperty("NODE_OPTIONS");
+  });
+
+  it("keeps the macOS system sandbox around the same Node permission boundary", () => {
+    const configuration = directSignerProcessConfiguration({
+      platform: "darwin",
+      executablePath: "/usr/local/bin/node",
+      runtimeDirectory,
+      runnerPath,
+    });
+
+    expect(configuration.command).toBe("/usr/bin/sandbox-exec");
+    expect(configuration.args.slice(0, 4)).toEqual([
+      "-p",
+      "(version 1) (allow default) (deny network*) (deny file-write*)",
+      "/usr/local/bin/node",
+      "--permission",
+    ]);
+  });
+
+  it("rejects platforms without an implemented process boundary", () => {
+    expect(() => directSignerProcessConfiguration({
+      platform: "linux",
+      executablePath: "/usr/bin/node",
+      runtimeDirectory,
+      runnerPath,
+    })).toThrowError(expect.objectContaining({ code: "unsupported_platform" }));
+  });
+});
 
 describe("direct history request", () => {
   it("builds and sends one fixed signed GET without exposing a Cookie header", async () => {
@@ -267,6 +325,42 @@ describe("direct history URL boundary", () => {
 });
 
 describe("hidden likes and favorites", () => {
+  it("accepts a successful list response after an initial access rejection", async () => {
+    let onResponse;
+    const response = (status, payload) => ({
+      body: vi.fn(async () => Buffer.from(JSON.stringify(payload))),
+      finished: vi.fn(async () => null),
+      headers: vi.fn(() => ({})),
+      status: vi.fn(() => status),
+      url: vi.fn(() => DIRECT_FAVORITE_ENDPOINT),
+    });
+    const page = {
+      close: vi.fn(async () => undefined),
+      evaluate: vi.fn(async () => false),
+      goto: vi.fn(async () => {
+        onResponse(response(403, {}));
+        onResponse(response(200, {
+          status_code: 0,
+          aweme_list: [{ aweme_id: "favorite-1" }],
+          has_more: 0,
+        }));
+        await Promise.resolve();
+      }),
+      on: vi.fn((event, callback) => { if (event === "response") onResponse = callback; }),
+    };
+    const onPage = vi.fn(async () => true);
+
+    await expect(collectDirectRecordPages(
+      { newPage: vi.fn(async () => page) },
+      "favorite_videos",
+      onPage,
+    )).resolves.toBe(1);
+
+    expect(onPage).toHaveBeenCalledWith(expect.objectContaining({
+      aweme_list: [{ aweme_id: "favorite-1" }],
+    }), 1);
+  });
+
   it("stops hidden pagination when the page handler reaches a known record", async () => {
     let onResponse;
     const response = (payload, url = DIRECT_LIKED_ENDPOINT) => ({

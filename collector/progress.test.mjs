@@ -27,10 +27,13 @@ describe("endpoint progress", () => {
       cursors: new Set(),
       lastCursor: null,
       pageFingerprints: new Set(),
+      duplicatePageCounts: new Map(),
+      duplicateResponseCount: 0,
       repeatedPageFingerprint: false,
       uniqueAddedCount: 0,
       responseGrowth: [],
       visualSurfaceMissing: false,
+      responseProgressStalled: false,
     });
     expect(isEndpointComplete(progress)).toBe(false);
   });
@@ -125,7 +128,7 @@ describe("endpoint progress", () => {
     expect(isEndpointComplete(progress)).toBe(false);
   });
 
-  it("tracks unique growth and repeated pages without exposing record ids", () => {
+  it("ignores one duplicate webpage response before the terminal page", () => {
     const progress = createEndpointProgress();
 
     recordEndpointMatch(progress);
@@ -135,18 +138,45 @@ describe("endpoint progress", () => {
       pageFingerprint: "irreversible-page-fingerprint",
     });
     recordEndpointMatch(progress);
-    recordEndpointResult(progress, { hasMore: true, cursor: "page-3" }, {
+    recordEndpointResult(progress, { hasMore: true, cursor: "page-2" }, {
       added: 0,
       pageSize: 19,
       pageFingerprint: "irreversible-page-fingerprint",
     });
+    recordEndpointMatch(progress);
+    recordEndpointResult(progress, { hasMore: false, cursor: null }, {
+      added: 1,
+      pageSize: 1,
+      pageFingerprint: "terminal-page-fingerprint",
+    });
 
-    expect(progress.uniqueAddedCount).toBe(19);
-    expect(progress.repeatedPageFingerprint).toBe(true);
+    expect(progress.uniqueAddedCount).toBe(20);
+    expect(progress.duplicateResponseCount).toBe(1);
+    expect(progress.cursorStalled).toBe(false);
+    expect(progress.repeatedPageFingerprint).toBe(false);
     expect(progress.responseGrowth).toEqual([
       { added: 19, pageSize: 19, repeated: false },
       { added: 0, pageSize: 19, repeated: true },
+      { added: 1, pageSize: 1, repeated: false },
     ]);
+    expect(isEndpointComplete(progress)).toBe(true);
+  });
+
+  it("marks a page as stalled after the same duplicate response repeats twice", () => {
+    const progress = createEndpointProgress();
+
+    for (const [index, added] of [19, 0, 0].entries()) {
+      recordEndpointMatch(progress);
+      recordEndpointResult(progress, { hasMore: true, cursor: `page-${index + 2}` }, {
+        added,
+        pageSize: 19,
+        pageFingerprint: "irreversible-page-fingerprint",
+      });
+    }
+
+    expect(progress.uniqueAddedCount).toBe(19);
+    expect(progress.duplicateResponseCount).toBe(2);
+    expect(progress.repeatedPageFingerprint).toBe(true);
     expect(isEndpointComplete(progress)).toBe(false);
   });
 });

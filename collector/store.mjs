@@ -5,6 +5,8 @@ import { createEmptyRecords, normalizeRecord } from "./normalizer.mjs";
 
 export const SCHEMA_VERSION = 2;
 const LEGACY_SCHEMA_VERSION = 1;
+const RECORD_TYPES = ["watch_history", "liked_videos", "favorite_videos"];
+const LEGACY_DIRECT_COMPLETE_WARNING_PREFIX = "无界面读取完成：";
 
 function validRecordCollection(value) {
   return value &&
@@ -32,12 +34,23 @@ function normalizedWarnings(value) {
     : [];
 }
 
+export function normalizeDirectSyncState(value, warnings = []) {
+  const legacyComplete = Array.isArray(warnings)
+    && warnings.some((warning) => typeof warning === "string"
+      && warning.startsWith(LEGACY_DIRECT_COMPLETE_WARNING_PREFIX));
+  return Object.fromEntries(RECORD_TYPES.map((type) => [
+    type,
+    value?.[type] === true || legacyComplete,
+  ]));
+}
+
 export function emptyStoredSnapshot() {
   return {
     schemaVersion: SCHEMA_VERSION,
     updatedAt: null,
     records: createEmptyRecords(),
     warnings: [],
+    directSync: normalizeDirectSyncState(null),
   };
 }
 
@@ -65,6 +78,7 @@ export class CollectorStore {
           parsed.schemaVersion === LEGACY_SCHEMA_VERSION ? "platform_action" : "unknown",
         ),
         warnings: normalizedWarnings(parsed.warnings),
+        directSync: normalizeDirectSyncState(parsed.directSync, parsed.warnings),
       };
       if (!snapshot.records) return emptyStoredSnapshot();
       // Persist the canonical v2 shape after reading a v1 snapshot.  Failure to
@@ -83,7 +97,7 @@ export class CollectorStore {
     }
   }
 
-  async save(records, warnings = []) {
+  async save(records, warnings = [], { directSync } = {}) {
     const normalizedRecords = normalizeRecordCollection(records) ?? createEmptyRecords();
     await mkdir(this.dataDirectory, { recursive: true });
     const snapshot = {
@@ -91,6 +105,7 @@ export class CollectorStore {
       updatedAt: new Date().toISOString(),
       records: normalizedRecords,
       warnings: normalizedWarnings(warnings),
+      directSync: normalizeDirectSyncState(directSync),
     };
     await this.writeSnapshot(snapshot);
     return snapshot;

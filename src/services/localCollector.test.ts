@@ -2,14 +2,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearCollectorRecords,
+  getCollectorPairingCode,
   getCollectorRecords,
   LocalCollectorError,
   getCollectorStatus,
   normalizeCollectorBaseUrl,
   parseLaunchPairingCode,
   pairCollector,
+  startCollectorSync,
   startDirectRecordsSync,
   startCollectorObservation,
+  stopCollectorSync,
   stopCollectorObservation,
 } from "./localCollector";
 
@@ -39,6 +42,26 @@ describe("parseLaunchPairingCode", () => {
 });
 
 describe("local collector client", () => {
+  it("reads and validates the loopback pairing code", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: "12345678" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCollectorPairingCode("http://127.0.0.1:4765")).resolves.toBe("12345678");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4765/v1/pairing-code",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+  });
+
+  it("rejects malformed pairing-code responses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: "123" }), { status: 200 })));
+    await expect(getCollectorPairingCode("http://127.0.0.1:4765"))
+      .rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("validates pairing codes before sending a request", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -110,6 +133,34 @@ describe("local collector client", () => {
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "http://127.0.0.1:4765/v1/observe",
       "http://127.0.0.1:4765/v1/observe/stop",
+    ]);
+  });
+
+  it("starts and stops record sync through local authenticated endpoints", async () => {
+    const statusPayload = {
+      state: "collecting",
+      phase: "liked_videos",
+      message: "正在读取点赞列表",
+      counts: { watch_history: 12, liked_videos: 0, favorite_videos: 0 },
+      updatedAt: null,
+      browserOpen: true,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ started: true, status: statusPayload }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        stopped: true,
+        status: { ...statusPayload, phase: null, message: "正在停止读取" },
+      }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startCollectorSync("http://127.0.0.1:4765", "session-secret"))
+      .resolves.toMatchObject({ state: "collecting", phase: "liked_videos" });
+    await expect(stopCollectorSync("http://127.0.0.1:4765", "session-secret"))
+      .resolves.toMatchObject({ state: "collecting", phase: null, message: "正在停止读取" });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:4765/v1/sync",
+      "http://127.0.0.1:4765/v1/sync/stop",
     ]);
   });
 
