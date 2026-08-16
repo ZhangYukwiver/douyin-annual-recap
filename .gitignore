@@ -3,6 +3,8 @@ node_modules/
 .expo/
 dist/
 web-build/
+release/
+release-*/
 .local-data/
 .local-data-test/
 .env*

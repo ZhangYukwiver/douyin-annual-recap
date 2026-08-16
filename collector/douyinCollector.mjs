@@ -22,6 +22,7 @@ import {
   recordEndpointMatch,
   recordEndpointResult,
 } from "./progress.mjs";
+import { normalizeDirectSyncState } from "./store.mjs";
 
 const HOME_URL = "https://www.douyin.com/";
 const SELF_PROFILE_URL = "https://www.douyin.com/user/self";
@@ -41,8 +42,29 @@ const MAX_LOGIN_WAIT_MS = 10 * 60 * 1000;
 const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
 const ENDPOINT_ACTIVATION_WAIT_MS = 8_000;
 const RESPONSE_DRAIN_WAIT_MS = 12_000;
+const RESPONSE_PROGRESS_SILENCE_MS = 20_000;
+const RESPONSE_REPLAY_TIMEOUT_MS = 8_000;
 const MANUAL_OBSERVATION_WARNING = "手动监听模式：仅保存你在独立浏览器中实际浏览到的数据，完整性不会自动验证。";
 const DIRECT_COMPLETE_WARNING_PREFIX = "无界面读取完成：";
+
+export function directContextLaunchOptions({ executablePath, userAgent, platform = process.platform }) {
+  const useBackgroundWindow = platform === "win32";
+  return {
+    executablePath,
+    headless: !useBackgroundWindow,
+    locale: "zh-CN",
+    userAgent,
+    viewport: { width: 1280, height: 900 },
+    acceptDownloads: false,
+    serviceWorkers: "block",
+    ...(useBackgroundWindow ? {
+      args: [
+        "--window-position=-32000,-32000",
+        "--window-size=1280,900",
+      ],
+    } : {}),
+  };
+}
 
 class CollectorCancelledError extends Error {
   constructor() {
@@ -65,6 +87,116 @@ function safeMessage(error, fallback) {
   if (error instanceof CollectorAdapterError) return error.message;
   if (error instanceof Error && error.name === "TimeoutError") return "抖音网页加载超时，请检查网络后重试。";
   return fallback;
+}
+
+function mergeRecordList(type, existingRecords, fetchedRecords) {
+  if (type !== "watch_history") return structuredClone(fetchedRecords);
+  const fetchedById = new Map(fetchedRecords.map((record) => [record.id, record]));
+  const existingIds = new Set(existingRecords.map((record) => record.id));
+  return [
+    ...fetchedRecords.filter((record) => !existingIds.has(record.id)),
+    ...existingRecords.map((record) => {
+      const fresh = fetchedById.get(record.id);
+      return fresh ? mergeRecords(record, fresh) : record;
+    }),
+  ].sort((left, right) => {
+    const leftTime = left.occurredAt ? Date.parse(left.occurredAt) : 0;
+    const rightTime = right.occurredAt ? Date.parse(right.occurredAt) : 0;
+    return rightTime - leftTime;
+  });
+}
+
+function finalizeDirectType(type, incremental, existingRecords, fetchedRecords, knownIds, rejectedIds) {
+  if (type === "watch_history") {
+    return mergeRecordList(type, existingRecords, fetchedRecords);
+  }
+  if (!incremental) return structuredClone(fetchedRecords);
+
+  const fetchedById = new Map(fetchedRecords.map((record) => [record.id, record]));
+  return [
+    ...fetchedRecords.filter((record) => !knownIds.has(record.id)),
+    ...existingRecords
+      .filter((record) => !rejectedIds.has(record.id))
+      .map((record) => {
+        const fresh = fetchedById.get(record.id);
+        return fresh ? mergeRecords(record, fresh) : record;
+      }),
+  ];
+}
+
+async function readJsonWithReplay(response, fallbackPage, replayUrls) {
+  try {
+    return await response.json();
+  } catch (initialError) {
+    const request = typeof response.request === "function" ? response.request() : null;
+    if (!request || request.method?.() !== "GET") throw initialError;
+
+    let page = fallbackPage;
+    try {
+      page = request.frame?.().page?.() ?? fallbackPage;
+    } catch {
+      // Service-worker requests do not expose a frame; use the active profile page.
+    }
+    if (!page || typeof page.evaluate !== "function") throw initialError;
+
+    const requestUrl = response.url();
+    const rawHeaders = typeof request.allHeaders === "function"
+      ? await request.allHeaders().catch(() => ({}))
+      : {};
+    const headers = Object.fromEntries(Object.entries(rawHeaders).filter(([name]) => (
+      !/^(?:accept-encoding|connection|content-length|cookie|host|origin|referer|sec-|user-agent)/iu.test(name)
+    )));
+
+    replayUrls.add(requestUrl);
+    try {
+      const replay = await page.evaluate(async ({ url, requestHeaders, timeoutMs, maxBytes }) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const replayedResponse = await fetch(url, {
+            method: "GET",
+            headers: requestHeaders,
+            credentials: "include",
+            signal: controller.signal,
+          });
+          const declaredLength = Number(replayedResponse.headers.get("content-length") ?? 0);
+          if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+            return { body: null, ok: replayedResponse.ok, status: replayedResponse.status, tooLarge: true };
+          }
+          const body = await replayedResponse.text();
+          return {
+            body,
+            ok: replayedResponse.ok,
+            status: replayedResponse.status,
+            tooLarge: new TextEncoder().encode(body).byteLength > maxBytes,
+          };
+        } finally {
+          clearTimeout(timeout);
+        }
+      }, {
+        url: requestUrl,
+        requestHeaders: headers,
+        timeoutMs: RESPONSE_REPLAY_TIMEOUT_MS,
+        maxBytes: MAX_RESPONSE_BYTES,
+      });
+      if (!replay.ok) {
+        throw new CollectorAdapterError("http_error", `抖音网页响应重试返回 HTTP ${replay.status}。`);
+      }
+      if (replay.tooLarge) {
+        throw new CollectorAdapterError("response_too_large", "抖音网页响应重试结果过大，已停止读取该页。");
+      }
+      try {
+        return JSON.parse(replay.body);
+      } catch {
+        throw new CollectorAdapterError("invalid_json", "抖音网页响应重试未返回有效 JSON。");
+      }
+    } catch (replayError) {
+      if (replayError instanceof CollectorAdapterError) throw replayError;
+      throw initialError;
+    } finally {
+      replayUrls.delete(requestUrl);
+    }
+  }
 }
 
 async function firstVisible(locator, limit = 8) {
@@ -427,13 +559,15 @@ async function clickLoadMoreInResolvedVisualSurface(page) {
 }
 
 export class DouyinCollector {
-  constructor({ executablePath, dataDirectory, store }) {
+  constructor({ executablePath, dataDirectory, signerDirectory, store }) {
     this.executablePath = executablePath;
     this.dataDirectory = dataDirectory;
+    this.signerDirectory = signerDirectory;
     this.profileDirectory = path.join(dataDirectory, "browser-profile");
     this.store = store;
     this.context = null;
     this.syncPromise = null;
+    this.syncStopRequested = false;
     this.observation = null;
     this.observationPromise = null;
     this.accountSwitchPromise = null;
@@ -484,6 +618,7 @@ export class DouyinCollector {
 
   startSync({ allowAccountSwitch = false, mode = "page" } = {}) {
     if (this.syncPromise || this.observationPromise || (this.accountSwitchPromise && !allowAccountSwitch)) return false;
+    this.syncStopRequested = false;
     const runId = this.syncRunId + 1;
     this.syncRunId = runId;
     this.updateStatus({
@@ -506,6 +641,36 @@ export class DouyinCollector {
         if (this.syncPromise === promise) this.syncPromise = null;
       });
     this.syncPromise = promise;
+    return true;
+  }
+
+  stopSync({ silent = false } = {}) {
+    const promise = this.syncPromise;
+    if (!promise || this.syncStopRequested) return false;
+
+    this.syncStopRequested = true;
+    const cancellationRunId = this.syncRunId + 1;
+    this.syncRunId = cancellationRunId;
+    if (!silent) {
+      this.updateStatus({
+        state: "collecting",
+        phase: null,
+        message: "正在停止读取",
+      });
+    }
+
+    void promise.finally(() => {
+      this.syncStopRequested = false;
+      if (silent || this.syncRunId !== cancellationRunId) return;
+      this.updateStatus({
+        state: "idle",
+        phase: null,
+        message: "已停止读取，已保留上次保存的记录",
+        counts: recordCounts(this.snapshot.records),
+        updatedAt: this.snapshot.updatedAt,
+        browserOpen: Boolean(this.context),
+      });
+    });
     return true;
   }
 
@@ -583,6 +748,7 @@ export class DouyinCollector {
     const accumulator = new RecordAccumulator(this.snapshot.records);
     const pendingResponses = new Set();
     const processingChains = new Map();
+    const replayUrls = new Set();
     let persistChain = Promise.resolve();
     let capturedResponses = 0;
     let acceptingResponses = true;
@@ -594,7 +760,9 @@ export class DouyinCollector {
           ...this.snapshot.warnings.filter((warning) => warning !== MANUAL_OBSERVATION_WARNING),
           MANUAL_OBSERVATION_WARNING,
         ])];
-        this.snapshot = await this.store.save(accumulator.snapshot().records, warnings);
+        this.snapshot = await this.store.save(accumulator.snapshot().records, warnings, {
+          directSync: normalizeDirectSyncState(this.snapshot.directSync),
+        });
         if (!observation.active || runId !== this.syncRunId) return;
         this.updateStatus({
           counts: recordCounts(this.snapshot.records),
@@ -609,6 +777,7 @@ export class DouyinCollector {
       if (!acceptingResponses || !observation.active || runId !== this.syncRunId) return;
       const endpoint = matchDouyinEndpoint(response.url());
       if (!endpoint) return;
+      if (replayUrls.has(response.url())) return;
       const previous = processingChains.get(endpoint.pathname) ?? Promise.resolve();
       let task;
       task = previous.catch(() => undefined).then(async () => {
@@ -618,7 +787,7 @@ export class DouyinCollector {
         if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
           throw new CollectorAdapterError("response_too_large", "抖音网页响应过大，已停止读取该页。");
         }
-        const payload = await response.json();
+        const payload = await readJsonWithReplay(response, page, replayUrls);
         if (!observation.active || runId !== this.syncRunId) return;
         accumulator.addResponse(endpoint, payload);
         capturedResponses += 1;
@@ -759,10 +928,31 @@ export class DouyinCollector {
     terminalProgresses = [],
     maxSteps = Number.POSITIVE_INFINITY,
     targetTab = null,
+    timing = {},
   ) {
+    const now = timing.now ?? Date.now;
+    const wait = timing.wait ?? delay;
+    const responseSilenceTimeoutMs = timing.responseSilenceTimeoutMs ?? RESPONSE_PROGRESS_SILENCE_MS;
     let lastVersion = kinds.reduce((sum, kind) => sum + (responseVersions.get(kind) ?? 0), 0);
+    let lastResponseProgressAt = now();
     let idleSteps = 0;
     let lastLoadMoreVersion = null;
+
+    const recordVersionProgress = () => {
+      const version = kinds.reduce((sum, kind) => sum + (responseVersions.get(kind) ?? 0), 0);
+      const advanced = version !== lastVersion;
+      if (advanced) {
+        lastVersion = version;
+        lastResponseProgressAt = now();
+        idleSteps = 0;
+      }
+      return advanced;
+    };
+    const stopAfterResponseSilence = () => {
+      if (now() - lastResponseProgressAt < responseSilenceTimeoutMs) return false;
+      for (const progress of terminalProgresses) progress.responseProgressStalled = true;
+      return true;
+    };
 
     if (!targetTab) {
       for (const progress of terminalProgresses) progress.visualSurfaceMissing = true;
@@ -771,13 +961,15 @@ export class DouyinCollector {
 
     for (let step = 0; step < maxSteps && idleSteps < 8; step += 1) {
       this.assertSyncActive(runId);
+      recordVersionProgress();
+      if (stopAfterResponseSilence()) break;
       const activeProgresses = terminalProgresses.filter((progress) => progress.matchedCount > 0);
       if (activeProgresses.length > 0 && activeProgresses.every((progress) => isEndpointComplete(progress))) break;
       if (activeProgresses.some((progress) => (
         progress.cursorStalled || progress.paginationMissing || progress.repeatedPageFingerprint
       ))) break;
       if (activeProgresses.some((progress) => progress.processedCount < progress.matchedCount)) {
-        await delay(250);
+        await wait(250);
         continue;
       }
 
@@ -803,13 +995,13 @@ export class DouyinCollector {
         ? await clickLoadMoreInResolvedVisualSurface(page)
         : false;
       if (loadedMore) lastLoadMoreVersion = lastVersion;
-      await delay(900);
+      await wait(900);
       this.assertSyncActive(runId);
-      const version = kinds.reduce((sum, kind) => sum + (responseVersions.get(kind) ?? 0), 0);
-      if (version === lastVersion) {
+      const advanced = recordVersionProgress();
+      if (!advanced) {
         idleSteps = visualResult.moved || loadedMore ? 0 : idleSteps + 1;
-      } else idleSteps = 0;
-      lastVersion = version;
+      }
+      if (stopAfterResponseSilence()) break;
     }
   }
 
@@ -943,6 +1135,7 @@ export class DouyinCollector {
     const responseErrors = [];
     const pendingResponses = new Set();
     const processingChains = new Map();
+    const replayUrls = new Set();
     let lastResponseAt = 0;
     let acceptingResponses = true;
 
@@ -969,6 +1162,7 @@ export class DouyinCollector {
       if (!acceptingResponses || runId !== this.syncRunId) return;
       const endpoint = matchDouyinEndpoint(response.url());
       if (!endpoint) return;
+      if (replayUrls.has(response.url())) return;
       const progress = activeProgressByPath.get(endpoint.pathname);
       if (!progress) return;
       lastResponseAt = Date.now();
@@ -982,7 +1176,7 @@ export class DouyinCollector {
         if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
           throw new CollectorAdapterError("response_too_large", "抖音网页响应过大，已停止读取该页。");
         }
-        const payload = await response.json();
+        const payload = await readJsonWithReplay(response, page, replayUrls);
         this.assertSyncActive(runId);
         if (!acceptingResponses) return;
         const normalized = accumulator.addResponse(endpoint, payload);
@@ -1050,6 +1244,7 @@ export class DouyinCollector {
       const addProgressWarnings = (label, progress, { required = true } = {}) => {
         if (progress.matchedCount === 0) {
           if (required && !progress.verifiedEmpty) phaseWarnings.push(`${label}未捕获到网页响应。`);
+          if (progress.responseProgressStalled) phaseWarnings.push(`${label}长时间没有新的网页响应，已停止继续滚动。`);
           return;
         }
         if (progress.processedCount < progress.matchedCount) {
@@ -1057,6 +1252,9 @@ export class DouyinCollector {
         }
         if (progress.visualSurfaceMissing) {
           phaseWarnings.push(`${label}未继续滚动，已使用当前读取到的 ${progress.uniqueAddedCount} 条。`);
+        }
+        if (progress.responseProgressStalled) {
+          phaseWarnings.push(`${label}长时间没有新的网页响应，已停止继续滚动并使用当前结果。`);
         }
       };
 
@@ -1069,7 +1267,9 @@ export class DouyinCollector {
         const currentById = new Map(normalized[type].map((record) => [record.id, record]));
         const currentSample = sampleIds.get(type).flatMap((id) => currentById.has(id) ? [currentById.get(id)] : []);
         if (completeTypes.has(type)) {
-          normalized[type] = currentSample;
+          normalized[type] = type === "watch_history"
+            ? mergeRecordList(type, this.snapshot.records[type], currentSample)
+            : currentSample;
         } else if (this.snapshot.records[type].length > 0) {
           normalized[type] = structuredClone(this.snapshot.records[type]);
           phaseWarnings.push(`${TYPE_LABELS[type]}读取不完整，已保留上次样本。`);
@@ -1083,7 +1283,9 @@ export class DouyinCollector {
 
       const warnings = [...new Set([...phaseWarnings, ...responseErrors])];
       this.assertSyncActive(runId);
-      this.snapshot = await this.store.save(normalized, warnings);
+      this.snapshot = await this.store.save(normalized, warnings, {
+        directSync: normalizeDirectSyncState(this.snapshot.directSync),
+      });
       const complete = completeTypes.size === REQUIRED_TYPES.length && responseErrors.length === 0;
       this.updateStatus({
         state: complete ? "complete" : "partial",
@@ -1100,15 +1302,10 @@ export class DouyinCollector {
 
   async openDirectContext() {
     const template = await loadDirectHistoryTemplate(this.dataDirectory);
-    return chromium.launchPersistentContext(this.profileDirectory, {
+    return chromium.launchPersistentContext(this.profileDirectory, directContextLaunchOptions({
       executablePath: this.executablePath,
-      headless: true,
-      locale: "zh-CN",
       userAgent: template.headers["user-agent"],
-      viewport: { width: 1280, height: 900 },
-      acceptDownloads: false,
-      serviceWorkers: "block",
-    });
+    }));
   }
 
   async readDirectHistory(context, cursor = "0") {
@@ -1118,6 +1315,7 @@ export class DouyinCollector {
       context,
       currentUserAgent,
       dataDirectory: this.dataDirectory,
+      directory: this.signerDirectory,
       cursor,
     });
   }
@@ -1128,50 +1326,101 @@ export class DouyinCollector {
 
   async runDirectRecords(runId) {
     this.assertSyncActive(runId);
-    const temporaryContext = !this.context;
-    const context = this.context ?? await this.openDirectContext();
+    const visibleContext = this.context;
+    if (visibleContext) {
+      this.context = null;
+      await visibleContext.close();
+      this.updateStatus({ browserOpen: false });
+    }
+    const context = await this.openDirectContext();
     try {
       this.assertSyncActive(runId);
       const page = context.pages()[0] ?? await context.newPage();
       const currentUserAgent = await page.evaluate(() => navigator.userAgent);
-      const incremental = this.snapshot.warnings.some((warning) => warning.startsWith(DIRECT_COMPLETE_WARNING_PREFIX));
       const accumulator = new RecordAccumulator();
       const existingRecords = structuredClone(this.snapshot.records);
+      const stagedRecords = structuredClone(existingRecords);
+      const directSync = normalizeDirectSyncState(this.snapshot.directSync, this.snapshot.warnings);
+      const incrementalByType = new Map(REQUIRED_TYPES.map((type) => [type, directSync[type]]));
+      const allIncremental = REQUIRED_TYPES.every((type) => incrementalByType.get(type));
       const knownIds = new Map(REQUIRED_TYPES.map((type) => [
         type,
-        new Set(incremental ? existingRecords[type].map((record) => record.id) : []),
+        new Set(incrementalByType.get(type) ? existingRecords[type].map((record) => record.id) : []),
       ]));
       const newIds = new Map(REQUIRED_TYPES.map((type) => [type, new Set()]));
       const rejectedIds = new Map(REQUIRED_TYPES.map((type) => [type, new Set()]));
+      const returnedCounts = new Map(REQUIRED_TYPES.map((type) => [type, 0]));
+      const filteredCounts = new Map(REQUIRED_TYPES.map((type) => [type, 0]));
       const pageCounts = {};
       let missingViewTimes = 0;
-      for (const [type, endpointUrl] of [
+      const phases = [
         ["watch_history", DIRECT_HISTORY_ENDPOINT],
         ["liked_videos", DIRECT_LIKED_ENDPOINT],
         ["favorite_videos", DIRECT_FAVORITE_ENDPOINT],
-      ]) {
+      ];
+
+      const trackResult = (type, result) => {
+        returnedCounts.set(type, returnedCounts.get(type) + result.pageSize);
+        filteredCounts.set(type, filteredCounts.get(type) + result.rejectedRecordIds.length);
+        for (const id of result.acceptedRecordIds) {
+          if (!knownIds.get(type).has(id)) newIds.get(type).add(id);
+        }
+        for (const id of result.rejectedRecordIds) rejectedIds.get(type).add(id);
+      };
+      const previewRecords = (type) => {
+        const preview = structuredClone(stagedRecords);
+        preview[type] = finalizeDirectType(
+          type,
+          incrementalByType.get(type),
+          existingRecords[type],
+          accumulator.snapshot().records[type],
+          knownIds.get(type),
+          rejectedIds.get(type),
+        );
+        return preview;
+      };
+      const progressMessage = (type, pageCount) => {
+        const returned = returnedCounts.get(type);
+        const filtered = filteredCounts.get(type);
+        return incrementalByType.get(type)
+          ? `正在读取${TYPE_LABELS[type]}新增记录（第 ${pageCount} 页，接口 ${returned} 条，新增 ${newIds.get(type).size} 条，过滤 ${filtered} 条）`
+          : `正在读取${TYPE_LABELS[type]}全部记录（第 ${pageCount} 页，接口 ${returned} 条，保留 ${accumulator.snapshot().records[type].length} 条，过滤 ${filtered} 条）`;
+      };
+      const persistCompletedType = async (type, finalPhase) => {
+        this.assertSyncActive(runId);
+        stagedRecords[type] = previewRecords(type)[type];
+        directSync[type] = true;
+        const newCounts = Object.fromEntries(REQUIRED_TYPES.map((kind) => [kind, newIds.get(kind).size]));
+        const warnings = [...new Set([
+          finalPhase
+            ? `${DIRECT_COMPLETE_WARNING_PREFIX}新增观看 ${newCounts.watch_history}、点赞 ${newCounts.liked_videos}、收藏 ${newCounts.favorite_videos}；读取观看历史 ${pageCounts.watch_history} 页、点赞 ${pageCounts.liked_videos} 页、收藏 ${pageCounts.favorite_videos} 页。`
+            : `无界面读取阶段完成：${TYPE_LABELS[type]}已保存，其他分类继续读取。`,
+          ...(missingViewTimes > 0
+            ? [`其中 ${missingViewTimes} 条缺少观看日期，已保持为空，未使用发布时间或采集时间替代。`]
+            : []),
+        ])];
+        this.snapshot = await this.store.save(stagedRecords, warnings, { directSync });
+        this.updateStatus({
+          counts: recordCounts(this.snapshot.records),
+          updatedAt: this.snapshot.updatedAt,
+        });
+      };
+
+      for (const [phaseIndex, [type, endpointUrl]] of phases.entries()) {
         const endpoint = matchDouyinEndpoint(endpointUrl);
         if (type !== "watch_history") {
           pageCounts[type] = await this.collectDirectList(context, type, async (payload, pageCount) => {
             this.assertSyncActive(runId);
             const result = accumulator.addResponse(endpoint, payload);
-            for (const id of result.acceptedRecordIds) if (!knownIds.get(type).has(id)) newIds.get(type).add(id);
-            for (const id of result.rejectedRecordIds) rejectedIds.get(type).add(id);
-            const pageRecords = accumulator.snapshot().records;
+            trackResult(type, result);
             this.updateStatus({
               phase: type,
-              message: incremental
-                ? `正在读取${TYPE_LABELS[type]}新增记录（第 ${pageCount} 页，新增 ${newIds.get(type).size} 条）`
-                : `正在无界面读取${TYPE_LABELS[type]}（第 ${pageCount} 页，${pageRecords[type].length} 条）`,
-              counts: incremental
-                ? Object.fromEntries(REQUIRED_TYPES.map((kind) => [kind,
-                    existingRecords[kind].filter((record) => !rejectedIds.get(kind).has(record.id)).length
-                      + newIds.get(kind).size,
-                  ]))
-                : recordCounts(pageRecords),
+              message: progressMessage(type, pageCount),
+              counts: recordCounts(previewRecords(type)),
             });
             return !result.recordIds.some((id) => knownIds.get(type).has(id));
           });
+          await persistCompletedType(type, phaseIndex === phases.length - 1);
           continue;
         }
         const cursors = new Set();
@@ -1187,8 +1436,7 @@ export class DouyinCollector {
           const payload = await this.readDirectHistory(context, cursor);
           this.assertSyncActive(runId);
           const result = accumulator.addResponse(endpoint, payload);
-          for (const id of result.acceptedRecordIds) if (!knownIds.get(type).has(id)) newIds.get(type).add(id);
-          for (const id of result.rejectedRecordIds) rejectedIds.get(type).add(id);
+          trackResult(type, result);
           pageCounts[type] += 1;
           if (type === "watch_history") missingViewTimes += countMissingDirectHistoryViewTimes(payload);
           if (result.pageFingerprint && pageFingerprints.has(result.pageFingerprint)) {
@@ -1198,18 +1446,10 @@ export class DouyinCollector {
           if (accumulator.isTruncated(type)) {
             throw new DirectHistoryError("record_limit", `${TYPE_LABELS[type]}响应超过本地安全容量，已停止且未保存本次结果。`);
           }
-          const pageRecords = accumulator.snapshot().records;
           this.updateStatus({
             phase: type,
-            message: incremental
-              ? `正在读取${TYPE_LABELS[type]}新增记录（第 ${pageCounts[type]} 页，新增 ${newIds.get(type).size} 条）`
-              : `正在直接读取${TYPE_LABELS[type]}（第 ${pageCounts[type]} 页，${pageRecords[type].length} 条）`,
-            counts: incremental
-              ? Object.fromEntries(REQUIRED_TYPES.map((kind) => [kind,
-                  existingRecords[kind].filter((record) => !rejectedIds.get(kind).has(record.id)).length
-                    + newIds.get(kind).size,
-                ]))
-              : recordCounts(pageRecords),
+            message: progressMessage(type, pageCounts[type]),
+            counts: recordCounts(previewRecords(type)),
           });
           if (result.recordIds.some((id) => knownIds.get(type).has(id))) break;
           if (result.pagination.hasMore === false) break;
@@ -1219,47 +1459,20 @@ export class DouyinCollector {
           cursor = result.pagination.cursor;
           await delay(900);
         }
+        await persistCompletedType(type, phaseIndex === phases.length - 1);
       }
-      const fetchedRecords = accumulator.snapshot().records;
-      const fetchedById = new Map(REQUIRED_TYPES.map((type) => [
-        type,
-        new Map(fetchedRecords[type].map((record) => [record.id, record])),
-      ]));
-      const normalized = incremental
-        ? Object.fromEntries(REQUIRED_TYPES.map((type) => [
-            type,
-            [
-              ...fetchedRecords[type].filter((record) => !knownIds.get(type).has(record.id)),
-              ...existingRecords[type]
-                .filter((record) => !rejectedIds.get(type).has(record.id))
-                .map((record) => {
-                  const fresh = fetchedById.get(type).get(record.id);
-                  return fresh ? mergeRecords(record, fresh) : record;
-                }),
-            ],
-          ]))
-        : fetchedRecords;
       const newCounts = Object.fromEntries(REQUIRED_TYPES.map((type) => [type, newIds.get(type).size]));
-      const warnings = [...new Set([
-        incremental
-          ? `${DIRECT_COMPLETE_WARNING_PREFIX}新增观看 ${newCounts.watch_history}、点赞 ${newCounts.liked_videos}、收藏 ${newCounts.favorite_videos}；读取观看历史 ${pageCounts.watch_history} 页、点赞 ${pageCounts.liked_videos} 页、收藏 ${pageCounts.favorite_videos} 页。`
-          : `${DIRECT_COMPLETE_WARNING_PREFIX}观看历史 ${pageCounts.watch_history} 页、点赞 ${pageCounts.liked_videos} 页、收藏 ${pageCounts.favorite_videos} 页。`,
-        ...(missingViewTimes > 0
-          ? [`其中 ${missingViewTimes} 条缺少观看日期，已保持为空，未使用发布时间或采集时间替代。`]
-          : []),
-      ])];
-      this.snapshot = await this.store.save(normalized, warnings);
       this.updateStatus({
         state: "complete",
         phase: null,
-        message: incremental
+        message: allIncremental
           ? `已读取新增记录（观看 ${newCounts.watch_history}、点赞 ${newCounts.liked_videos}、收藏 ${newCounts.favorite_videos}）`
-          : `已无界面读取全部可见记录（观看 ${normalized.watch_history.length}、点赞 ${normalized.liked_videos.length}、收藏 ${normalized.favorite_videos.length}）`,
+          : `已读取并合并全部可见记录（观看 ${stagedRecords.watch_history.length}、点赞 ${stagedRecords.liked_videos.length}、收藏 ${stagedRecords.favorite_videos.length}）`,
         counts: recordCounts(this.snapshot.records),
         updatedAt: this.snapshot.updatedAt,
       });
     } finally {
-      if (temporaryContext) await context.close().catch(() => undefined);
+      await context.close().catch(() => undefined);
     }
   }
 
@@ -1315,6 +1528,7 @@ export class DouyinCollector {
   }
 
   async close() {
+    this.stopSync({ silent: true });
     await this.stopObservation({ silent: true });
     if (!this.context) return;
     const context = this.context;

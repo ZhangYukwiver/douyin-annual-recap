@@ -1,0 +1,32 @@
+export const workspaceColors = {
+  canvas: "#0B0C0F",
+  sidebar: "#111216",
+  surface: "#17181D",
+  surfaceRaised: "#1E2026",
+  surfaceMuted: "#24262D",
+  border: "#30323A",
+  borderSoft: "#24262C",
+  text: "#F7F7F8",
+  textSecondary: "#C0C2C8",
+  textMuted: "#8D9099",
+  accent: "#FE2C55",
+  accentPressed: "#D91E43",
+  accentAction: "#C91F43",
+  accentSoft: "#3A1721",
+  cyan: "#25F4EE",
+  cyanSoft: "#153334",
+  green: "#46D39A",
+  greenSoft: "#173429",
+  amber: "#F4C45E",
+  amberSoft: "#382E19",
+  danger: "#FF6B78",
+  white: "#FFFFFF",
+  black: "#050506",
+  scrim: "rgba(5,5,6,0.68)",
+} as const;
+
+export const workspaceRadii = {
+  small: 4,
+  medium: 6,
+  large: 8,
+} as const;

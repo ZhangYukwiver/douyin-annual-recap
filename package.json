@@ -12,9 +12,14 @@
     "direct:setup": "node scripts/setup-direct-signer.mjs",
     "direct:check": "node collector/directHistory.mjs --check-signer",
     "app:mac": "osacompile -s -o '抖音年度回顾.app' scripts/macos-launcher.applescript && plutil -replace CFBundleIdentifier -string local.douyin.annual-recap '抖音年度回顾.app/Contents/Info.plist' && plutil -replace NSDocumentsFolderUsageDescription -string '读取同目录中的本地应用代码与年度回顾数据。' '抖音年度回顾.app/Contents/Info.plist' && codesign --force --deep --sign - '抖音年度回顾.app'",
+    "build:icons": "node scripts/build-icons.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build:web": "expo export --platform web"
+    "prebuild:web": "npm run build:icons",
+    "build:web": "expo export --platform web",
+    "desktop": "npm run build:web && electron desktop/main.mjs",
+    "desktop:pack": "npm run build:web && npm run direct:setup && electron-builder --win dir",
+    "desktop:build": "npm run build:web && npm run direct:setup && electron-builder --win nsis"
   },
   "dependencies": {
     "@expo/metro-runtime": "~57.0.8",
@@ -24,6 +29,7 @@
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.2",
     "fflate": "^0.8.2",
+    "gsap": "3.12.5",
     "lucide-react-native": "^1.30.0",
     "playwright-core": "^1.62.1",
     "react": "19.2.3",
@@ -35,7 +41,68 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "sharp": "^0.34.4",
     "typescript": "~6.0.3",
     "vitest": "^4.0.18"
+  },
+  "build": {
+    "appId": "com.zhangyukwiver.contentinsights",
+    "productName": "内容数据工作台",
+    "extraMetadata": {
+      "main": "desktop/main.mjs"
+    },
+    "directories": {
+      "output": "release"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "desktop/**/*",
+      "collector/**/*",
+      "dist/**/*",
+      "build/icon.png",
+      "node_modules/playwright-core/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "collector/directSignerRunner.cjs",
+      "node_modules/playwright-core/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".local-data/direct-signer",
+        "to": "direct-signer",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "ContentInsights-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "内容数据工作台",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    }
   }
 }

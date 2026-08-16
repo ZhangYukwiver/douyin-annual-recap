@@ -19,7 +19,11 @@ export const DIRECT_SIGNER_FILES = Object.freeze({
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultSignerDirectory = path.resolve(moduleDirectory, "..", ".local-data", "direct-signer");
-const signerRunnerPath = path.join(moduleDirectory, "directSignerRunner.cjs");
+const asarPathMarker = `${path.sep}app.asar${path.sep}`;
+const signerRunnerPath = path.join(moduleDirectory, "directSignerRunner.cjs").replace(
+  asarPathMarker,
+  `${path.sep}app.asar.unpacked${path.sep}`,
+);
 const templateFileName = "direct-history-template.json";
 const LOGIN_COOKIE_NAMES = new Set(["sessionid", "sessionid_ss", "sid_tt", "sid_guard"]);
 const BUSINESS_PARAMETERS = new Map([
@@ -54,6 +58,7 @@ const REQUIRED_TEMPLATE_PARAMETERS = new Set([
 const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
 const MAX_SIGNER_OUTPUT_BYTES = 64 * 1024;
 const SIGNER_TIMEOUT_MS = 8_000;
+const MACOS_SIGNER_PROFILE = "(version 1) (allow default) (deny network*) (deny file-write*)";
 
 export class DirectHistoryError extends Error {
   constructor(code, message) {
@@ -61,6 +66,48 @@ export class DirectHistoryError extends Error {
     this.name = "DirectHistoryError";
     this.code = code;
   }
+}
+
+export function directSignerProcessConfiguration({
+  platform = process.platform,
+  executablePath = process.execPath,
+  runtimeDirectory,
+  runnerPath = signerRunnerPath,
+} = {}) {
+  if (!runtimeDirectory || !runnerPath || !executablePath) {
+    throw new DirectHistoryError("signer_failed", "直接读取签名器缺少运行路径。");
+  }
+  if (platform !== "darwin" && platform !== "win32") {
+    throw new DirectHistoryError("unsupported_platform", "直接读取目前仅支持 Windows 和 macOS。");
+  }
+  const resolvedRuntimeDirectory = path.resolve(runtimeDirectory);
+  const resolvedRunnerPath = path.resolve(runnerPath);
+  const nodeArguments = [
+    "--permission",
+    `--allow-fs-read=${resolvedRuntimeDirectory}`,
+    `--allow-fs-read=${resolvedRunnerPath}`,
+    resolvedRunnerPath,
+    resolvedRuntimeDirectory,
+  ];
+  const env = {
+    LANG: "C",
+    LC_ALL: "C",
+    TZ: "UTC",
+    ELECTRON_RUN_AS_NODE: "1",
+    ...(platform === "win32" && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+  };
+  return {
+    command: platform === "darwin" ? "/usr/bin/sandbox-exec" : executablePath,
+    args: platform === "darwin"
+      ? ["-p", MACOS_SIGNER_PROFILE, executablePath, ...nodeArguments]
+      : nodeArguments,
+    options: {
+      cwd: resolvedRuntimeDirectory,
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  };
 }
 
 function signerDirectory(value) {
@@ -160,7 +207,10 @@ export async function verifyDirectSigner(directory) {
     try {
       content = await readFile(path.join(root, relativePath));
     } catch {
-      throw new DirectHistoryError("signer_missing", "直接读取签名器尚未安装，请先运行 npm run direct:setup。");
+      throw new DirectHistoryError(
+        "signer_missing",
+        "直接读取签名器缺失，请重新安装应用；开发环境请运行 npm run direct:setup。",
+      );
     }
     if (sha256(content) !== expectedHash) {
       throw new DirectHistoryError("signer_tampered", "直接读取签名器校验失败，已拒绝执行。");
@@ -289,27 +339,15 @@ export async function signDirectHistoryUrl(unsignedUrl, { directory, uifid = "",
   if (!url) throw new DirectHistoryError("unsafe_url", "直接读取只允许固定的抖音观看历史接口。");
   const validatedUserAgent = validateUserAgent(userAgent);
   if (!validatedUserAgent) throw new DirectHistoryError("template_invalid", "直接读取模板缺少有效浏览器标识。");
-  if (process.platform !== "darwin") {
-    throw new DirectHistoryError("unsupported_platform", "直接读取原型目前只允许在 macOS 安全沙箱中运行。");
-  }
   const runtimeDirectory = await verifyDirectSigner(directory);
-  const profile = "(version 1) (allow default) (deny network*) (deny file-write*)";
+  const processConfiguration = directSignerProcessConfiguration({ runtimeDirectory });
   const payload = JSON.stringify({ url: url.toString(), method: "GET", body: "", uifid, userAgent: validatedUserAgent });
   const signature = await new Promise((resolve, reject) => {
-    const child = spawn("/usr/bin/sandbox-exec", [
-      "-p",
-      profile,
-      process.execPath,
-      "--permission",
-      `--allow-fs-read=${runtimeDirectory}`,
-      `--allow-fs-read=${signerRunnerPath}`,
-      signerRunnerPath,
-      runtimeDirectory,
-    ], {
-      cwd: runtimeDirectory,
-      env: { LANG: "C", LC_ALL: "C", TZ: "UTC" },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = spawn(
+      processConfiguration.command,
+      processConfiguration.args,
+      processConfiguration.options,
+    );
     let stdout = Buffer.alloc(0);
     let totalOutput = 0;
     let outputTooLarge = false;
@@ -506,6 +544,7 @@ export async function collectDirectRecordPages(context, type, onPage) {
   const seenPages = new Map();
   let terminal = false;
   let responseError = null;
+  let accessError = null;
   let responseCount = 0;
   const responseQueue = [];
   page.on("response", (response) => {
@@ -529,9 +568,13 @@ export async function collectDirectRecordPages(context, type, onPage) {
   });
   const processResponse = async ({ body, headers, status }) => {
     if (terminal || responseError) return;
-    if (status === 401 || status === 403) throw new DirectHistoryError("session_rejected", `${config.label}读取返回 HTTP ${status}。`);
+    if (status === 401 || status === 403) {
+      accessError = new DirectHistoryError("session_rejected", `${config.label}读取返回 HTTP ${status}。`);
+      return;
+    }
     if (status === 429) throw new DirectHistoryError("rate_limited", `${config.label}读取触发限流。`);
     if (status !== 200) throw new DirectHistoryError("http_error", `${config.label}读取返回 HTTP ${status}。`);
+    accessError = null;
     const declaredLength = Number(headers["content-length"] ?? 0);
     if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
       throw new DirectHistoryError("response_too_large", `${config.label}响应过大，已拒绝处理。`);
@@ -601,6 +644,7 @@ export async function collectDirectRecordPages(context, type, onPage) {
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     await processQueuedResponses().catch((error) => { responseError = error; });
     if (responseError) throw responseError;
+    if (accessError && !terminal) throw accessError;
     if (!terminal) throw new DirectHistoryError("pagination_missing", `${config.label}未到达末页，已停止且未保存本次结果。`);
     return responseCount;
   } finally {
@@ -609,7 +653,10 @@ export async function collectDirectRecordPages(context, type, onPage) {
 }
 
 async function checkSigner() {
-  const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  const onWindows = process.platform === "win32";
+  const userAgent = onWindows
+    ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    : "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
   const url = new URL(DIRECT_HISTORY_ENDPOINT);
   for (const [name, value] of BUSINESS_PARAMETERS) url.searchParams.append(name, value);
   url.searchParams.append("device_platform", "webapp");
@@ -617,7 +664,7 @@ async function checkSigner() {
   url.searchParams.append("screen_width", "1920");
   url.searchParams.append("screen_height", "1080");
   url.searchParams.append("browser_language", "zh-CN");
-  url.searchParams.append("browser_platform", "MacIntel");
+  url.searchParams.append("browser_platform", onWindows ? "Win32" : "MacIntel");
   url.searchParams.append("cpu_core_num", "8");
   url.searchParams.append("device_memory", "8");
   url.searchParams.append("webid", "1234567890123456789");

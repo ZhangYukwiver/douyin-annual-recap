@@ -181,23 +181,24 @@ async function readJsonBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-async function main() {
-  const options = parseArguments(process.argv.slice(2));
-  if (options.help) {
-    printHelp();
-    return;
-  }
-
-  const executablePath = await findChromeExecutable();
+export async function startCollectorServer({
+  lan = false,
+  port = DEFAULT_PORT,
+  origins = [],
+  dataDirectory = path.join(projectDirectory, ".local-data"),
+  signerDirectory,
+  executablePath: configuredExecutablePath,
+} = {}) {
+  const options = { lan, port, origins };
+  const executablePath = configuredExecutablePath ?? await findChromeExecutable();
   if (!executablePath) {
     throw new Error("未找到 Google Chrome。可通过 DOUYIN_CHROME_PATH 指定浏览器路径。");
   }
 
-  const dataDirectory = path.join(projectDirectory, ".local-data");
   await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
   await chmod(dataDirectory, 0o700);
   const store = new CollectorStore(dataDirectory);
-  const collector = new DouyinCollector({ executablePath, dataDirectory, store });
+  const collector = new DouyinCollector({ executablePath, dataDirectory, signerDirectory, store });
   await collector.initialize();
   const pairing = new PairingManager();
   const bindAddress = options.lan ? "0.0.0.0" : "127.0.0.1";
@@ -224,6 +225,16 @@ async function main() {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
     if (request.method === "GET" && url.pathname === "/v1/health") {
       sendJson(response, 200, { ok: true, version: 1 });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/pairing-code") {
+      const remoteAddress = request.socket.remoteAddress ?? "unknown";
+      if (!isLoopbackAddress(remoteAddress)) {
+        sendJson(response, 403, { error: "pairing_code_local_only" });
+        return;
+      }
+      sendJson(response, 200, { code: pairing.displayCode() });
       return;
     }
 
@@ -260,6 +271,9 @@ async function main() {
     } else if (request.method === "POST" && url.pathname === "/v1/sync") {
       const started = collector.startSync();
       sendJson(response, started ? 202 : 200, { started, status: collector.getStatus() });
+    } else if (request.method === "POST" && url.pathname === "/v1/sync/stop") {
+      const stopped = collector.stopSync();
+      sendJson(response, 200, { stopped, status: collector.getStatus() });
     } else if (request.method === "POST" && url.pathname === "/v1/experimental/records-direct") {
       if (!isLoopbackAddress(request.socket.remoteAddress)) {
         sendJson(response, 403, { error: "loopback_only" });
@@ -295,25 +309,53 @@ async function main() {
     server.listen(options.port, bindAddress, resolve);
   });
 
-  console.log(`本地采集服务: http://127.0.0.1:${options.port}`);
-  if (options.lan) {
-    for (const address of localLanAddresses()) console.log(`局域网地址: http://${address}:${options.port}`);
-  }
-  console.log(`配对码: ${pairing.displayCode()}`);
-  console.log(`浏览器数据仅保存在: ${dataDirectory}`);
-
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await collector.close();
-    await new Promise((resolve) => server.close(resolve));
+    try {
+      await collector.close();
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   };
-  process.once("SIGINT", () => void shutdown().then(() => process.exit(0)));
-  process.once("SIGTERM", () => void shutdown().then(() => process.exit(0)));
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await shutdown();
+    throw new Error("采集服务未能分配 TCP 端口。");
+  }
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    dataDirectory,
+    getPairingCode: () => pairing.displayCode(),
+    close: shutdown,
+  };
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : "采集服务启动失败。");
-  process.exitCode = 1;
-});
+async function main() {
+  const options = parseArguments(process.argv.slice(2));
+  if (options.help) {
+    printHelp();
+    return;
+  }
+
+  const runtime = await startCollectorServer(options);
+  console.log(`本地采集服务: ${runtime.baseUrl}`);
+  if (options.lan) {
+    const port = new URL(runtime.baseUrl).port;
+    for (const address of localLanAddresses()) console.log(`局域网地址: http://${address}:${port}`);
+  }
+  console.log(`配对码: ${runtime.getPairingCode()}`);
+  console.log(`浏览器数据仅保存在: ${runtime.dataDirectory}`);
+
+  process.once("SIGINT", () => void runtime.close().then(() => process.exit(0)));
+  process.once("SIGTERM", () => void runtime.close().then(() => process.exit(0)));
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : "采集服务启动失败。");
+    process.exitCode = 1;
+  });
+}

@@ -371,6 +371,8 @@ async function requestJson(
       const errorCode = isObject(payload) && typeof payload.error === "string" ? payload.error : `http_${response.status}`;
       const message = errorCode === "invalid_pairing_code"
         ? "配对码无效或已使用。"
+        : errorCode === "pairing_code_local_only"
+          ? "自动获取配对码仅支持当前电脑，请输入采集器显示的配对码。"
         : errorCode === "not_paired"
           ? "连接已过期，请重新配对。"
           : `采集服务请求失败（${response.status}）。`;
@@ -393,6 +395,14 @@ export async function checkCollectorHealth(baseUrl: string): Promise<void> {
   if (!isObject(value) || value.ok !== true || value.version !== 1) {
     throw new LocalCollectorError("invalid_response", "该地址不是兼容的本地采集服务。");
   }
+}
+
+export async function getCollectorPairingCode(baseUrl: string): Promise<string> {
+  const value = await requestJson(baseUrl, "/v1/pairing-code");
+  if (!isObject(value) || typeof value.code !== "string" || !/^\d{8}$/u.test(value.code)) {
+    throw new LocalCollectorError("invalid_response", "采集服务未返回有效配对码。");
+  }
+  return value.code;
 }
 
 export async function pairCollector(baseUrl: string, code: string): Promise<string> {
@@ -418,6 +428,12 @@ export async function getCollectorRecords(baseUrl: string, token: string): Promi
 export async function startCollectorSync(baseUrl: string, token: string): Promise<CollectorStatus> {
   const value = await requestJson(baseUrl, "/v1/sync", { method: "POST" }, token);
   if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回同步状态。");
+  return parseStatus(value.status);
+}
+
+export async function stopCollectorSync(baseUrl: string, token: string): Promise<CollectorStatus> {
+  const value = await requestJson(baseUrl, "/v1/sync/stop", { method: "POST" }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回停止状态。");
   return parseStatus(value.status);
 }
 

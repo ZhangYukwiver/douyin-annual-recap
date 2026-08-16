@@ -22,13 +22,20 @@ describe("CollectorStore", () => {
       });
 
       await store.save(records, ["第一次"]);
-      await store.save(records, ["第二次"]);
+      await store.save(records, ["第二次"], {
+        directSync: { watch_history: true, liked_videos: false, favorite_videos: true },
+      });
 
       const loaded = await store.load();
       const raw = await readFile(path.join(directory, "records.json"), "utf8");
       expect(loaded.schemaVersion).toBe(2);
       expect(loaded.records.liked_videos).toHaveLength(1);
       expect(loaded.warnings).toEqual(["第二次"]);
+      expect(loaded.directSync).toEqual({
+        watch_history: true,
+        liked_videos: false,
+        favorite_videos: true,
+      });
       expect(raw).not.toMatch(/cookie|msToken|a_bogus|x-bogus/iu);
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -63,6 +70,7 @@ describe("CollectorStore", () => {
         schemaVersion: 2,
         updatedAt: "2025-01-01T00:00:00.000Z",
         warnings: ["legacy warning"],
+        directSync: { watch_history: false, liked_videos: false, favorite_videos: false },
       });
       expect(loaded.records.watch_history[0]).toMatchObject({
         id: "watch_history:legacy-video:2024-12-31T16:00:00.000Z",
@@ -72,6 +80,29 @@ describe("CollectorStore", () => {
       });
       expect(persisted.schemaVersion).toBe(2);
       expect(persisted.records.watch_history).toHaveLength(1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates the legacy completion warning into explicit per-type direct sync state", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "douyin-collector-store-v2-"));
+    try {
+      const filePath = path.join(directory, "records.json");
+      await writeFile(filePath, JSON.stringify({
+        schemaVersion: 2,
+        updatedAt: "2026-08-15T00:00:00.000Z",
+        records: createEmptyRecords(),
+        warnings: ["无界面读取完成：观看历史 25 页、点赞 72 页、收藏 12 页。"],
+      }), "utf8");
+
+      const loaded = await new CollectorStore(directory).load();
+
+      expect(loaded.directSync).toEqual({
+        watch_history: true,
+        liked_videos: true,
+        favorite_videos: true,
+      });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

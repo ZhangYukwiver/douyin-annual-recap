@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { DouyinCollector, normalizeOwnProfileUrl, profileTabUrl } from "./douyinCollector.mjs";
+import {
+  directContextLaunchOptions,
+  DouyinCollector,
+  normalizeOwnProfileUrl,
+  profileTabUrl,
+} from "./douyinCollector.mjs";
 import { createEmptyRecords } from "./normalizer.mjs";
 import { createEndpointProgress } from "./progress.mjs";
+import { normalizeDirectSyncState } from "./store.mjs";
 
 function emptySnapshot() {
   return {
@@ -10,6 +16,19 @@ function emptySnapshot() {
     updatedAt: "2026-08-09T00:00:00.000Z",
     records: createEmptyRecords(),
     warnings: [],
+    directSync: normalizeDirectSyncState(null),
+  };
+}
+
+function mockStore(updatedAt = "2026-08-09T00:10:00.000Z") {
+  return {
+    save: vi.fn(async (records, warnings, options = {}) => ({
+      schemaVersion: 2,
+      updatedAt,
+      records: structuredClone(records),
+      warnings: structuredClone(warnings),
+      directSync: normalizeDirectSyncState(options.directSync),
+    })),
   };
 }
 
@@ -42,14 +61,7 @@ function fakeContext(page) {
 function collectorForResponses(initialSnapshot, responses) {
   const page = { url: () => "https://www.douyin.com/user/account-id?showTab=favorite_collection" };
   const context = fakeContext(page);
-  const store = {
-    save: vi.fn(async (records, warnings) => ({
-      schemaVersion: 2,
-      updatedAt: "2026-08-09T00:10:00.000Z",
-      records,
-      warnings,
-    })),
-  };
+  const store = mockStore();
   const collector = new DouyinCollector({
     executablePath: "chrome",
     dataDirectory: ".local-data-test",
@@ -89,6 +101,72 @@ describe("Douyin profile routing", () => {
     expect(profileTabUrl("https://www.douyin.com/user/account-id", "favorite_collection"))
       .toBe("https://www.douyin.com/user/account-id?showTab=favorite_collection");
     expect(profileTabUrl("https://www.douyin.com/user/account-id", "unknown")).toBeNull();
+  });
+});
+
+describe("direct browser launch options", () => {
+  it("uses an offscreen headed Chrome window on Windows", () => {
+    expect(directContextLaunchOptions({
+      executablePath: "chrome.exe",
+      userAgent: "test-agent",
+      platform: "win32",
+    })).toMatchObject({
+      executablePath: "chrome.exe",
+      headless: false,
+      userAgent: "test-agent",
+      args: [
+        "--window-position=-32000,-32000",
+        "--window-size=1280,900",
+      ],
+    });
+  });
+
+  it("keeps headless mode where an offscreen desktop window is unavailable", () => {
+    expect(directContextLaunchOptions({
+      executablePath: "chromium",
+      userAgent: "test-agent",
+      platform: "linux",
+    })).toMatchObject({ headless: true });
+  });
+});
+
+describe("DouyinCollector sync cancellation", () => {
+  it("stops an active sync and keeps the last saved snapshot", async () => {
+    let releaseRun;
+    const runGate = new Promise((resolve) => {
+      releaseRun = resolve;
+    });
+    const collector = new DouyinCollector({
+      executablePath: "chrome",
+      dataDirectory: ".local-data-test",
+      store: {},
+    });
+    collector.snapshot = emptySnapshot();
+    collector.runSync = vi.fn(async (runId) => {
+      await runGate;
+      collector.assertSyncActive(runId);
+    });
+
+    expect(collector.startSync()).toBe(true);
+    const runningSync = collector.syncPromise;
+    expect(collector.stopSync()).toBe(true);
+    expect(collector.stopSync()).toBe(false);
+    expect(collector.status).toMatchObject({
+      state: "collecting",
+      phase: null,
+      message: "正在停止读取",
+    });
+
+    releaseRun();
+    await runningSync;
+
+    expect(collector.syncPromise).toBeNull();
+    expect(collector.status).toMatchObject({
+      state: "idle",
+      phase: null,
+      message: "已停止读取，已保留上次保存的记录",
+      counts: { watch_history: 0, liked_videos: 0, favorite_videos: 0 },
+    });
   });
 });
 
@@ -183,14 +261,7 @@ describe("DouyinCollector manual observation", () => {
   it("persists only responses produced while the user browses the dedicated browser", async () => {
     const page = { url: () => "https://www.douyin.com/" };
     const context = fakeContext(page);
-    const store = {
-      save: vi.fn(async (records, warnings) => ({
-        schemaVersion: 2,
-        updatedAt: "2026-08-09T00:20:00.000Z",
-        records,
-        warnings,
-      })),
-    };
+    const store = mockStore("2026-08-09T00:20:00.000Z");
     const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
     collector.snapshot = emptySnapshot();
     collector.ensureBrowser = vi.fn().mockResolvedValue(context);
@@ -288,6 +359,68 @@ describe("DouyinCollector response completion", () => {
     expect(collector.status.state).toBe("complete");
   });
 
+  it("recovers a later page after one duplicate response and a lost response body", async () => {
+    const firstPagePayload = {
+      status_code: 0,
+      aweme_list: [{ aweme_id: "first-like", desc: "第一页记录" }],
+      has_more: 1,
+      max_cursor: "page-2",
+    };
+    const secondPagePayload = {
+      status_code: 0,
+      aweme_list: [{ aweme_id: "second-like", desc: "第二页记录" }],
+      has_more: 1,
+      max_cursor: "page-3",
+    };
+    const recoveredPayload = {
+      status_code: 0,
+      aweme_list: [{ aweme_id: "recovered-like", desc: "末页重试记录" }],
+      has_more: 0,
+    };
+    const replayPage = {
+      evaluate: vi.fn().mockResolvedValue({
+        body: JSON.stringify(recoveredPayload),
+        ok: true,
+        status: 200,
+        tooLarge: false,
+      }),
+    };
+    const lostResponse = {
+      ...fakeResponse("/aweme/v1/web/aweme/favorite/", () => Promise.reject(new Error("response body unavailable"))),
+      request: () => ({
+        allHeaders: () => Promise.resolve({ cookie: "private", "x-test-header": "kept" }),
+        frame: () => ({ page: () => replayPage }),
+        method: () => "GET",
+      }),
+    };
+    const { collector } = collectorForResponses(emptySnapshot(), {});
+    const context = collector.context;
+    collector.collectPhase = vi.fn(async (_page, _versions, phase) => {
+      if (phase === "liked_videos") {
+        context.emit("response", fakeResponse("/aweme/v1/web/aweme/favorite/", firstPagePayload));
+        context.emit("response", fakeResponse("/aweme/v1/web/aweme/favorite/", firstPagePayload));
+        context.emit("response", fakeResponse("/aweme/v1/web/aweme/favorite/", secondPagePayload));
+        context.emit("response", lostResponse);
+        return;
+      }
+      const path = phase === "watch_history"
+        ? "/aweme/v1/web/history/read/"
+        : "/aweme/v1/web/aweme/listcollection/";
+      context.emit("response", fakeResponse(path, terminalEmptyVideos));
+    });
+
+    await collector.runSync(1);
+
+    expect(replayPage.evaluate).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({
+      requestHeaders: { "x-test-header": "kept" },
+      timeoutMs: 8_000,
+    }));
+    expect(collector.snapshot.records.liked_videos.map((record) => record.videoId))
+      .toEqual(["first-like", "second-like", "recovered-like"]);
+    expect(collector.snapshot.warnings).toEqual([]);
+    expect(collector.status.state).toBe("complete");
+  });
+
   it("applies pagination results in response order when JSON parsing finishes out of order", async () => {
     const delayedFirstPage = fakeResponse("/aweme/v1/web/history/read/", () => new Promise((resolve) => {
       setTimeout(() => resolve({
@@ -346,13 +479,46 @@ describe("DouyinCollector response completion", () => {
     expect(collector.snapshot.records.liked_videos).toHaveLength(55);
     expect(collector.snapshot.records.favorite_videos).toHaveLength(55);
     expect(collector.snapshot.records.watch_history.map((record) => record.videoId))
-      .toEqual(Array.from({ length: 55 }, (_, index) => `watch-${index}`));
+      .toEqual(Array.from({ length: 55 }, (_, index) => `watch-${54 - index}`));
     expect(collector.snapshot.records.liked_videos.map((record) => record.videoId))
       .toEqual(Array.from({ length: 55 }, (_, index) => `liked-${index}`));
     expect(collector.snapshot.records.favorite_videos.map((record) => record.videoId))
       .toEqual(Array.from({ length: 55 }, (_, index) => `favorite-${index}`));
     expect(collector.snapshot.warnings).toEqual([]);
     expect(collector.status.state).toBe("complete");
+  });
+
+  it("merges a complete automatic watch scan and preserves direct sync boundaries", async () => {
+    const initial = emptySnapshot();
+    initial.directSync = normalizeDirectSyncState({
+      watch_history: true,
+      liked_videos: true,
+      favorite_videos: true,
+    });
+    initial.records.watch_history = [{
+      id: "watch_history:old-watch:2026-08-01T00:00:00.000Z",
+      title: "平台当前窗口外的旧观看",
+      author: null,
+      occurredAt: "2026-08-01T00:00:00.000Z",
+      occurredAtSource: "platform_action",
+      url: "https://www.douyin.com/video/old-watch",
+      videoId: "old-watch",
+    }];
+    const { collector } = collectorForResponses(initial, {
+      watch_history: fakeResponse("/aweme/v1/web/history/read/", {
+        status_code: 0,
+        aweme_list: [{ aweme_id: "new-watch", history_info: { view_time: 1_786_000_000 } }],
+        has_more: 0,
+      }),
+      liked_videos: fakeResponse("/aweme/v1/web/aweme/favorite/", terminalEmptyVideos),
+      favorite_videos: fakeResponse("/aweme/v1/web/aweme/listcollection/", terminalEmptyVideos),
+    });
+
+    await collector.runSync(1);
+
+    expect(collector.snapshot.records.watch_history.map((record) => record.videoId))
+      .toEqual(["new-watch", "old-watch"]);
+    expect(collector.snapshot.directSync).toEqual(initial.directSync);
   });
 
   it("keeps the previous sample when a later response cannot be normalized", async () => {
@@ -452,7 +618,7 @@ describe("DouyinCollector response completion", () => {
 });
 
 describe("DouyinCollector direct records", () => {
-  it("reads history, likes, and favorites through each last page before saving", async () => {
+  it("reads each list through its last page and saves each completed phase", async () => {
     const initial = emptySnapshot();
     initial.warnings = [
       "其中 19 条缺少观看时间，已保持为空，未使用发布时间或采集时间替代。",
@@ -474,18 +640,13 @@ describe("DouyinCollector direct records", () => {
       url: "https://www.douyin.com/video/favorite-old",
       videoId: "favorite-old",
     }];
-    const store = {
-      save: vi.fn(async (records, warnings) => ({
-        schemaVersion: 2,
-        updatedAt: "2026-08-13T00:00:00.000Z",
-        records,
-        warnings,
-      })),
-    };
+    const store = mockStore("2026-08-13T00:00:00.000Z");
     const page = { evaluate: vi.fn(async () => "Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36") };
     const context = { close: vi.fn(async () => undefined), pages: vi.fn(() => [page]) };
     const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
     collector.snapshot = initial;
+    const visibleContext = { close: vi.fn(async () => undefined) };
+    collector.context = visibleContext;
     collector.syncRunId = 1;
     collector.openDirectContext = vi.fn(async () => context);
     collector.collectDirectList = vi.fn(async (_context, type, onPage) => {
@@ -522,7 +683,13 @@ describe("DouyinCollector direct records", () => {
       "1700000000000",
     ]);
     expect(collector.status.state).toBe("complete");
-    expect(store.save).toHaveBeenCalledTimes(1);
+    expect(store.save).toHaveBeenCalledTimes(3);
+    expect(collector.snapshot.directSync).toEqual({
+      watch_history: true,
+      liked_videos: true,
+      favorite_videos: true,
+    });
+    expect(visibleContext.close).toHaveBeenCalledTimes(1);
     expect(context.close).toHaveBeenCalledTimes(1);
   });
 
@@ -544,9 +711,43 @@ describe("DouyinCollector direct records", () => {
     expect(context.close).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a completed watch phase when a later direct list fails", async () => {
+    const store = mockStore("2026-08-13T00:00:00.000Z");
+    const page = { evaluate: vi.fn(async () => "Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36") };
+    const context = { close: vi.fn(async () => undefined), pages: vi.fn(() => [page]) };
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
+    collector.snapshot = emptySnapshot();
+    collector.syncRunId = 1;
+    collector.openDirectContext = vi.fn(async () => context);
+    collector.readDirectHistory = vi.fn(async () => ({
+      status_code: 0,
+      aweme_list: [{ aweme_id: "saved-watch", history_info: { view_time: 1_700_000_000 } }],
+      has_more: 0,
+    }));
+    collector.collectDirectList = vi.fn(async () => {
+      throw new Error("liked_request_failed");
+    });
+
+    await expect(collector.runDirectRecords(1)).rejects.toThrow("liked_request_failed");
+
+    expect(store.save).toHaveBeenCalledTimes(1);
+    expect(collector.snapshot.records.watch_history.map((record) => record.videoId)).toEqual(["saved-watch"]);
+    expect(collector.snapshot.directSync).toEqual({
+      watch_history: true,
+      liked_videos: false,
+      favorite_videos: false,
+    });
+    expect(context.close).toHaveBeenCalledTimes(1);
+  });
+
   it("reads only through the known boundary after a completed direct sync", async () => {
     const initial = emptySnapshot();
-    initial.warnings = ["无界面读取完成：观看历史 25 页、点赞 72 页、收藏 12 页。"];
+    initial.warnings = ["自动读取留下的普通提示，不应影响增量状态。"];
+    initial.directSync = normalizeDirectSyncState({
+      watch_history: true,
+      liked_videos: true,
+      favorite_videos: true,
+    });
     initial.records.watch_history = [{
       id: "watch_history:history-old:2023-11-14T22:13:20.000Z",
       title: "旧观看",
@@ -588,14 +789,7 @@ describe("DouyinCollector direct records", () => {
       url: "https://www.douyin.com/video/favorite-old",
       videoId: "favorite-old",
     }];
-    const store = {
-      save: vi.fn(async (records, warnings) => ({
-        schemaVersion: 2,
-        updatedAt: "2026-08-14T00:00:00.000Z",
-        records,
-        warnings,
-      })),
-    };
+    const store = mockStore("2026-08-14T00:00:00.000Z");
     const page = { evaluate: vi.fn(async () => "Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36") };
     const context = { close: vi.fn(async () => undefined), pages: vi.fn(() => [page]) };
     const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
@@ -638,9 +832,9 @@ describe("DouyinCollector direct records", () => {
     await collector.runDirectRecords(1);
 
     expect(collector.readDirectHistory).toHaveBeenCalledTimes(1);
-    expect(collector.snapshot.records.watch_history).toHaveLength(3);
+    expect(collector.snapshot.records.watch_history).toHaveLength(4);
     expect(collector.snapshot.records.watch_history.map((record) => record.id)).toContain("watch_history:history-old");
-    expect(collector.snapshot.records.watch_history.map((record) => record.videoId)).not.toContain("history-low");
+    expect(collector.snapshot.records.watch_history.map((record) => record.videoId)).toContain("history-low");
     expect(collector.snapshot.records.liked_videos).toHaveLength(2);
     expect(collector.snapshot.records.favorite_videos).toHaveLength(2);
     expect(collector.snapshot.records.liked_videos.find((record) => record.videoId === "liked-old")).toMatchObject({
@@ -652,7 +846,7 @@ describe("DouyinCollector direct records", () => {
       occurredAtSource: "platform_action",
     });
     expect(collector.status.message).toBe("已读取新增记录（观看 1、点赞 1、收藏 1）");
-    expect(store.save).toHaveBeenCalledTimes(1);
+    expect(store.save).toHaveBeenCalledTimes(3);
   });
 
   it("does not save when direct pagination repeats a cursor", async () => {
@@ -677,7 +871,7 @@ describe("DouyinCollector direct records", () => {
     expect(context.close).toHaveBeenCalledTimes(1);
   });
 
-  it("replaces stale history with the complete direct result", async () => {
+  it("merges a complete direct result without deleting older watch history", async () => {
     const initial = emptySnapshot();
     initial.records.watch_history = Array.from({ length: 80 }, (_, index) => ({
       id: `watch_history:existing-${index}`,
@@ -688,14 +882,7 @@ describe("DouyinCollector direct records", () => {
       url: `https://www.douyin.com/video/existing-${index}`,
       videoId: `existing-${index}`,
     }));
-    const store = {
-      save: vi.fn(async (records, warnings) => ({
-        schemaVersion: 2,
-        updatedAt: "2026-08-13T00:00:00.000Z",
-        records,
-        warnings,
-      })),
-    };
+    const store = mockStore("2026-08-13T00:00:00.000Z");
     const page = { evaluate: vi.fn(async () => "Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36") };
     const context = { close: vi.fn(async () => undefined), pages: vi.fn(() => [page]) };
     const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
@@ -718,8 +905,9 @@ describe("DouyinCollector direct records", () => {
 
     await collector.runDirectRecords(1);
 
-    expect(collector.snapshot.records.watch_history).toHaveLength(1);
-    expect(collector.snapshot.records.watch_history[0].videoId).toBe("history-new");
+    expect(collector.snapshot.records.watch_history).toHaveLength(81);
+    expect(collector.snapshot.records.watch_history.map((record) => record.videoId)).toContain("history-new");
+    expect(collector.snapshot.records.watch_history.map((record) => record.videoId)).toContain("existing-0");
   });
 });
 
@@ -962,5 +1150,39 @@ describe("DouyinCollector deterministic tab fallback", () => {
 
     expect(page.evaluate).toHaveBeenCalled();
     expect(page.mouse.wheel).not.toHaveBeenCalled();
+  });
+
+  it("stops a visually moving surface when endpoint responses make no progress", async () => {
+    let currentTime = 0;
+    const wait = vi.fn(async (milliseconds) => {
+      currentTime += milliseconds;
+    });
+    const progress = createEndpointProgress();
+    progress.matchedCount = 1;
+    progress.processedCount = 1;
+    const page = {
+      evaluate: vi.fn().mockResolvedValue({ resolved: true, moved: true, atBottom: false }),
+    };
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.syncRunId = 1;
+
+    await collector.scrollUntilIdle(
+      page,
+      new Map([["liked_videos", 1]]),
+      ["liked_videos"],
+      1,
+      [progress],
+      Number.POSITIVE_INFINITY,
+      "like",
+      {
+        now: () => currentTime,
+        wait,
+        responseSilenceTimeoutMs: 1_800,
+      },
+    );
+
+    expect(wait).toHaveBeenCalledTimes(2);
+    expect(progress.responseProgressStalled).toBe(true);
+    expect(progress.visualSurfaceMissing).toBe(false);
   });
 });

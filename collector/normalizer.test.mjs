@@ -276,18 +276,18 @@ describe("normalizeDouyinResponse", () => {
 });
 
 describe("RecordAccumulator", () => {
-  it("drops collected watch records below ten percent while keeping the boundary and unknown progress", () => {
+  it("drops collected watch records below twenty percent while keeping the boundary and unknown progress", () => {
     const endpoint = matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/history/read/");
     const accumulator = new RecordAccumulator();
     const result = accumulator.addResponse(endpoint, {
       status_code: 0,
       aweme_list: [{
-        aweme_id: "below-ten",
-        play_progress: { play_progress: 999 },
+        aweme_id: "below-twenty",
+        play_progress: { play_progress: 1_999 },
         video: { duration: 10_000 },
       }, {
-        aweme_id: "exactly-ten",
-        play_progress: { play_progress: 1_000 },
+        aweme_id: "exactly-twenty",
+        play_progress: { play_progress: 2_000 },
         video: { duration: 10_000 },
       }, {
         aweme_id: "unknown-progress",
@@ -297,18 +297,18 @@ describe("RecordAccumulator", () => {
     });
 
     expect(result.pageSize).toBe(3);
-    expect(result.rejectedRecordIds).toEqual(["watch_history:below-ten"]);
+    expect(result.rejectedRecordIds).toEqual(["watch_history:below-twenty"]);
     expect(result.acceptedRecordIds).toEqual([
-      "watch_history:exactly-ten",
+      "watch_history:exactly-twenty",
       "watch_history:unknown-progress",
     ]);
     expect(accumulator.snapshot().records.watch_history.map((record) => record.videoId)).toEqual([
-      "exactly-ten",
+      "exactly-twenty",
       "unknown-progress",
     ]);
     expect(accumulator.snapshot().records.watch_history[0]?.watchProgress).toEqual({
-      watchedSeconds: 1,
-      percent: 10,
+      watchedSeconds: 2,
+      percent: 20,
     });
   });
 

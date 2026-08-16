@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "contentinsights",
+    "icon": "./build/icon.png",
     "android": {
       "usesCleartextTraffic": true
     },
@@ -16,7 +17,8 @@
       }
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "favicon": "./build/icon-48.png"
     }
   }
 }

@@ -35,8 +35,14 @@ import {
   Unplug,
 } from "lucide-react-native";
 
-import { AnnualExperience } from "./src/components/annual";
 import { StatusBadge } from "./src/components/StatusBadge";
+import {
+  ContentWorkspace,
+  SetupWorkspace,
+  type WorkspaceViewKey,
+  workspaceColors,
+} from "./src/components/workspace";
+import { AnnualScrollStory } from "./src/components/story/AnnualScrollStory";
 import { buildPersonalSummary } from "./src/domain/annualReport";
 import {
   describeArchiveInspection,
@@ -54,6 +60,7 @@ import {
 import {
   checkCollectorHealth,
   clearCollectorRecords,
+  getCollectorPairingCode,
   getCollectorRecords,
   getCollectorStatus,
   getDefaultCollectorBaseUrl,
@@ -64,6 +71,7 @@ import {
   startCollectorSync,
   startDirectRecordsSync,
   startCollectorObservation,
+  stopCollectorSync,
   stopCollectorObservation,
   switchCollectorAccount,
   type CollectorSnapshot,
@@ -73,9 +81,10 @@ import {
   describePersonalArchiveError,
   importPersonalArchive,
 } from "./src/services/importPersonalArchive";
+import { getDesktopCollectorConfig } from "./src/desktopRuntime";
 import { colors } from "./src/theme";
 
-type ViewKey = "summary" | "records" | "sources";
+type ViewKey = "summary" | "highlights" | "records" | "sources";
 type BadgeState = "ready" | "not_configured" | "invalid" | "manual_action";
 
 interface SelectedArchive {
@@ -91,6 +100,36 @@ interface DisplaySnapshot {
   records: PersonalRecordCollection;
   warnings: string[];
   updatedAt: string | null;
+}
+
+function getStoryDataVersion(snapshot: DisplaySnapshot | null): string | null {
+  if (!snapshot || countPersonalRecords(snapshot.records) === 0) return null;
+  if (snapshot.source === "collector" && snapshot.updatedAt) {
+    return `collector:${snapshot.updatedAt}`;
+  }
+
+  let hash = 2_166_136_261;
+  for (const type of PERSONAL_RECORD_TYPES) {
+    for (const character of type.id) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16_777_619);
+    }
+    const records = snapshot.records[type.id];
+    for (const record of records) {
+      for (const character of record.id) {
+        hash ^= character.charCodeAt(0);
+        hash = Math.imul(hash, 16_777_619);
+      }
+    }
+  }
+  return `${snapshot.source}:${hash >>> 0}`;
+}
+
+interface CollectorConnectionOptions {
+  baseUrl?: string;
+  pairingCode?: string;
+  revealSources?: boolean;
+  automaticPairing?: boolean;
 }
 
 const recordIcons = {
@@ -574,7 +613,7 @@ function SourcesView({
           </View>
         ) : null}
 
-        <Text style={styles.privacyNote}>Cookie 仅保留在 .local-data/browser-profile</Text>
+        <Text style={styles.privacyNote}>Cookie 仅保留在本机专用浏览器配置</Text>
       </View>
 
       <Text style={styles.groupLabel}>备用导入</Text>
@@ -607,8 +646,11 @@ function SourcesView({
 }
 
 function AppContent() {
-  const [activeView, setActiveView] = useState<ViewKey>(() => Platform.OS === "web" ? "summary" : "records");
+  const [activeView, setActiveView] = useState<ViewKey>("sources");
   const [activeRecord, setActiveRecord] = useState<PersonalRecordType>("watch_history");
+  const [storyOpen, setStoryOpen] = useState(false);
+  const [storyMountKey, setStoryMountKey] = useState(0);
+  const [privacy, setPrivacy] = useState(false);
   const [selectedArchive, setSelectedArchive] = useState<SelectedArchive | null>(null);
   const [pickingArchive, setPickingArchive] = useState(false);
   const [collectorUrl, setCollectorUrl] = useState(getDefaultCollectorBaseUrl());
@@ -617,6 +659,7 @@ function AppContent() {
   const [collectorStatus, setCollectorStatus] = useState<CollectorStatus | null>(null);
   const [collectorSnapshot, setCollectorSnapshot] = useState<CollectorSnapshot | null>(null);
   const [collectorBusy, setCollectorBusy] = useState(false);
+  const [stoppingSync, setStoppingSync] = useState(false);
   const [switchingAccount, setSwitchingAccount] = useState(false);
   const [collectorError, setCollectorError] = useState<string | null>(null);
   const importRequest = useRef(0);
@@ -624,6 +667,7 @@ function AppContent() {
   const connectingRef = useRef(false);
   const syncConfirmationOpenRef = useRef(false);
   const accountSwitchConfirmationOpenRef = useRef(false);
+  const lastAutoStoryVersionRef = useRef<string | null>(null);
 
   useEffect(() => () => {
     pollRequest.current += 1;
@@ -631,16 +675,24 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (Platform.OS !== "web" || typeof window === "undefined") return undefined;
-    const hostname = window.location.hostname.replace(/^\[|\]$/gu, "");
-    const code = ["localhost", "127.0.0.1", "::1"].includes(hostname)
-      ? parseLaunchPairingCode(window.location.hash)
-      : null;
-    if (!code) return undefined;
-
-    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`);
-    void connectCollector(code, true);
-    return undefined;
+    if (Platform.OS !== "web" || typeof document === "undefined") return undefined;
+    const styleId = "content-workspace-focus-styles";
+    if (document.getElementById(styleId)) return undefined;
+    const focusStyles = document.createElement("style");
+    focusStyles.id = styleId;
+    focusStyles.textContent = `
+      button:focus-visible,
+      input:focus-visible,
+      [role="button"]:focus-visible,
+      [role="tab"]:focus-visible,
+      [role="switch"]:focus-visible,
+      [role="link"]:focus-visible {
+        outline: 2px solid ${workspaceColors.cyan} !important;
+        outline-offset: 2px !important;
+      }
+    `;
+    document.head.appendChild(focusStyles);
+    return () => focusStyles.remove();
   }, []);
 
   const displaySnapshot: DisplaySnapshot | null = collectorSnapshot
@@ -660,7 +712,7 @@ function AppContent() {
       : null;
 
   const personalSummary = useMemo(() => {
-    if (Platform.OS !== "web" || !displaySnapshot) return null;
+    if (!displaySnapshot) return null;
     const collectionState = displaySnapshot?.source === "collector"
       ? collectorStatus?.state === "complete"
         ? "complete"
@@ -674,6 +726,12 @@ function AppContent() {
       warnings: displaySnapshot?.warnings ?? [],
     });
   }, [collectorStatus?.state, displaySnapshot?.records, displaySnapshot?.source, displaySnapshot?.warnings]);
+
+  useEffect(() => {
+    if (storyOpen && (!personalSummary || personalSummary.status === "empty")) {
+      setStoryOpen(false);
+    }
+  }, [personalSummary, storyOpen]);
 
   async function refreshCollectorSnapshot(baseUrl: string, token: string, requestId?: number): Promise<boolean> {
     const snapshot = await getCollectorRecords(baseUrl, token);
@@ -716,6 +774,7 @@ function AppContent() {
     const requestId = pollRequest.current + 1;
     pollRequest.current = requestId;
     setCollectorBusy(true);
+    setStoppingSync(false);
     setCollectorError(null);
     try {
       const status = directHistory
@@ -730,6 +789,34 @@ function AppContent() {
       const message = collectorErrorMessage(error);
       setCollectorError(message);
       showAlert(directHistory ? "无法直接读取记录" : "无法开始同步", message);
+    }
+  }
+
+  async function endSync(baseUrl: string, token: string) {
+    const requestId = pollRequest.current + 1;
+    pollRequest.current = requestId;
+    setCollectorBusy(true);
+    setStoppingSync(true);
+    setCollectorError(null);
+    try {
+      const status = await stopCollectorSync(baseUrl, token);
+      if (pollRequest.current !== requestId) return;
+      setCollectorStatus(status);
+      if (TERMINAL_COLLECTOR_STATES.has(status.state)) {
+        await refreshCollectorSnapshot(baseUrl, token, requestId);
+        if (pollRequest.current !== requestId) return;
+        setCollectorBusy(false);
+      } else {
+        await pollCollector(baseUrl, token, requestId);
+      }
+    } catch (error) {
+      if (pollRequest.current !== requestId) return;
+      setCollectorBusy(false);
+      const message = collectorErrorMessage(error);
+      setCollectorError(message);
+      showAlert("无法停止读取", message);
+    } finally {
+      if (pollRequest.current === requestId) setStoppingSync(false);
     }
   }
 
@@ -773,19 +860,59 @@ function AppContent() {
     }
   }
 
-  async function connectCollector(code = pairingCode, automatic = false) {
+  async function connectCollector(options: CollectorConnectionOptions = {}) {
     if (collectorToken || connectingRef.current) return;
     connectingRef.current = true;
+    let requestedUrl = options.baseUrl ?? collectorUrl;
+    let requestedPairingCode = options.pairingCode ?? pairingCode;
+    const revealSources = options.revealSources ?? true;
     const requestId = pollRequest.current + 1;
     pollRequest.current = requestId;
     let normalizedUrl: string | null = null;
     let pairedToken: string | null = null;
+    let healthChecked = false;
     setCollectorBusy(true);
     setCollectorError(null);
     try {
-      normalizedUrl = normalizeCollectorBaseUrl(collectorUrl);
-      await checkCollectorHealth(normalizedUrl);
-      pairedToken = await pairCollector(normalizedUrl, code);
+      if (options.automaticPairing) {
+        const desktopConfig = await getDesktopCollectorConfig();
+        if (desktopConfig) {
+          requestedUrl = desktopConfig.baseUrl;
+          requestedPairingCode = desktopConfig.pairingCode;
+        } else {
+          let launchCode: string | null = null;
+          if (Platform.OS === "web" && typeof window !== "undefined") {
+            const hostname = window.location.hostname.replace(/^\[|\]$/gu, "");
+            launchCode = ["localhost", "127.0.0.1", "::1"].includes(hostname)
+              ? parseLaunchPairingCode(window.location.hash)
+              : null;
+            if (launchCode) {
+              window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}`);
+            }
+          }
+
+          normalizedUrl = normalizeCollectorBaseUrl(requestedUrl);
+          await checkCollectorHealth(normalizedUrl);
+          healthChecked = true;
+          if (launchCode) {
+            requestedPairingCode = launchCode;
+          } else {
+            try {
+              requestedPairingCode = await getCollectorPairingCode(normalizedUrl);
+            } catch (error) {
+              if (!/^\d{8}$/u.test(pairingCode.trim())) throw error;
+              requestedPairingCode = pairingCode.trim();
+            }
+          }
+        }
+        if (pollRequest.current !== requestId) return;
+        setCollectorUrl(requestedUrl);
+        setPairingCode(requestedPairingCode);
+      }
+
+      normalizedUrl ??= normalizeCollectorBaseUrl(requestedUrl);
+      if (!healthChecked) await checkCollectorHealth(normalizedUrl);
+      pairedToken = await pairCollector(normalizedUrl, requestedPairingCode);
       if (pollRequest.current !== requestId) return;
       setCollectorUrl(normalizedUrl);
       setCollectorToken(pairedToken);
@@ -798,7 +925,7 @@ function AppContent() {
       setCollectorUrl(normalizedUrl);
       setCollectorStatus(status);
       setCollectorSnapshot(snapshot);
-      if (!automatic) setActiveView("sources");
+      if (revealSources) setActiveView("sources");
       if (TERMINAL_COLLECTOR_STATES.has(status.state)) {
         setCollectorBusy(false);
       } else {
@@ -836,7 +963,7 @@ function AppContent() {
     syncConfirmationOpenRef.current = true;
     confirmAlert(
       "实验性直接读取",
-      "首次会读取全部可见记录；已有一次成功的无界面读取后，只读取到本地已知记录为止，并合并本次新增内容。不会弹出浏览器，也不需要你手动打开或滚动列表。",
+      "尚未建立边界的分类会读取全部可见记录；已有边界的分类只读取到本地已知记录为止。每个分类完成后立即合并保存，全程不会弹出浏览器。",
       "读取新记录",
       (confirmed) => {
         syncConfirmationOpenRef.current = false;
@@ -856,9 +983,11 @@ function AppContent() {
     } catch (error) {
       stopError = collectorErrorMessage(error);
     } finally {
+      setStoryOpen(false);
       setCollectorToken(null);
       setCollectorStatus(null);
       setCollectorSnapshot(null);
+      setStoppingSync(false);
       setCollectorBusy(false);
       setCollectorError(stopError
         ? `已断开应用，但无法确认手动监听已停止：${stopError}`
@@ -873,6 +1002,7 @@ function AppContent() {
     setSwitchingAccount(true);
     setCollectorBusy(true);
     setCollectorError(null);
+    setStoryOpen(false);
     setCollectorSnapshot(null);
     try {
       const status = await switchCollectorAccount(collectorUrl, collectorToken);
@@ -951,6 +1081,7 @@ function AppContent() {
       "清除缓存",
       (confirmed) => {
         if (!confirmed) return;
+        setStoryOpen(false);
         if (collectorToken) {
           const requestId = pollRequest.current + 1;
           const token = collectorToken;
@@ -992,98 +1123,125 @@ function AppContent() {
     }
   }
 
-  const visibleNavigationItems = Platform.OS === "web"
-    ? navigationItems
-    : navigationItems.filter((item) => item.id !== "summary");
+  const workspaceRecords = displaySnapshot?.records ?? createEmptyPersonalRecords();
+  const workspaceView: WorkspaceViewKey = activeView === "summary" || activeView === "highlights" ? activeView : activeRecord;
+  const sourceLabel = displaySnapshot?.source === "collector"
+    ? "本地浏览器采集"
+    : displaySnapshot?.source === "archive"
+      ? "备用文件导入"
+      : "本地内容";
+  const archiveInfo = selectedArchive
+    ? {
+        name: selectedArchive.name,
+        detail: selectedArchive.data
+          ? `${countPersonalRecords(selectedArchive.data.records)} 条记录 | ${formatBytes(selectedArchive.size)}`
+          : describeArchiveInspection(selectedArchive.inspection),
+      }
+    : null;
+
+  function enterDashboard() {
+    setStoryOpen(false);
+    setActiveView("summary");
+  }
+
+  function enterWorkspace() {
+    const storyVersion = getStoryDataVersion(displaySnapshot);
+    setActiveView("summary");
+    if (
+      storyVersion
+      && personalSummary
+      && personalSummary.status !== "empty"
+      && lastAutoStoryVersionRef.current !== storyVersion
+    ) {
+      lastAutoStoryVersionRef.current = storyVersion;
+      setStoryMountKey((key) => key + 1);
+      setStoryOpen(true);
+      return;
+    }
+    setStoryOpen(false);
+  }
+
+  function replayStory() {
+    if (!personalSummary || personalSummary.status === "empty") return;
+    const storyVersion = getStoryDataVersion(displaySnapshot);
+    if (storyVersion) lastAutoStoryVersionRef.current = storyVersion;
+    setActiveView("summary");
+    setStoryMountKey((key) => key + 1);
+    setStoryOpen(true);
+  }
 
   return (
     <SafeAreaView edges={["top", "bottom"]} style={styles.safeArea}>
-      <StatusBar style="dark" />
-      {Platform.OS === "web" && activeView === "summary" ? (
-        <AnnualExperience
-          onOpenRecords={() => setActiveView("records")}
-          onOpenSources={() => setActiveView("sources")}
+      <StatusBar style="light" />
+      {storyOpen && personalSummary && personalSummary.status !== "empty" ? (
+        <AnnualScrollStory
+          key={`annual-story-${storyMountKey}`}
+          onEnterDashboard={enterDashboard}
+          privacy={privacy}
+          records={workspaceRecords}
           report={personalSummary}
+          sourceLabel={sourceLabel}
+        />
+      ) : activeView === "sources" ? (
+        <SetupWorkspace
+          archive={archiveInfo}
+          busy={collectorBusy}
+          collectorUrl={collectorUrl}
+          connected={collectorToken !== null}
+          error={collectorError}
+          onChangeCollectorUrl={(value) => {
+            setCollectorUrl(value);
+            setCollectorError(null);
+          }}
+          onChangePairingCode={(value) => {
+            setPairingCode(value);
+            setCollectorError(null);
+          }}
+          onClearCache={clearCurrentRecords}
+          onConnect={() => connectCollector({ automaticPairing: true })}
+          onDisconnect={disconnectCollector}
+          onEnterWorkspace={enterWorkspace}
+          onPickArchive={pickArchive}
+          onStartDirectHistory={confirmDirectHistorySync}
+          onStartObservation={() => collectorToken ? beginObservation(collectorUrl, collectorToken) : Promise.resolve()}
+          onStartSync={confirmAutomaticSync}
+          onStopSync={() => collectorToken ? endSync(collectorUrl, collectorToken) : Promise.resolve()}
+          onStopObservation={() => collectorToken ? endObservation(collectorUrl, collectorToken) : Promise.resolve()}
+          onSwitchAccount={confirmAccountSwitch}
+          observing={collectorStatus?.state === "observing"}
+          pairingCode={pairingCode}
+          pickingArchive={pickingArchive}
+          records={workspaceRecords}
+          snapshotSource={displaySnapshot?.source ?? null}
+          snapshotUpdatedAt={displaySnapshot?.updatedAt ?? null}
+          status={collectorStatus}
+          stoppingSync={stoppingSync}
+          switchingAccount={switchingAccount}
         />
       ) : (
-        <View style={styles.appFrame}>
-        <View style={styles.header}>
-          <View style={styles.brandMark}>
-            <Activity color={colors.surface} size={19} strokeWidth={2.4} />
-          </View>
-          <View style={styles.headerCopy}>
-            <Text style={styles.title}>抖音记录</Text>
-            <Text style={styles.subtitle}>本地数据</Text>
-          </View>
-          {collectorBusy ? <ActivityIndicator color={colors.accent} size="small" /> : null}
-        </View>
-
-        {activeView === "records" ? (
-          <RecordsView
-            activeRecord={activeRecord}
-            collectorBusy={collectorBusy}
-            collectorConnected={collectorToken !== null}
-            collectorStatus={collectorStatus}
-            onChangeRecord={setActiveRecord}
-            onClear={clearCurrentRecords}
-            onOpenRecord={openRecord}
-            onOpenSources={() => setActiveView("sources")}
-            onSync={() => {
-              confirmAutomaticSync();
-              return Promise.resolve();
-            }}
-            snapshot={displaySnapshot}
-          />
-        ) : (
-          <SourcesView
-            archive={selectedArchive}
-            busy={collectorBusy}
-            collectorUrl={collectorUrl}
-            connected={collectorToken !== null}
-            error={collectorError}
-            onChangeCollectorUrl={(value) => {
-              setCollectorUrl(value);
-              setCollectorError(null);
-            }}
-            onChangePairingCode={(value) => {
-              setPairingCode(value);
-              setCollectorError(null);
-            }}
-            onClearCache={clearCurrentRecords}
-            onConnect={connectCollector}
-            onDisconnect={disconnectCollector}
-            onStartObservation={() => collectorToken ? beginObservation(collectorUrl, collectorToken) : Promise.resolve()}
-            onStopObservation={() => collectorToken ? endObservation(collectorUrl, collectorToken) : Promise.resolve()}
-            onStartDirectHistory={confirmDirectHistorySync}
-            onStartSync={confirmAutomaticSync}
-            onSwitchAccount={confirmAccountSwitch}
-            onPickArchive={pickArchive}
-            pairingCode={pairingCode}
-            pickingArchive={pickingArchive}
-            status={collectorStatus}
-            observing={collectorStatus?.state === "observing"}
-            switchingAccount={switchingAccount}
-          />
-        )}
-
-        <View style={styles.tabBar}>
-          {visibleNavigationItems.map(({ id, label, icon: Icon }) => {
-            const selected = activeView === id;
-            return (
-              <Pressable
-                key={id}
-                accessibilityRole="tab"
-                accessibilityState={{ selected }}
-                onPress={() => setActiveView(id)}
-                style={({ pressed }) => [styles.tab, pressed && styles.pressed]}
-              >
-                <Icon color={selected ? colors.accent : colors.mutedText} size={20} />
-                <Text style={[styles.tabLabel, selected && styles.tabLabelActive]}>{label}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-        </View>
+        <ContentWorkspace
+          activeView={workspaceView}
+          busy={collectorBusy}
+          onChangeView={(view) => {
+            if (view === "summary" || view === "highlights") {
+              setActiveView(view);
+              return;
+            }
+            setActiveRecord(view);
+            setActiveView("records");
+          }}
+          onOpenRecord={openRecord}
+          onOpenSettings={() => setActiveView("sources")}
+          onReplayStory={replayStory}
+          onSync={() => collectorToken ? confirmAutomaticSync() : setActiveView("sources")}
+          onTogglePrivacy={() => setPrivacy((value) => !value)}
+          privacy={privacy}
+          records={workspaceRecords}
+          report={personalSummary}
+          sourceLabel={sourceLabel}
+          status={collectorStatus}
+          updatedAt={displaySnapshot?.updatedAt ?? null}
+        />
       )}
     </SafeAreaView>
   );
@@ -1098,7 +1256,7 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.surface },
+  safeArea: { flex: 1, backgroundColor: workspaceColors.canvas },
   appFrame: {
     flex: 1,
     width: "100%",

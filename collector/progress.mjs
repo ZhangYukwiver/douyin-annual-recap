@@ -9,10 +9,13 @@ export function createEndpointProgress() {
     cursors: new Set(),
     lastCursor: null,
     pageFingerprints: new Set(),
+    duplicatePageCounts: new Map(),
+    duplicateResponseCount: 0,
     repeatedPageFingerprint: false,
     uniqueAddedCount: 0,
     responseGrowth: [],
     visualSurfaceMissing: false,
+    responseProgressStalled: false,
   };
 }
 
@@ -38,6 +41,16 @@ export function recordEndpointResult(progress, { hasMore, cursor }, {
   let repeated = false;
   if (typeof pageFingerprint === "string" && pageFingerprint.length > 0) {
     repeated = progress.pageFingerprints.has(pageFingerprint);
+    if (repeated && safeAdded === 0) {
+      const duplicateCount = (progress.duplicatePageCounts.get(pageFingerprint) ?? 0) + 1;
+      progress.duplicatePageCounts.set(pageFingerprint, duplicateCount);
+      progress.duplicateResponseCount += 1;
+      if (progress.responseGrowth.length < 100) {
+        progress.responseGrowth.push({ added: 0, pageSize: safePageSize, repeated: true });
+      }
+      if (duplicateCount > 1) progress.repeatedPageFingerprint = true;
+      return progress;
+    }
     progress.pageFingerprints.add(pageFingerprint);
     if (repeated) progress.repeatedPageFingerprint = true;
   }
