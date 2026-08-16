@@ -105,28 +105,31 @@ describe("Douyin profile routing", () => {
 });
 
 describe("direct browser launch options", () => {
-  it("uses an offscreen headed Chrome window on Windows", () => {
+  it("uses a real headless Chrome context on Windows", () => {
     expect(directContextLaunchOptions({
       executablePath: "chrome.exe",
       userAgent: "test-agent",
       platform: "win32",
     })).toMatchObject({
       executablePath: "chrome.exe",
-      headless: false,
+      headless: true,
       userAgent: "test-agent",
       args: [
-        "--window-position=-32000,-32000",
+        "--headless=new",
         "--window-size=1280,900",
       ],
     });
   });
 
-  it("keeps headless mode where an offscreen desktop window is unavailable", () => {
+  it("uses the same hidden mode on non-Windows platforms", () => {
     expect(directContextLaunchOptions({
       executablePath: "chromium",
       userAgent: "test-agent",
       platform: "linux",
-    })).toMatchObject({ headless: true });
+    })).toMatchObject({
+      headless: true,
+      args: ["--headless=new", "--window-size=1280,900"],
+    });
   });
 });
 

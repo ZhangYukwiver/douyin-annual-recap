@@ -260,6 +260,53 @@ export function AnnualScrollStory({
     setActiveChapter((current) => current === next ? current : next);
   }, []);
 
+  const handleHourWheel = useCallback((event: unknown) => {
+    if (Platform.OS !== "web") return;
+    const deltaY = (event as { nativeEvent?: { deltaY?: number } }).nativeEvent?.deltaY ?? 0;
+    if (!deltaY) return;
+    const next = (selectedHour + (deltaY > 0 ? 1 : -1) + 24) % 24;
+    setSelectedHour(next);
+  }, [selectedHour]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return undefined;
+    const scroller = scrollRef.current?.getScrollableNode?.() as HTMLElement | undefined;
+    if (!scroller) return undefined;
+    let dragging = false;
+    let startY = 0;
+    let startScrollTop = 0;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("button, a, input, textarea, [role='button']")) return;
+      dragging = true;
+      startY = event.clientY;
+      startScrollTop = scroller.scrollTop;
+      scroller.setPointerCapture?.(event.pointerId);
+      scroller.style.cursor = "grabbing";
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (dragging) scroller.scrollTop = startScrollTop - (event.clientY - startY);
+    };
+    const stopDragging = () => {
+      dragging = false;
+      scroller.style.cursor = "grab";
+    };
+    scroller.style.overflowY = "auto";
+    scroller.style.touchAction = "pan-y";
+    scroller.style.cursor = "grab";
+    scroller.addEventListener("pointerdown", onPointerDown);
+    scroller.addEventListener("pointermove", onPointerMove);
+    scroller.addEventListener("pointerup", stopDragging);
+    scroller.addEventListener("pointercancel", stopDragging);
+    return () => {
+      scroller.removeEventListener("pointerdown", onPointerDown);
+      scroller.removeEventListener("pointermove", onPointerMove);
+      scroller.removeEventListener("pointerup", stopDragging);
+      scroller.removeEventListener("pointercancel", stopDragging);
+    };
+  }, [width]);
+
   const openStoryRecord = useCallback((item: StoryContentItem | null) => {
     if (!item) return;
     setDetail(detailFromStoryRecord(item));
@@ -337,6 +384,7 @@ export function AnnualScrollStory({
         onScroll={handleScroll}
         scrollEventThrottle={32}
         showsVerticalScrollIndicator={false}
+        style={styles.storyScroller}
         testID="story-scroll-view"
       >
         <View onLayout={registerChapter(1)} style={[styles.stickyChapter, { minHeight: sceneHeight + 460 }]}>
@@ -461,6 +509,7 @@ export function AnnualScrollStory({
               <HourDial
                 hourRotation={hourRotation}
                 hours={model.hours}
+                onWheel={handleHourWheel}
                 onHourKey={handleHourKey}
                 onSelectHour={setSelectedHour}
                 selectedHour={selectedHour}
@@ -528,10 +577,10 @@ export function AnnualScrollStory({
             />
             <View style={[styles.keptLayout, compact && styles.keptLayoutCompact]}>
               <View style={styles.confluence} {...revealDataSet()}>
-                <Svg accessibilityLabel="观看、喜欢和收藏三条轨道汇流图" height="100%" viewBox="0 0 700 390" width="100%">
-                  <Path d="M 20 88 C 245 88, 350 190, 665 194" fill="none" stroke={color.cyan} strokeLinecap="round" strokeWidth="6" />
-                  <Path d="M 20 195 C 250 195, 390 195, 665 194" fill="none" stroke={color.accent} strokeLinecap="round" strokeWidth="6" />
-                  <Path d="M 20 302 C 245 302, 350 200, 665 194" fill="none" stroke={color.amber} strokeLinecap="round" strokeWidth="6" />
+                <Svg accessibilityLabel="观看、喜欢和收藏三条真实数据轨道汇流图" height="100%" viewBox="0 0 700 390" width="100%">
+                  <Path d={buildTrackPath(model.streams.watch_history.uniqueCount, overview.counts.total, 88, 194, false)} fill="none" stroke={color.cyan} strokeLinecap="round" strokeWidth="6" />
+                  <Path d={buildTrackPath(model.streams.liked_videos.uniqueCount, overview.counts.total, 195, 194, false)} fill="none" stroke={color.accent} strokeLinecap="round" strokeWidth="6" />
+                  <Path d={buildTrackPath(model.streams.favorite_videos.uniqueCount, overview.counts.total, 302, 194, true)} fill="none" stroke={color.amber} strokeLinecap="round" strokeWidth="6" />
                 </Svg>
                 <Text style={[styles.trackLabel, styles.trackWatch]}>观看</Text>
                 <Text style={[styles.trackLabel, styles.trackLiked]}>喜欢</Text>
@@ -644,7 +693,9 @@ function StoryStream({
       </View>
       <View style={styles.streamLine} />
       <View style={styles.streamItems}>
-        {stream.representative ? <StoryRecordButton compact item={stream.representative} onOpen={onOpen} privacy={privacy} /> : null}
+        {stream.records.slice(0, 3).map((item) => (
+          <StoryRecordButton compact item={item} key={item.key} onOpen={onOpen} privacy={privacy} />
+        ))}
         {!stream.representative ? <Text style={styles.emptyText}>暂无代表内容</Text> : null}
       </View>
     </View>
@@ -684,17 +735,24 @@ function HourDial({
   selectedHour,
   onSelectHour,
   onHourKey,
+  onWheel,
 }: {
   hourRotation: Animated.Value;
   hours: StoryHour[];
   selectedHour: number;
   onSelectHour: (hour: number) => void;
   onHourKey: (event: unknown, hour: number) => void;
+  onWheel: (event: unknown) => void;
 }) {
   const rotation = hourRotation.interpolate({ inputRange: [0, 24], outputRange: ["0deg", "360deg"] });
   const maxCount = Math.max(1, ...hours.map((hour) => hour.count));
   return (
-    <View accessibilityLabel="24 小时可靠记录拨盘" style={styles.dialWrap} {...revealDataSet()}>
+    <View
+      accessibilityLabel="24 小时可靠记录拨盘，滚动鼠标滚轮可切换小时"
+      style={styles.dialWrap}
+      {...revealDataSet()}
+      {...({ onWheel } as Record<string, unknown>)}
+    >
       <View style={styles.dialTrack} />
       <Animated.View style={[styles.dialHand, { transform: [{ rotate: rotation }] }]}><View style={styles.dialHandLine} /></Animated.View>
       {hours.map((hour) => {
@@ -1007,8 +1065,17 @@ function fallbackColor(value: string): string {
   return palette[hashString(value) % palette.length]!;
 }
 
+function buildTrackPath(count: number, total: number, startY: number, endY: number, reverse = false): string {
+  const ratio = total > 0 ? Math.min(1, count / total) : 0;
+  const bend = 54 + ratio * 78;
+  const direction = reverse ? -1 : 1;
+  const firstControlY = startY + direction * bend;
+  const secondControlY = endY - direction * (bend * 0.72);
+  return `M 20 ${startY} C 180 ${firstControlY}, 350 ${secondControlY}, 665 ${endY}`;
+}
+
 const styles = StyleSheet.create({
-  root: { flex: 1, minHeight: "100%", backgroundColor: color.canvas },
+  root: { flex: 1, minHeight: 0, backgroundColor: color.canvas },
   topbar: { height: 68, flexDirection: "row", alignItems: "center", gap: 24, paddingHorizontal: 28, borderBottomWidth: 1, borderBottomColor: color.border, backgroundColor: color.sidebar, zIndex: 30 },
   brand: { width: 280, flexDirection: "row", alignItems: "center", gap: 11 },
   brandMark: { width: 38, height: 38, position: "relative", alignItems: "center", justifyContent: "center" },
@@ -1025,7 +1092,8 @@ const styles = StyleSheet.create({
   skipButton: { minWidth: 140, minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 15, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surface },
   skipButtonText: { color: color.text, fontSize: 12, fontWeight: "900" },
   buttonPressed: { opacity: 0.72 },
-  scrollContent: { backgroundColor: color.canvas },
+  storyScroller: { flex: 1, minHeight: 0 },
+  scrollContent: { backgroundColor: color.canvas, paddingBottom: 40 },
   stickyChapter: { position: "relative", backgroundColor: color.canvas },
   scene: { position: "relative", justifyContent: "center", overflow: "hidden", backgroundColor: color.canvas },
   sceneInner: { width: "100%", maxWidth: 1240, minHeight: "100%", alignSelf: "center", justifyContent: "space-between", paddingHorizontal: 68, paddingVertical: 56 },
@@ -1058,7 +1126,7 @@ const styles = StyleSheet.create({
   sectionLead: { maxWidth: 740, color: color.textSecondary, fontSize: 15, lineHeight: 25, marginTop: 16 },
   streamGrid: { flexDirection: "row", alignItems: "stretch", gap: 16 },
   streamGridCompact: { gap: 10 },
-  stream: { flex: 1, minWidth: 0, minHeight: 340, padding: 18, borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
+  stream: { flex: 1, minWidth: 0, minHeight: 470, padding: 18, borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
   streamHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
   streamTitle: { flexDirection: "row", alignItems: "center", gap: 8 },
   streamLabel: { color: color.text, fontSize: 13, fontWeight: "900" },

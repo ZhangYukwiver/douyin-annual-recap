@@ -49,6 +49,7 @@ export interface StoryStream {
   recordCount: number;
   uniqueCount: number;
   representative: StoryContentItem | null;
+  records: StoryContentItem[];
 }
 
 export interface StoryHour {
@@ -198,12 +199,14 @@ function buildStreams(
   context: StoryBuildContext,
 ): Record<PersonalRecordType, StoryStream> {
   const makeStream = (type: PersonalRecordType): StoryStream => {
-    const representative = stableEntryOrder(byType[type])[0] ?? null;
+    const records = stableEntryOrder(byType[type]).map((entry) => contentItem(entry, context));
+    const representative = records[0] ?? null;
     return {
       type,
       recordCount: byType[type].length,
       uniqueCount: uniqueByType[type].length,
-      representative: representative ? contentItem(representative, context) : null,
+      representative,
+      records,
     };
   };
 
