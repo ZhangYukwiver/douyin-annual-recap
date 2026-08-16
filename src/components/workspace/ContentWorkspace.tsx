@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -22,17 +22,20 @@ import {
   Heart,
   History,
   LayoutGrid,
+  LayoutDashboard,
   List,
   Music2,
   Play,
   RefreshCw,
   Settings2,
   Sparkles,
+  Star,
   Users,
 } from "lucide-react-native";
 
 import type {
   AnnualCreatorsData,
+  AnnualContentRef,
   AnnualHighlightsData,
   AnnualInterestsData,
   AnnualKeptData,
@@ -47,9 +50,10 @@ import type {
   PersonalVideoRecord,
 } from "../../domain/personalRecords";
 import type { CollectorStatus } from "../../services/localCollector";
+import { DenseSummaryDashboard } from "./DenseSummaryDashboard";
 import { workspaceColors as color, workspaceRadii as radius } from "./workspaceTheme";
 
-export type WorkspaceViewKey = PersonalRecordType | "summary";
+export type WorkspaceViewKey = PersonalRecordType | "summary" | "highlights";
 
 export interface ContentWorkspaceProps {
   activeView: WorkspaceViewKey;
@@ -62,7 +66,10 @@ export interface ContentWorkspaceProps {
   onChangeView: (view: WorkspaceViewKey) => void;
   onOpenRecord: (url: string) => Promise<void>;
   onOpenSettings: () => void;
+  onReplayStory: () => void;
   onSync: () => void;
+  onTogglePrivacy: () => void;
+  privacy: boolean;
 }
 
 type IconComponent = React.ComponentType<{
@@ -76,8 +83,12 @@ const navItems: Array<{ id: WorkspaceViewKey; label: string; icon: IconComponent
   { id: "watch_history", label: "观看历史", icon: History, accent: color.cyan },
   { id: "liked_videos", label: "喜欢", icon: Heart, accent: color.accent },
   { id: "favorite_videos", label: "收藏", icon: Bookmark, accent: color.amber },
-  { id: "summary", label: "总结", icon: BarChart3, accent: color.green },
+  { id: "summary", label: "数据大屏", icon: LayoutDashboard, accent: color.green },
+  { id: "highlights", label: "年度高光", icon: Star, accent: color.cyan },
 ];
+
+const recordNavItems = navItems.slice(0, 3);
+const annualNavItems = navItems.slice(3);
 
 const webPointer = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
 
@@ -92,12 +103,14 @@ export function ContentWorkspace({
   onChangeView,
   onOpenRecord,
   onOpenSettings,
+  onReplayStory,
   onSync,
+  onTogglePrivacy,
+  privacy,
 }: ContentWorkspaceProps) {
   const { width } = useWindowDimensions();
   const mobile = width < 720;
   const compactSidebar = width >= 720 && width < 1080;
-  const [privacy, setPrivacy] = useState(false);
   const currentNav = navItems.find((item) => item.id === activeView) ?? navItems[0]!;
   const totalRecords = records.watch_history.length + records.liked_videos.length + records.favorite_videos.length;
   const counts: Record<WorkspaceViewKey, number> = {
@@ -105,7 +118,11 @@ export function ContentWorkspace({
     liked_videos: records.liked_videos.length,
     favorite_videos: records.favorite_videos.length,
     summary: report ? (report.overview.data as AnnualOverviewData).counts.total : totalRecords,
+    highlights: report
+      ? Object.values(report.highlights.data as AnnualHighlightsData).filter(Boolean).length
+      : 0,
   };
+  const annualView = activeView === "summary" || activeView === "highlights";
 
   return (
     <View testID="content-workspace" style={styles.root}>
@@ -113,7 +130,19 @@ export function ContentWorkspace({
         <View style={[styles.sidebar, compactSidebar && styles.sidebarCompact]}>
           <Brand compact={compactSidebar} />
           <View accessibilityRole="tablist" style={styles.sidebarNav}>
-            {navItems.map((item) => (
+            {!compactSidebar ? <Text style={styles.sidebarSectionLabel}>内容记录</Text> : null}
+            {recordNavItems.map((item) => (
+              <NavButton
+                key={item.id}
+                compact={compactSidebar}
+                count={counts[item.id]}
+                item={item}
+                onPress={() => onChangeView(item.id)}
+                selected={item.id === activeView}
+              />
+            ))}
+            {!compactSidebar ? <Text style={[styles.sidebarSectionLabel, styles.sidebarSectionLabelAnnual]}>年度分析</Text> : <View style={styles.sidebarCompactDivider} />}
+            {annualNavItems.map((item) => (
               <NavButton
                 key={item.id}
                 compact={compactSidebar}
@@ -125,6 +154,22 @@ export function ContentWorkspace({
             ))}
           </View>
           <View style={styles.sidebarFooter}>
+            <Pressable
+              accessibilityLabel="重看年度故事"
+              accessibilityRole="button"
+              disabled={!report || report.status === "empty"}
+              onPress={onReplayStory}
+              style={({ pressed }) => [
+                styles.navButton,
+                compactSidebar && styles.navButtonCompact,
+                (!report || report.status === "empty") && styles.buttonDisabled,
+                pressed && styles.buttonPressed,
+                webPointer,
+              ]}
+            >
+              <View style={styles.navIconWrap}><Sparkles color={color.accent} size={20} strokeWidth={2} /></View>
+              {!compactSidebar ? <Text style={styles.navLabel}>重看年度故事</Text> : null}
+            </Pressable>
             {!compactSidebar ? (
               <View style={styles.localBadge}>
                 <View style={styles.localBadgeDot} />
@@ -150,7 +195,7 @@ export function ContentWorkspace({
       <View style={[styles.main, mobile && styles.mainMobile]}>
         <View style={[styles.topbar, mobile && styles.topbarMobile]}>
           <View style={styles.topbarHeading}>
-            <Text style={styles.topbarEyebrow}>{activeView === "summary" ? "PERSONAL RECAP" : "CONTENT ARCHIVE"}</Text>
+            <Text style={styles.topbarEyebrow}>{annualView ? "PERSONAL RECAP" : "CONTENT ARCHIVE"}</Text>
             <View style={styles.topbarTitleRow}>
               <Text numberOfLines={1} style={[styles.topbarTitle, mobile && styles.topbarTitleMobile]}>{currentNav.label}</Text>
               <Text style={styles.topbarCount}>{counts[activeView].toLocaleString("zh-CN")}</Text>
@@ -161,7 +206,7 @@ export function ContentWorkspace({
               accessibilityLabel={privacy ? "关闭隐私模式" : "开启隐私模式"}
               accessibilityRole="switch"
               accessibilityState={{ checked: privacy }}
-              onPress={() => setPrivacy((value) => !value)}
+              onPress={onTogglePrivacy}
               style={({ pressed }) => [styles.toolbarButton, privacy && styles.toolbarButtonActive, pressed && styles.buttonPressed, webPointer]}
             >
               {privacy ? <EyeOff color={color.cyan} size={19} /> : <Eye color={color.textSecondary} size={19} />}
@@ -189,7 +234,11 @@ export function ContentWorkspace({
         </View>
 
         {activeView === "summary" ? (
-          <SummaryView mobile={mobile} privacy={privacy} report={report} />
+          report && report.status !== "empty"
+            ? <DenseSummaryDashboard mobile={mobile} privacy={privacy} report={report} />
+            : <SummaryEmpty />
+        ) : activeView === "highlights" ? (
+          <HighlightsView mobile={mobile} onOpenRecord={onOpenRecord} privacy={privacy} report={report} />
         ) : (
           <RecordsGallery
             activeType={activeView}
@@ -460,28 +509,58 @@ function RecordRow({ record, type, privacy, onOpenRecord }: { record: PersonalVi
   );
 }
 
+const highlightDefinitions: Array<{
+  key: keyof AnnualHighlightsData;
+  label: string;
+  rule: string;
+  accent: string;
+}> = [
+  { key: "first", label: "首条记录", rule: "按可靠行为时间排序", accent: color.cyan },
+  { key: "last", label: "末条记录", rule: "按可靠行为时间排序", accent: color.green },
+  { key: "peakDay", label: "峰值日代表", rule: "活跃峰值日中的代表内容", accent: color.accent },
+  { key: "longest", label: "最长内容", rule: "按可用时长字段排序", accent: color.amber },
+  { key: "mostEngaged", label: "互动快照最高", rule: "按平台互动统计快照合计", accent: color.cyan },
+];
+
 function SummaryView({ report, privacy, mobile }: { report: AnnualReport | null; privacy: boolean; mobile: boolean }) {
-  if (!report || report.status === "empty") {
-    return (
-      <View style={styles.summaryEmpty}>
-        <Sparkles color={color.green} size={30} />
-        <Text style={styles.emptyTitle}>还没有可以总结的记录</Text>
-        <Text style={styles.emptyDetail}>完成一次读取后，总结会自动生成。</Text>
-      </View>
-    );
-  }
+  if (!report || report.status === "empty") return <SummaryEmpty />;
 
   const overview = report.overview.data as AnnualOverviewData;
   const monthly = report.monthly.data as AnnualMonthlyData;
   const creators = report.creators.data as AnnualCreatorsData;
   const interests = report.interests.data as AnnualInterestsData;
   const kept = report.kept.data as AnnualKeptData;
-  const highlights = report.highlights.data as AnnualHighlightsData;
   const rhythm = report.rhythm.data as AnnualRhythmData;
-  const hero = highlights.mostEngaged ?? highlights.peakDay ?? highlights.first ?? highlights.last ?? highlights.longest;
   const maxMonth = Math.max(1, ...monthly.months.map((month) => (month.liked ?? 0) + (month.favorite ?? 0)));
   const maxCreator = Math.max(1, ...creators.top.map((creator) => creator.count));
-  const weekday = rhythm.mostActiveWeekday ? ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][rhythm.mostActiveWeekday.weekday] : null;
+  const hourlyTotals = Array.from({ length: 24 }, (_, hour) => rhythm.heatmap.reduce((sum, cell) => sum + (cell.hour === hour ? cell.count : 0), 0));
+  const maxHour = Math.max(1, ...hourlyTotals);
+  const rhythmReliable = report.rhythm.status === "ok";
+  const weekday = rhythmReliable && rhythm.mostActiveWeekday
+    ? ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][rhythm.mostActiveWeekday.weekday]
+    : null;
+  const activeHour = rhythmReliable && rhythm.mostActiveHour
+    ? `${String(rhythm.mostActiveHour.hour).padStart(2, "0")}:00`
+    : "不可判断";
+  const averageDuration = interests.durationStats.averageSeconds === null
+    ? "不可判断"
+    : formatDuration(interests.durationStats.averageSeconds);
+  const medianDuration = interests.durationStats.medianSeconds === null
+    ? "不可判断"
+    : formatDuration(interests.durationStats.medianSeconds);
+  const unavailableMonthlyLabels = monthly.unavailableSeries.map((series) => series === "liked" ? "喜欢" : "收藏");
+  const monthlyNotice = report.monthly.status !== "ok"
+    ? report.monthly.reason ?? "可靠时间不足，未绘制月份趋势。"
+    : unavailableMonthlyLabels.length > 0
+      ? `${unavailableMonthlyLabels.join("、")}缺少可靠行为时间，未绘制该系列。`
+      : report.monthly.notices[0] ?? null;
+  const keptComparable = report.kept.status === "ok";
+  const keptNotice = keptComparable
+    ? kept.unknownIdRecordCount > 0
+      ? `可比较 videoId 覆盖 ${formatCompactNumber(kept.comparableVideoCount)} 个视频；另有 ${formatCompactNumber(kept.unknownIdRecordCount)} 条记录未进入交集。`
+      : null
+    : report.kept.reason ?? "当前列表没有可比较的 videoId。";
+  const keptPanelNotice = [monthlyNotice, keptNotice].filter(Boolean).join(" ");
 
   return (
     <ScrollView
@@ -489,19 +568,15 @@ function SummaryView({ report, privacy, mobile }: { report: AnnualReport | null;
       contentContainerStyle={[styles.summaryContent, mobile && styles.summaryContentMobile]}
       showsVerticalScrollIndicator={false}
     >
-      <View style={[styles.summaryHero, mobile && styles.summaryHeroMobile]}>
-        <View style={styles.summaryHeroCopy}>
-          <Text style={styles.summaryEyebrow}>{report.periodLabel.toUpperCase()}</Text>
-          <Text style={[styles.summaryTitle, mobile && styles.summaryTitleMobile]}>这些内容，留下了你的观看轨迹。</Text>
-          <Text style={styles.summaryLead}>基于当前本地样本生成，不调用外部分析服务。</Text>
-          <View style={styles.heroMetrics}>
-            <HeroMetric label="去重内容" value={overview.counts.total} />
-            <HeroMetric label="活跃日" value={overview.activeDays} />
-            <HeroMetric label="创作者" value={creators.creatorCount} />
-          </View>
+      <View style={[styles.dashboardHeader, mobile && styles.dashboardHeaderMobile]}>
+        <View style={styles.dashboardHeaderCopy}>
+          <Text style={styles.summaryEyebrow}>CONTENT OVERVIEW · {report.periodLabel.toUpperCase()}</Text>
+          <Text style={[styles.summaryTitle, mobile && styles.summaryTitleMobile]}>四类内容信号，一张大屏。</Text>
+          <Text style={styles.summaryLead}>使用节奏、内容偏好、创作者与点赞收藏，均来自当前本地样本。</Text>
         </View>
-        <View style={styles.summaryHeroVisual}>
-          <FeaturedVisual item={hero} privacy={privacy} />
+        <View style={[styles.dashboardPeriod, mobile && styles.dashboardPeriodMobile]}>
+          <Text numberOfLines={1} style={styles.dashboardPeriodValue}>{report.periodLabel}</Text>
+          <Text style={styles.dashboardPeriodMeta}>{overview.activeDays} 个活跃日 · {report.timezone}</Text>
         </View>
       </View>
 
@@ -516,35 +591,54 @@ function SummaryView({ report, privacy, mobile }: { report: AnnualReport | null;
         <SummaryMetric accent={color.cyan} icon={History} label="观看" value={overview.counts.watch} />
         <SummaryMetric accent={color.accent} icon={Heart} label="喜欢" value={overview.counts.liked} />
         <SummaryMetric accent={color.amber} icon={Bookmark} label="收藏" value={overview.counts.favorite} />
-        <SummaryMetric accent={color.green} icon={CalendarDays} label="活跃日" value={overview.activeDays} last />
+        <SummaryMetric accent={color.green} icon={CalendarDays} label="去重内容" value={overview.counts.total} last />
       </View>
 
       <View style={[styles.analyticsGrid, mobile && styles.analyticsGridMobile]}>
-        <View style={[styles.analyticsPanel, styles.monthlyPanel, mobile && styles.analyticsPanelMobile]}>
-          <PanelHeader icon={BarChart3} label="偏好变化" meta={monthly.peakMonth ? `峰值 ${monthly.peakMonth.label}` : "按月统计"} />
-          <View style={styles.monthChart}>
-            {monthly.months.map((month) => {
-              const likedHeight = ((month.liked ?? 0) / maxMonth) * 106;
-              const favoriteHeight = ((month.favorite ?? 0) / maxMonth) * 106;
-              return (
-                <View key={month.month} style={styles.monthColumn}>
-                  <View style={styles.monthBars}>
-                    <View style={[styles.monthBar, { height: Math.max(month.liked ? 3 : 0, likedHeight), backgroundColor: color.accent }]} />
-                    <View style={[styles.monthBar, { height: Math.max(month.favorite ? 3 : 0, favoriteHeight), backgroundColor: color.amber }]} />
-                  </View>
-                  <Text style={styles.monthLabel}>{month.month}</Text>
-                </View>
-              );
-            })}
+        <View testID="dashboard-panel-rhythm" style={[styles.analyticsPanel, mobile && styles.analyticsPanelMobile]}>
+          <PanelHeader icon={Clock3} label="使用节奏" meta={rhythmReliable ? `${activeHour} 最活跃` : "可靠时间不足"} />
+          <View
+            accessible
+            accessibilityLabel={`24 小时可靠记录分布。${rhythmReliable ? `最活跃时段 ${activeHour}` : "样本不足，不生成时段结论"}`}
+            style={styles.hourChart}
+          >
+            {hourlyTotals.map((count, hour) => (
+              <View key={hour} style={styles.hourColumn}>
+                <View style={[styles.hourBar, { height: Math.max(count > 0 ? 3 : 0, count / maxHour * 82), backgroundColor: hour === rhythm.mostActiveHour?.hour && rhythmReliable ? color.accent : color.cyan }]} />
+              </View>
+            ))}
           </View>
-          <View style={styles.legendRow}>
-            <Legend color={color.accent} label="喜欢" />
-            <Legend color={color.amber} label="收藏" />
+          <View style={styles.hourAxis}><Text style={styles.hourAxisText}>00</Text><Text style={styles.hourAxisText}>06</Text><Text style={styles.hourAxisText}>12</Text><Text style={styles.hourAxisText}>18</Text><Text style={styles.hourAxisText}>23</Text></View>
+          <View style={styles.dashboardFactRow}>
+            <DashboardFact label="活跃小时" value={activeHour} />
+            <DashboardFact label="活跃星期" value={weekday ?? "不可判断"} />
+            <DashboardFact label="可靠记录" value={formatCompactNumber(rhythm.watchRecordCount)} />
           </View>
+          {!rhythmReliable ? <PanelNotice text={report.rhythm.reason ?? "可靠行为时间不足，不生成具体时段结论。"} /> : null}
         </View>
 
-        <View style={[styles.analyticsPanel, mobile && styles.analyticsPanelMobile]}>
-          <PanelHeader icon={Users} label="常看创作者" meta={`${creators.creatorCount} 位`} />
+        <View testID="dashboard-panel-interests" style={[styles.analyticsPanel, mobile && styles.analyticsPanelMobile]}>
+          <PanelHeader icon={Sparkles} label="内容偏好" meta={`${interests.signalCount} 个显式信号`} />
+          <View style={styles.topicWrap}>
+            {interests.topics.slice(0, 8).map((topic, index) => (
+              <View key={topic.name} style={styles.topicChip}>
+                <Text style={styles.topicName}>#{privacy ? `话题${index + 1}` : topic.name}</Text>
+                <Text style={styles.topicCount}>{topic.count}</Text>
+              </View>
+            ))}
+            {interests.topics.length === 0 ? <Text style={styles.panelEmpty}>喜欢与收藏中没有可识别话题</Text> : null}
+          </View>
+          <View style={styles.panelRule} />
+          <View style={styles.signalRows}>
+            <SignalRow icon={Music2} label="常用音乐" value={privacy ? (interests.music[0] ? "已隐藏" : "暂无") : interests.music[0]?.title ?? "暂无"} />
+            <SignalRow icon={Clock3} label="平均时长" value={averageDuration} />
+            <SignalRow icon={BarChart3} label="中位时长" value={medianDuration} />
+          </View>
+          {report.interests.status !== "ok" ? <PanelNotice text={report.interests.reason ?? "显式偏好信号不足。"} /> : null}
+        </View>
+
+        <View testID="dashboard-panel-creators" style={[styles.analyticsPanel, mobile && styles.analyticsPanelMobile]}>
+          <PanelHeader icon={Users} label="创作者" meta={`${creators.creatorCount} 位可识别`} />
           <View style={styles.creatorList}>
             {creators.top.slice(0, 5).map((creator, index) => (
               <View key={`${creator.authorId ?? creator.name}:${index}`} style={styles.creatorRow}>
@@ -560,77 +654,187 @@ function SummaryView({ report, privacy, mobile }: { report: AnnualReport | null;
             ))}
             {creators.top.length === 0 ? <Text style={styles.panelEmpty}>暂无可识别创作者</Text> : null}
           </View>
-        </View>
-
-        <View style={[styles.analyticsPanel, mobile && styles.analyticsPanelMobile]}>
-          <PanelHeader icon={Sparkles} label="显式兴趣" meta={`${interests.signalCount} 个信号`} />
-          <View style={styles.topicWrap}>
-            {interests.topics.slice(0, 8).map((topic, index) => (
-              <View key={topic.name} style={styles.topicChip}>
-                <Text style={styles.topicName}>#{privacy ? `话题${index + 1}` : topic.name}</Text>
-                <Text style={styles.topicCount}>{topic.count}</Text>
-              </View>
-            ))}
-            {interests.topics.length === 0 ? <Text style={styles.panelEmpty}>喜欢与收藏中没有可识别话题</Text> : null}
-          </View>
-          <View style={styles.panelRule} />
-          <View style={styles.signalRows}>
-            <SignalRow icon={Music2} label="常用音乐" value={privacy ? (interests.music[0] ? "已隐藏" : "暂无") : interests.music[0]?.title ?? "暂无"} />
-            <SignalRow icon={Clock3} label="观看时段" value={rhythm.mostActiveHour ? `${String(rhythm.mostActiveHour.hour).padStart(2, "0")}:00` : "不可判断"} />
-            <SignalRow icon={CalendarDays} label="活跃星期" value={weekday ?? "不可判断"} />
+          <View style={styles.dashboardFactRow}>
+            <DashboardFact label="头部占比" value={`${Math.round(creators.headShare * 100)}%`} />
+            <DashboardFact label="探索范围" value={`${Math.round(creators.exploration * 100)}%`} />
           </View>
         </View>
 
-        <View style={[styles.analyticsPanel, mobile && styles.analyticsPanelMobile]}>
-          <PanelHeader icon={Bookmark} label="留下来的内容" meta="三类记录交集" />
-          <View style={styles.keptHero}>
-            <Text style={styles.keptValue}>{kept.allThree}</Text>
-            <Text style={styles.keptLabel}>同时看过、喜欢并收藏</Text>
+        <View testID="dashboard-panel-kept" style={[styles.analyticsPanel, mobile && styles.analyticsPanelMobile]}>
+          <PanelHeader icon={Heart} label="点赞与收藏" meta={monthly.peakMonth ? `峰值 ${monthly.peakMonth.label}` : "月份趋势不可用"} />
+          <View style={styles.monthChart}>
+            {monthly.months.map((month) => {
+              const likedHeight = ((month.liked ?? 0) / maxMonth) * 84;
+              const favoriteHeight = ((month.favorite ?? 0) / maxMonth) * 84;
+              return (
+                <View key={month.month} style={styles.monthColumn}>
+                  <View style={styles.monthBars}>
+                    <View style={[styles.monthBar, { height: Math.max(month.liked ? 3 : 0, likedHeight), backgroundColor: monthly.seriesAvailability.liked ? color.accent : "transparent" }]} />
+                    <View style={[styles.monthBar, { height: Math.max(month.favorite ? 3 : 0, favoriteHeight), backgroundColor: monthly.seriesAvailability.favorite ? color.amber : "transparent" }]} />
+                  </View>
+                  <Text style={styles.monthLabel}>{month.month}</Text>
+                </View>
+              );
+            })}
           </View>
-          <View style={styles.keptRows}>
-            <KeepRow accent={color.cyan} label="看过 + 喜欢" value={kept.pairwise.watchLiked} />
-            <KeepRow accent={color.amber} label="看过 + 收藏" value={kept.pairwise.watchFavorite} />
-            <KeepRow accent={color.accent} label="喜欢 + 收藏" value={kept.pairwise.likedFavorite} />
+          <View style={styles.legendRow}>
+            {monthly.seriesAvailability.liked ? <Legend color={color.accent} label="喜欢" /> : null}
+            {monthly.seriesAvailability.favorite ? <Legend color={color.amber} label="收藏" /> : null}
+            {!monthly.seriesAvailability.liked && !monthly.seriesAvailability.favorite ? <Text style={styles.legendLabel}>月份趋势不可分析</Text> : null}
           </View>
+          <View style={styles.intersectionGrid}>
+            <IntersectionMetric accent={color.accent} label="喜欢 ∩ 收藏" value={keptComparable ? kept.pairwise.likedFavorite : null} />
+            <IntersectionMetric accent={color.cyan} label="观看 ∩ 喜欢" value={keptComparable ? kept.pairwise.watchLiked : null} />
+            <IntersectionMetric accent={color.amber} label="观看 ∩ 收藏" value={keptComparable ? kept.pairwise.watchFavorite : null} />
+            <IntersectionMetric accent={color.green} label="三类列表都有" value={keptComparable ? kept.allThree : null} />
+          </View>
+          <Text style={styles.snapshotNote}>当前列表快照，不代表行为转化</Text>
+          {keptPanelNotice ? <PanelNotice text={keptPanelNotice} /> : null}
         </View>
       </View>
     </ScrollView>
   );
 }
 
-function FeaturedVisual({ item, privacy }: { item: AnnualHighlightsData["first"]; privacy: boolean }) {
-  const [imageFailed, setImageFailed] = useState(false);
-  const imageAvailable = Boolean(item?.coverUrl && !privacy && !imageFailed);
+function HighlightsView({
+  report,
+  privacy,
+  mobile,
+  onOpenRecord,
+}: {
+  report: AnnualReport | null;
+  privacy: boolean;
+  mobile: boolean;
+  onOpenRecord: (url: string) => Promise<void>;
+}) {
+  if (!report || report.status === "empty") return <SummaryEmpty />;
+  const highlights = report.highlights.data as AnnualHighlightsData;
+  const availableCount = highlightDefinitions.filter(({ key }) => Boolean(highlights[key])).length;
+  const highlightNotice = [
+    report.highlights.status !== "ok" ? report.highlights.reason : null,
+    ...report.highlights.notices,
+  ].filter((notice, index, notices): notice is string => Boolean(notice) && notices.indexOf(notice) === index).join(" ");
+
   return (
-    <View style={styles.featuredVisual}>
-      {imageAvailable ? (
-        <ImageBackground
-          accessibilityLabel={privacy ? "已隐藏的代表内容封面" : `${item?.title ?? "代表内容"}的封面`}
-          onError={() => setImageFailed(true)}
-          resizeMode="cover"
-          source={{ uri: item!.coverUrl! }}
-          style={styles.featuredImage}
-        />
-      ) : (
-        <View style={styles.featuredFallback}>
-          <Music2 color={color.cyan} size={38} strokeWidth={1.6} />
-          <View style={styles.featuredBars}>{[22, 44, 30, 58, 36].map((height, index) => <View key={index} style={[styles.featuredBar, { height }]} />)}</View>
+    <ScrollView
+      testID="highlights-view"
+      contentContainerStyle={[styles.highlightsContent, mobile && styles.summaryContentMobile]}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={[styles.highlightsHeader, mobile && styles.highlightsHeaderMobile]}>
+        <View style={styles.dashboardHeaderCopy}>
+          <Text style={styles.summaryEyebrow}>HIGHLIGHTS · {report.periodLabel.toUpperCase()}</Text>
+          <Text style={[styles.summaryTitle, mobile && styles.summaryTitleMobile]}>年度高光</Text>
+          <Text style={styles.summaryLead}>五个规则坐标来自当前本地样本；缺少可靠字段时保留为空，不补写结论。</Text>
         </View>
-      )}
-      <View style={styles.featuredScrim}>
-        <Text style={styles.featuredKicker}>代表内容</Text>
-        <Text numberOfLines={2} style={styles.featuredTitle}>{privacy ? "内容标题已隐藏" : item?.title ?? "等待内容"}</Text>
-        <Text numberOfLines={1} style={styles.featuredAuthor}>{privacy ? "创作者已隐藏" : item?.author ?? "未知创作者"}</Text>
+        <View style={[styles.highlightCountBlock, mobile && styles.dashboardPeriodMobile]}>
+          <Text style={styles.highlightCountValue}>{availableCount}</Text>
+          <Text style={styles.dashboardPeriodMeta}>项可确定高光</Text>
+        </View>
       </View>
-    </View>
+      {highlightNotice ? <PanelNotice text={highlightNotice} /> : null}
+
+      <View style={[styles.highlightsGrid, mobile && styles.highlightsGridMobile]}>
+        {highlightDefinitions.map((definition, index) => (
+          <HighlightCard
+            key={definition.key}
+            accent={definition.accent}
+            index={index}
+            item={highlights[definition.key]}
+            label={definition.label}
+            mobile={mobile}
+            onOpenRecord={onOpenRecord}
+            privacy={privacy}
+            rule={definition.rule}
+          />
+        ))}
+      </View>
+      <View style={styles.highlightsFootnote}>
+        <Star color={color.amber} size={16} />
+        <Text style={styles.highlightsFootnoteText}>互动最高仅表示平台统计快照；首条、末条与峰值日仅使用可靠行为时间。</Text>
+      </View>
+    </ScrollView>
   );
 }
 
-function HeroMetric({ label, value }: { label: string; value: number }) {
+function HighlightCard({
+  accent,
+  index,
+  item,
+  label,
+  mobile,
+  onOpenRecord,
+  privacy,
+  rule,
+}: {
+  accent: string;
+  index: number;
+  item: AnnualContentRef | null;
+  label: string;
+  mobile: boolean;
+  onOpenRecord: (url: string) => Promise<void>;
+  privacy: boolean;
+  rule: string;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [item?.coverUrl]);
+  const imageAvailable = Boolean(item?.coverUrl && !privacy && !imageFailed);
+  const canOpen = Boolean(item?.url && !privacy);
+  const title = item ? (privacy ? "内容标题已隐藏" : item.title) : "暂无可确定内容";
+  const author = item ? (privacy ? "创作者已隐藏" : item.author ?? "未知创作者") : "当前样本缺少对应记录";
+  const detail = item ? (privacy ? "详情已替换" : formatHighlightDetail(item)) : "等待更多可靠数据";
+
   return (
-    <View style={styles.heroMetric}>
-      <Text style={styles.heroMetricValue}>{formatCompactNumber(value)}</Text>
-      <Text style={styles.heroMetricLabel}>{label}</Text>
+    <Pressable
+      accessibilityLabel={`${label}：${title}${canOpen ? "，打开抖音视频" : ""}`}
+      accessibilityRole={canOpen ? "link" : undefined}
+      disabled={!canOpen}
+      onPress={() => item?.url && void onOpenRecord(item.url)}
+      style={({ pressed }) => [
+        styles.highlightCard,
+        mobile && styles.highlightCardMobile,
+        { borderTopColor: accent },
+        !item && styles.highlightCardEmpty,
+        pressed && styles.tilePressed,
+        canOpen && webPointer,
+      ]}
+    >
+      <View style={[styles.highlightVisual, { backgroundColor: fallbackColor(`${label}:${index}`) }]}>
+        {imageAvailable ? (
+          <ImageBackground
+            accessibilityLabel={`${title}的视频封面`}
+            onError={() => setImageFailed(true)}
+            resizeMode="cover"
+            source={{ uri: item!.coverUrl! }}
+            style={styles.highlightImage}
+          />
+        ) : (
+          <View style={styles.highlightFallback}>
+            <Star color={accent} size={38} strokeWidth={1.7} />
+            <Text style={styles.highlightIndex}>{String(index + 1).padStart(2, "0")}</Text>
+          </View>
+        )}
+        <View style={[styles.highlightLabel, { borderColor: accent }]}><Text style={styles.highlightLabelText}>{label}</Text></View>
+      </View>
+      <View style={styles.highlightBody}>
+        <Text numberOfLines={2} style={styles.highlightTitle}>{title}</Text>
+        <Text numberOfLines={1} style={styles.highlightAuthor}>{author}</Text>
+        <Text style={styles.highlightDetail}>{detail}</Text>
+        <View style={styles.highlightRuleRow}>
+          <Text style={styles.highlightRule}>{rule}</Text>
+          {canOpen ? <ArrowUpRight color={color.textMuted} size={17} /> : null}
+        </View>
+      </View>
+    </Pressable>
+  );
+}
+
+function SummaryEmpty() {
+  return (
+    <View style={styles.summaryEmpty}>
+      <Sparkles color={color.green} size={30} />
+      <Text style={styles.emptyTitle}>还没有可以总结的记录</Text>
+      <Text style={styles.emptyDetail}>完成一次读取后，数据大屏和年度高光会自动生成。</Text>
     </View>
   );
 }
@@ -671,14 +875,29 @@ function SignalRow({ icon: Icon, label, value }: { icon: IconComponent; label: s
   );
 }
 
-function KeepRow({ accent, label, value }: { accent: string; label: string; value: number }) {
+function DashboardFact({ label, value }: { label: string; value: string }) {
   return (
-    <View style={styles.keepRow}>
-      <View style={[styles.keepMark, { backgroundColor: accent }]} />
-      <Text style={styles.keepLabel}>{label}</Text>
-      <Text style={styles.keepValue}>{value}</Text>
+    <View style={styles.dashboardFact}>
+      <Text style={styles.dashboardFactLabel}>{label}</Text>
+      <Text numberOfLines={1} style={styles.dashboardFactValue}>{value}</Text>
     </View>
   );
+}
+
+function IntersectionMetric({ accent, label, value }: { accent: string; label: string; value: number | null }) {
+  return (
+    <View style={styles.intersectionMetric}>
+      <View style={[styles.intersectionMark, { backgroundColor: accent }]} />
+      <View style={styles.intersectionCopy}>
+        <Text style={styles.intersectionLabel}>{label}</Text>
+        <Text style={styles.intersectionValue}>{value === null ? "不可比较" : formatCompactNumber(value)}</Text>
+      </View>
+    </View>
+  );
+}
+
+function PanelNotice({ text }: { text: string }) {
+  return <Text style={styles.panelNotice}>{text}</Text>;
 }
 
 function formatCompactNumber(value: number): string {
@@ -697,6 +916,26 @@ function formatDuration(seconds: number): string {
   const rounded = Math.max(0, Math.round(seconds));
   const minutes = Math.floor(rounded / 60);
   return `${minutes}:${String(rounded % 60).padStart(2, "0")}`;
+}
+
+function formatHighlightDetail(item: AnnualContentRef): string {
+  const parts: string[] = [];
+  if (item.occurredAt) {
+    const date = new Date(item.occurredAt);
+    if (Number.isFinite(date.getTime())) {
+      parts.push(date.toLocaleString("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }));
+    }
+  }
+  if (item.durationSeconds !== null) parts.push(formatDuration(item.durationSeconds));
+  if (item.interactionScore !== null) parts.push(`互动快照 ${formatCompactNumber(item.interactionScore)}`);
+  return parts.join(" · ") || "时间与辅助字段不可确定";
 }
 
 function hashString(value: string): number {
@@ -723,6 +962,9 @@ const styles = StyleSheet.create({
   brandName: { color: color.text, fontSize: 17, fontWeight: "900" },
   brandMeta: { color: color.textMuted, fontSize: 10, marginTop: 1 },
   sidebarNav: { flex: 1, gap: 4, paddingTop: 20 },
+  sidebarSectionLabel: { color: color.textMuted, fontSize: 9, fontWeight: "900", paddingHorizontal: 8, paddingBottom: 5 },
+  sidebarSectionLabelAnnual: { marginTop: 15 },
+  sidebarCompactDivider: { height: 1, marginHorizontal: 8, marginVertical: 10, backgroundColor: color.border },
   navButton: { position: "relative", minHeight: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: 8, borderRadius: radius.medium },
   navButtonCompact: { justifyContent: "center", paddingHorizontal: 0 },
   navButtonSelected: { backgroundColor: color.surfaceRaised },
@@ -804,32 +1046,22 @@ const styles = StyleSheet.create({
   bottomNavLabel: { color: color.textMuted, fontSize: 10, fontWeight: "700" },
   bottomNavIndicator: { position: "absolute", top: 0, width: 28, height: 2 },
   summaryContent: { padding: 28, paddingBottom: 44 },
-  summaryContentMobile: { padding: 12, paddingBottom: 32 },
-  summaryHero: { minHeight: 320, flexDirection: "row", overflow: "hidden", borderWidth: 1, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.sidebar },
-  summaryHeroMobile: { minHeight: 0, flexDirection: "column" },
-  summaryHeroCopy: { flex: 1.3, minWidth: 0, justifyContent: "center", padding: 34 },
+  summaryContentMobile: { padding: 12, paddingBottom: 86 },
+  dashboardHeader: { minHeight: 128, flexDirection: "row", alignItems: "center", gap: 28, paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: color.border },
+  dashboardHeaderMobile: { minHeight: 0, flexDirection: "column", alignItems: "stretch", gap: 16, paddingVertical: 16 },
+  dashboardHeaderCopy: { flex: 1, minWidth: 0 },
+  dashboardPeriod: { width: 240, alignItems: "flex-end", paddingLeft: 20, borderLeftWidth: 1, borderLeftColor: color.border },
+  dashboardPeriodMobile: { width: "100%", alignItems: "flex-start", paddingLeft: 0, paddingTop: 14, borderTopWidth: 1, borderTopColor: color.border, borderLeftWidth: 0 },
+  dashboardPeriodValue: { maxWidth: "100%", color: color.text, fontSize: 22, lineHeight: 28, fontWeight: "900" },
+  dashboardPeriodMeta: { color: color.textMuted, fontSize: 10, lineHeight: 16, marginTop: 5 },
   summaryEyebrow: { color: color.cyan, fontSize: 10, fontWeight: "900" },
-  summaryTitle: { maxWidth: 600, color: color.text, fontSize: 34, lineHeight: 44, fontWeight: "900", marginTop: 9 },
-  summaryTitleMobile: { fontSize: 26, lineHeight: 35 },
+  summaryTitle: { maxWidth: 720, color: color.text, fontSize: 30, lineHeight: 38, fontWeight: "900", marginTop: 7 },
+  summaryTitleMobile: { fontSize: 24, lineHeight: 32 },
   summaryLead: { color: color.textSecondary, fontSize: 12, lineHeight: 20, marginTop: 12 },
-  heroMetrics: { flexDirection: "row", gap: 24, marginTop: 32 },
-  heroMetric: { minWidth: 74 },
-  heroMetricValue: { color: color.text, fontSize: 24, fontWeight: "900", fontVariant: ["tabular-nums"] },
-  heroMetricLabel: { color: color.textMuted, fontSize: 10, fontWeight: "700", marginTop: 4 },
-  summaryHeroVisual: { flex: 0.7, minWidth: 260 },
-  featuredVisual: { position: "relative", flex: 1, minHeight: 260, overflow: "hidden", backgroundColor: "#172B35" },
-  featuredImage: { flex: 1 },
-  featuredFallback: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#172B35" },
-  featuredBars: { height: 66, flexDirection: "row", alignItems: "flex-end", gap: 5, marginTop: 20 },
-  featuredBar: { width: 5, backgroundColor: color.accent },
-  featuredScrim: { position: "absolute", right: 0, bottom: 0, left: 0, padding: 18, backgroundColor: color.scrim },
-  featuredKicker: { color: color.cyan, fontSize: 9, fontWeight: "900" },
-  featuredTitle: { color: color.white, fontSize: 15, lineHeight: 21, fontWeight: "900", marginTop: 5 },
-  featuredAuthor: { color: color.textSecondary, fontSize: 10, marginTop: 5 },
   coverageNotice: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: 12, marginTop: 14, paddingHorizontal: 14, borderLeftWidth: 3, borderLeftColor: color.amber, backgroundColor: color.amberSoft },
   coverageNoticeLabel: { color: color.amber, fontSize: 10, fontWeight: "900" },
   coverageNoticeText: { flex: 1, color: color.textSecondary, fontSize: 10 },
-  metricStrip: { minHeight: 86, flexDirection: "row", marginTop: 14, borderTopWidth: 1, borderBottomWidth: 1, borderColor: color.border },
+  metricStrip: { minHeight: 78, flexDirection: "row", marginTop: 14, borderTopWidth: 1, borderBottomWidth: 1, borderColor: color.border },
   metricStripMobile: { flexWrap: "wrap" },
   summaryMetric: { flex: 1, minWidth: 140, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 18, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: color.border },
   summaryMetricLast: { borderRightWidth: 0 },
@@ -838,19 +1070,28 @@ const styles = StyleSheet.create({
   summaryMetricLabel: { color: color.textMuted, fontSize: 10, marginTop: 3 },
   analyticsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14, marginTop: 14 },
   analyticsGridMobile: { flexDirection: "column" },
-  analyticsPanel: { width: "49%", minHeight: 280, padding: 20, borderWidth: 1, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
+  analyticsPanel: { flexGrow: 1, width: "49%", minHeight: 320, padding: 18, borderWidth: 1, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
   analyticsPanelMobile: { width: "100%" },
-  monthlyPanel: { minHeight: 300 },
   panelHeader: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: 9 },
   panelHeaderIcon: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: radius.small, backgroundColor: color.cyanSoft },
   panelTitle: { flex: 1, color: color.text, fontSize: 13, fontWeight: "900" },
   panelMeta: { color: color.textMuted, fontSize: 9, fontWeight: "700" },
-  monthChart: { height: 150, flexDirection: "row", alignItems: "flex-end", gap: 4, marginTop: 22 },
-  monthColumn: { flex: 1, minWidth: 0, height: 138, alignItems: "center", justifyContent: "flex-end" },
-  monthBars: { height: 110, flexDirection: "row", alignItems: "flex-end", gap: 2 },
+  hourChart: { height: 92, flexDirection: "row", alignItems: "flex-end", gap: 3, marginTop: 18, paddingTop: 6, borderBottomWidth: 1, borderBottomColor: color.border },
+  hourColumn: { flex: 1, minWidth: 0, height: 84, justifyContent: "flex-end" },
+  hourBar: { width: "100%", minHeight: 0, opacity: 0.9 },
+  hourAxis: { flexDirection: "row", justifyContent: "space-between", marginTop: 5 },
+  hourAxisText: { color: color.textMuted, fontSize: 8, fontVariant: ["tabular-nums"] },
+  dashboardFactRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 16 },
+  dashboardFact: { flex: 1, minWidth: 90, minHeight: 54, justifyContent: "center", paddingHorizontal: 10, borderLeftWidth: 2, borderLeftColor: color.border, backgroundColor: color.surfaceRaised },
+  dashboardFactLabel: { color: color.textMuted, fontSize: 9 },
+  dashboardFactValue: { color: color.text, fontSize: 13, fontWeight: "900", marginTop: 4 },
+  panelNotice: { color: color.amber, fontSize: 9, lineHeight: 15, marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: color.border },
+  monthChart: { height: 112, flexDirection: "row", alignItems: "flex-end", gap: 4, marginTop: 14 },
+  monthColumn: { flex: 1, minWidth: 0, height: 104, alignItems: "center", justifyContent: "flex-end" },
+  monthBars: { height: 86, flexDirection: "row", alignItems: "flex-end", gap: 2 },
   monthBar: { width: 5, minHeight: 0, borderTopLeftRadius: 2, borderTopRightRadius: 2 },
-  monthLabel: { color: color.textMuted, fontSize: 8, marginTop: 7 },
-  legendRow: { flexDirection: "row", gap: 16, marginTop: 8 },
+  monthLabel: { color: color.textMuted, fontSize: 8, marginTop: 5 },
+  legendRow: { flexDirection: "row", gap: 16, marginTop: 6 },
   legend: { flexDirection: "row", alignItems: "center", gap: 6 },
   legendSwatch: { width: 14, height: 4, borderRadius: 2 },
   legendLabel: { color: color.textMuted, fontSize: 9 },
@@ -873,14 +1114,37 @@ const styles = StyleSheet.create({
   signalRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: 8 },
   signalLabel: { width: 66, color: color.textMuted, fontSize: 9 },
   signalValue: { flex: 1, color: color.textSecondary, fontSize: 10, fontWeight: "700", textAlign: "right" },
-  keptHero: { paddingVertical: 24, alignItems: "center", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border },
-  keptValue: { color: color.text, fontSize: 44, lineHeight: 50, fontWeight: "900" },
-  keptLabel: { color: color.textMuted, fontSize: 10, marginTop: 4 },
-  keptRows: { marginTop: 10 },
-  keepRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: 8 },
-  keepMark: { width: 4, height: 16, borderRadius: 2 },
-  keepLabel: { flex: 1, color: color.textSecondary, fontSize: 10 },
-  keepValue: { color: color.text, fontSize: 12, fontWeight: "900" },
+  intersectionGrid: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 12 },
+  intersectionMetric: { width: "48.8%", minHeight: 48, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 9, backgroundColor: color.surfaceRaised },
+  intersectionMark: { width: 3, height: 20 },
+  intersectionCopy: { flex: 1, minWidth: 0 },
+  intersectionLabel: { color: color.textMuted, fontSize: 8 },
+  intersectionValue: { color: color.text, fontSize: 13, fontWeight: "900", marginTop: 2 },
+  snapshotNote: { color: color.textMuted, fontSize: 9, lineHeight: 15, marginTop: 10 },
+  highlightsContent: { padding: 28, paddingBottom: 44 },
+  highlightsHeader: { minHeight: 128, flexDirection: "row", alignItems: "center", gap: 28, paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: color.border },
+  highlightsHeaderMobile: { minHeight: 0, flexDirection: "column", alignItems: "stretch", gap: 16, paddingVertical: 16 },
+  highlightCountBlock: { width: 180, alignItems: "flex-end", paddingLeft: 20, borderLeftWidth: 1, borderLeftColor: color.border },
+  highlightCountValue: { color: color.text, fontSize: 38, lineHeight: 42, fontWeight: "900", fontVariant: ["tabular-nums"] },
+  highlightsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14, marginTop: 18 },
+  highlightsGridMobile: { flexDirection: "column" },
+  highlightCard: { width: "32%", minWidth: 260, minHeight: 338, overflow: "hidden", borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
+  highlightCardMobile: { width: "100%", minWidth: 0 },
+  highlightCardEmpty: { opacity: 0.72 },
+  highlightVisual: { position: "relative", height: 190, overflow: "hidden" },
+  highlightImage: { width: "100%", height: "100%" },
+  highlightFallback: { flex: 1, alignItems: "center", justifyContent: "center" },
+  highlightIndex: { position: "absolute", right: 14, bottom: 8, color: "rgba(255,255,255,0.24)", fontSize: 34, fontWeight: "900" },
+  highlightLabel: { position: "absolute", top: 12, left: 12, minHeight: 28, justifyContent: "center", paddingHorizontal: 9, borderWidth: 1, borderRadius: radius.small, backgroundColor: color.scrim },
+  highlightLabelText: { color: color.white, fontSize: 9, fontWeight: "900" },
+  highlightBody: { flex: 1, padding: 15 },
+  highlightTitle: { minHeight: 42, color: color.text, fontSize: 14, lineHeight: 20, fontWeight: "900" },
+  highlightAuthor: { color: color.textSecondary, fontSize: 10, marginTop: 7 },
+  highlightDetail: { color: color.textMuted, fontSize: 9, marginTop: 5 },
+  highlightRuleRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: "auto", paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
+  highlightRule: { flex: 1, color: color.textMuted, fontSize: 9, lineHeight: 14 },
+  highlightsFootnote: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16, paddingHorizontal: 14, borderLeftWidth: 3, borderLeftColor: color.amber, backgroundColor: color.amberSoft },
+  highlightsFootnoteText: { flex: 1, color: color.textSecondary, fontSize: 10, lineHeight: 16 },
   summaryEmpty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
   buttonPressed: { opacity: 0.7 },
   buttonDisabled: { opacity: 0.38 },

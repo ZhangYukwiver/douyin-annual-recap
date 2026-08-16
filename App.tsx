@@ -42,6 +42,7 @@ import {
   type WorkspaceViewKey,
   workspaceColors,
 } from "./src/components/workspace";
+import { AnnualScrollStory } from "./src/components/story/AnnualScrollStory";
 import { buildPersonalSummary } from "./src/domain/annualReport";
 import {
   describeArchiveInspection,
@@ -83,7 +84,7 @@ import {
 import { getDesktopCollectorConfig } from "./src/desktopRuntime";
 import { colors } from "./src/theme";
 
-type ViewKey = "summary" | "records" | "sources";
+type ViewKey = "summary" | "highlights" | "records" | "sources";
 type BadgeState = "ready" | "not_configured" | "invalid" | "manual_action";
 
 interface SelectedArchive {
@@ -99,6 +100,29 @@ interface DisplaySnapshot {
   records: PersonalRecordCollection;
   warnings: string[];
   updatedAt: string | null;
+}
+
+function getStoryDataVersion(snapshot: DisplaySnapshot | null): string | null {
+  if (!snapshot || countPersonalRecords(snapshot.records) === 0) return null;
+  if (snapshot.source === "collector" && snapshot.updatedAt) {
+    return `collector:${snapshot.updatedAt}`;
+  }
+
+  let hash = 2_166_136_261;
+  for (const type of PERSONAL_RECORD_TYPES) {
+    for (const character of type.id) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16_777_619);
+    }
+    const records = snapshot.records[type.id];
+    for (const record of records) {
+      for (const character of record.id) {
+        hash ^= character.charCodeAt(0);
+        hash = Math.imul(hash, 16_777_619);
+      }
+    }
+  }
+  return `${snapshot.source}:${hash >>> 0}`;
 }
 
 interface CollectorConnectionOptions {
@@ -624,6 +648,9 @@ function SourcesView({
 function AppContent() {
   const [activeView, setActiveView] = useState<ViewKey>("sources");
   const [activeRecord, setActiveRecord] = useState<PersonalRecordType>("watch_history");
+  const [storyOpen, setStoryOpen] = useState(false);
+  const [storyMountKey, setStoryMountKey] = useState(0);
+  const [privacy, setPrivacy] = useState(false);
   const [selectedArchive, setSelectedArchive] = useState<SelectedArchive | null>(null);
   const [pickingArchive, setPickingArchive] = useState(false);
   const [collectorUrl, setCollectorUrl] = useState(getDefaultCollectorBaseUrl());
@@ -640,6 +667,7 @@ function AppContent() {
   const connectingRef = useRef(false);
   const syncConfirmationOpenRef = useRef(false);
   const accountSwitchConfirmationOpenRef = useRef(false);
+  const lastAutoStoryVersionRef = useRef<string | null>(null);
 
   useEffect(() => () => {
     pollRequest.current += 1;
@@ -698,6 +726,12 @@ function AppContent() {
       warnings: displaySnapshot?.warnings ?? [],
     });
   }, [collectorStatus?.state, displaySnapshot?.records, displaySnapshot?.source, displaySnapshot?.warnings]);
+
+  useEffect(() => {
+    if (storyOpen && (!personalSummary || personalSummary.status === "empty")) {
+      setStoryOpen(false);
+    }
+  }, [personalSummary, storyOpen]);
 
   async function refreshCollectorSnapshot(baseUrl: string, token: string, requestId?: number): Promise<boolean> {
     const snapshot = await getCollectorRecords(baseUrl, token);
@@ -949,6 +983,7 @@ function AppContent() {
     } catch (error) {
       stopError = collectorErrorMessage(error);
     } finally {
+      setStoryOpen(false);
       setCollectorToken(null);
       setCollectorStatus(null);
       setCollectorSnapshot(null);
@@ -967,6 +1002,7 @@ function AppContent() {
     setSwitchingAccount(true);
     setCollectorBusy(true);
     setCollectorError(null);
+    setStoryOpen(false);
     setCollectorSnapshot(null);
     try {
       const status = await switchCollectorAccount(collectorUrl, collectorToken);
@@ -1045,6 +1081,7 @@ function AppContent() {
       "清除缓存",
       (confirmed) => {
         if (!confirmed) return;
+        setStoryOpen(false);
         if (collectorToken) {
           const requestId = pollRequest.current + 1;
           const token = collectorToken;
@@ -1087,7 +1124,7 @@ function AppContent() {
   }
 
   const workspaceRecords = displaySnapshot?.records ?? createEmptyPersonalRecords();
-  const workspaceView: WorkspaceViewKey = activeView === "summary" ? "summary" : activeRecord;
+  const workspaceView: WorkspaceViewKey = activeView === "summary" || activeView === "highlights" ? activeView : activeRecord;
   const sourceLabel = displaySnapshot?.source === "collector"
     ? "本地浏览器采集"
     : displaySnapshot?.source === "archive"
@@ -1102,10 +1139,50 @@ function AppContent() {
       }
     : null;
 
+  function enterDashboard() {
+    setStoryOpen(false);
+    setActiveView("summary");
+  }
+
+  function enterWorkspace() {
+    const storyVersion = getStoryDataVersion(displaySnapshot);
+    setActiveView("summary");
+    if (
+      storyVersion
+      && personalSummary
+      && personalSummary.status !== "empty"
+      && lastAutoStoryVersionRef.current !== storyVersion
+    ) {
+      lastAutoStoryVersionRef.current = storyVersion;
+      setStoryMountKey((key) => key + 1);
+      setStoryOpen(true);
+      return;
+    }
+    setStoryOpen(false);
+  }
+
+  function replayStory() {
+    if (!personalSummary || personalSummary.status === "empty") return;
+    const storyVersion = getStoryDataVersion(displaySnapshot);
+    if (storyVersion) lastAutoStoryVersionRef.current = storyVersion;
+    setActiveView("summary");
+    setStoryMountKey((key) => key + 1);
+    setStoryOpen(true);
+  }
+
   return (
     <SafeAreaView edges={["top", "bottom"]} style={styles.safeArea}>
       <StatusBar style="light" />
-      {activeView === "sources" ? (
+      {storyOpen && personalSummary && personalSummary.status !== "empty" ? (
+        <AnnualScrollStory
+          key={`annual-story-${storyMountKey}`}
+          onEnterDashboard={enterDashboard}
+          privacy={privacy}
+          records={workspaceRecords}
+          report={personalSummary}
+          sourceLabel={sourceLabel}
+        />
+      ) : activeView === "sources" ? (
         <SetupWorkspace
           archive={archiveInfo}
           busy={collectorBusy}
@@ -1123,10 +1200,7 @@ function AppContent() {
           onClearCache={clearCurrentRecords}
           onConnect={() => connectCollector({ automaticPairing: true })}
           onDisconnect={disconnectCollector}
-          onEnterWorkspace={() => {
-            setActiveRecord("watch_history");
-            setActiveView("records");
-          }}
+          onEnterWorkspace={enterWorkspace}
           onPickArchive={pickArchive}
           onStartDirectHistory={confirmDirectHistorySync}
           onStartObservation={() => collectorToken ? beginObservation(collectorUrl, collectorToken) : Promise.resolve()}
@@ -1149,8 +1223,8 @@ function AppContent() {
           activeView={workspaceView}
           busy={collectorBusy}
           onChangeView={(view) => {
-            if (view === "summary") {
-              setActiveView("summary");
+            if (view === "summary" || view === "highlights") {
+              setActiveView(view);
               return;
             }
             setActiveRecord(view);
@@ -1158,7 +1232,10 @@ function AppContent() {
           }}
           onOpenRecord={openRecord}
           onOpenSettings={() => setActiveView("sources")}
+          onReplayStory={replayStory}
           onSync={() => collectorToken ? confirmAutomaticSync() : setActiveView("sources")}
+          onTogglePrivacy={() => setPrivacy((value) => !value)}
+          privacy={privacy}
           records={workspaceRecords}
           report={personalSummary}
           sourceLabel={sourceLabel}
