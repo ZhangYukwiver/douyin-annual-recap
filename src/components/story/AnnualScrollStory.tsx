@@ -23,14 +23,13 @@ import {
   Heart,
   History,
   LayoutDashboard,
-  Music2,
   Play,
   Sparkles,
   Star,
   Users,
   X,
 } from "lucide-react-native";
-import Svg, { Path } from "react-native-svg";
+import Svg, { ClipPath, Defs, G, Mask, Path, Rect } from "react-native-svg";
 
 import type {
   AnnualContentRef,
@@ -49,15 +48,61 @@ import {
   type StoryContentItem,
   type StoryHour,
   type StoryModel,
-  type StoryOpeningTag,
   type StoryOverlap,
   type StoryOverlapKey,
   type StoryStream as StoryStreamData,
   type StoryTopic,
 } from "./storyModel";
+import {
+  insetCollisionBox,
+  OpeningParticlePhysics,
+  planOpeningDestinations,
+} from "./openingParticlePhysics";
 
 const MIN_STORY_WIDTH = 1024;
 const CHAPTER_COUNT = 6;
+const OPENING_STEP_COUNT = 5;
+const OPENING_TAG_LIMIT = 18;
+const OPENING_TITLE_LIMIT = 36;
+const OPENING_CREATOR_LIMIT = 18;
+const OPENING_COLLISION_SETTLE_FRAMES = 42;
+const OPENING_REVEAL_DURATION = 560;
+const OPENING_FLIGHT_DURATION = 780;
+const OPENING_AUTO_STEP_DELAY = 860;
+const OPENING_COLLISION_ARM_DELAY = 140;
+const OPENING_DECELERATION_DELAY = 420;
+const OPENING_DECELERATION_FRICTION = 0.14;
+const OPENING_IMPACT_FRICTION = 0.08;
+const NOTE_WIDTH = 220;
+const NOTE_HEIGHT = 240;
+const NOTE_VIEWBOX_WIDTH = 220;
+const NOTE_VIEWBOX_HEIGHT = 240;
+const NOTE_PATH = "M121 18H158C159 43 177 64 204 70V105C187 103 171 98 158 89V170C158 203 131 228 98 228C65 228 38 204 38 173C38 142 63 117 95 117C104 117 113 119 121 123V160C114 155 106 152 98 152C84 152 73 162 73 175C73 188 84 198 98 198C112 198 124 188 124 174L121 18Z";
+const LIQUID_PATH = "M-120 10C-100 -2 -80 -2 -60 10S-20 22 0 10S40 -2 60 10S100 22 120 10S160 -2 180 10S220 22 240 10S280 -2 300 10S340 22 360 10L360 260L-120 260Z";
+const AnimatedSvgGroup = Animated.createAnimatedComponent(G);
+const ABSOLUTE_FILL: ViewStyle = { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 };
+const OPENING_COVER_LAYOUTS: readonly ViewStyle[] = [
+  { left: "-6%", top: "-10%", width: "28%", height: "38%", transform: [{ rotate: "-5deg" }] },
+  { left: "17%", top: "-8%", width: "25%", height: "34%", transform: [{ rotate: "3deg" }] },
+  { left: "38%", top: "-13%", width: "30%", height: "41%", transform: [{ rotate: "-2deg" }] },
+  { left: "65%", top: "-7%", width: "20%", height: "33%", transform: [{ rotate: "5deg" }] },
+  { left: "81%", top: "-11%", width: "25%", height: "40%", transform: [{ rotate: "-4deg" }] },
+  { left: "-8%", top: "21%", width: "29%", height: "39%", transform: [{ rotate: "4deg" }] },
+  { left: "17%", top: "24%", width: "21%", height: "34%", transform: [{ rotate: "-3deg" }] },
+  { left: "34%", top: "20%", width: "29%", height: "43%", transform: [{ rotate: "5deg" }] },
+  { left: "59%", top: "23%", width: "25%", height: "36%", transform: [{ rotate: "-5deg" }] },
+  { left: "80%", top: "21%", width: "27%", height: "42%", transform: [{ rotate: "3deg" }] },
+  { left: "-5%", top: "51%", width: "22%", height: "39%", transform: [{ rotate: "-4deg" }] },
+  { left: "12%", top: "49%", width: "30%", height: "40%", transform: [{ rotate: "5deg" }] },
+  { left: "39%", top: "53%", width: "21%", height: "39%", transform: [{ rotate: "-3deg" }] },
+  { left: "56%", top: "50%", width: "29%", height: "38%", transform: [{ rotate: "4deg" }] },
+  { left: "80%", top: "51%", width: "25%", height: "40%", transform: [{ rotate: "-5deg" }] },
+  { left: "-6%", top: "80%", width: "29%", height: "32%", transform: [{ rotate: "3deg" }] },
+  { left: "19%", top: "78%", width: "25%", height: "34%", transform: [{ rotate: "-4deg" }] },
+  { left: "41%", top: "81%", width: "30%", height: "32%", transform: [{ rotate: "5deg" }] },
+  { left: "68%", top: "78%", width: "21%", height: "35%", transform: [{ rotate: "-3deg" }] },
+  { left: "85%", top: "80%", width: "22%", height: "34%", transform: [{ rotate: "4deg" }] },
+];
 const WEB_POINTER = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
 const LIST_LABELS: Record<PersonalRecordType, string> = {
   watch_history: "观看历史",
@@ -93,6 +138,28 @@ interface StoryDetail {
   lists: PersonalRecordType[];
   topics: string[];
   music: string | null;
+}
+
+interface OpeningParticle {
+  key: string;
+  kind: "tag" | "title" | "creator";
+  label: string;
+  count?: number;
+  revealStep: number;
+}
+
+interface OpeningParticleLayout {
+  x: number;
+  y: number;
+  width: number;
+  fontSize: number;
+  rotation: number;
+  textAlign: "left" | "center" | "right";
+}
+
+interface OpeningParticleMotion {
+  x: Animated.Value;
+  y: Animated.Value;
 }
 
 const localCopyProvider: NarrativeCopyProvider = {
@@ -134,6 +201,12 @@ export function AnnualScrollStory({
   const sceneHeight = Math.max(650, height - 68);
   const model = useMemo(() => buildStoryModel(records), [records]);
   const storyContent = useMemo(() => collectStoryContent(model), [model]);
+  const openingContent = useMemo(() => collectOpeningContent(model), [model]);
+  const openingCovers = useMemo(() => buildOpeningCovers(openingContent), [openingContent]);
+  const openingParticles = useMemo(
+    () => buildOpeningParticles(model, openingContent, privacy),
+    [model, openingContent, privacy],
+  );
   const overview = report?.overview.data as AnnualOverviewData | undefined;
   const highlights = report?.highlights.data as AnnualHighlightsData | undefined;
   const kept = report?.kept.data as AnnualKeptData | undefined;
@@ -146,13 +219,21 @@ export function AnnualScrollStory({
   const [selectedTopic, setSelectedTopic] = useState(model.topics[0]?.name ?? null);
   const [selectedOverlap, setSelectedOverlap] = useState<StoryOverlapKey>("allThree");
   const [detail, setDetail] = useState<StoryDetail | null>(null);
+  const [openingStep, setOpeningStep] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(() => (
     Platform.OS === "web"
     && typeof window !== "undefined"
     && typeof window.matchMedia === "function"
     && window.matchMedia("(prefers-reduced-motion: reduce)").matches
   ));
-  const spray = useRef(new Animated.Value(0)).current;
+  const openingStepRef = useRef(0);
+  const openingSequenceStarted = useRef(false);
+  const openingParticlePoses = useRef(new Map<string, { x: number; y: number }>());
+  const openingPhysics = useRef<OpeningParticlePhysics | null>(null);
+  const openingPhysicsFrame = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
+  const openingReveal = useRef(new Animated.Value(0)).current;
+  const openingForeground = useRef(new Animated.Value(1)).current;
+  const liquidWave = useRef(new Animated.Value(0)).current;
   const hourRotation = useRef(new Animated.Value(selectedHour)).current;
   const rootRef = useRef<View | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
@@ -165,10 +246,51 @@ export function AnnualScrollStory({
   const stickyStyle = Platform.OS === "web" && !reducedMotion
     ? ({ position: "sticky", top: 0 } as unknown as ViewStyle)
     : null;
-  const tagPositions = useMemo(
-    () => storyTagPositions(model.openingTags.map((tag) => tag.key), width),
-    [model.openingTags, width],
+  const particleLayouts = useMemo(
+    () => storyParticleLayouts(openingParticles, width, sceneHeight),
+    [openingParticles, sceneHeight, width],
   );
+  const particleMotions = useMemo(
+    () => new Map<string, OpeningParticleMotion>(openingParticles.map((item) => [item.key, {
+      x: new Animated.Value(0),
+      y: new Animated.Value(0),
+    }])),
+    [openingParticles],
+  );
+  const openingProgress = Math.round((openingStep / OPENING_STEP_COUNT) * 100);
+  const liquidTransform = openingReveal.interpolate({
+    inputRange: [0, OPENING_STEP_COUNT],
+    outputRange: [`translate(0 ${NOTE_VIEWBOX_HEIGHT})`, "translate(0 -12)"],
+    extrapolate: "clamp",
+  });
+  const waveTransform = liquidWave.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["translate(0 0)", "translate(-120 0)"],
+  });
+  const noteLeft = (width - NOTE_WIDTH) / 2;
+  const noteTop = (sceneHeight - NOTE_HEIGHT) / 2;
+
+  const stopOpeningFlight = useCallback(() => {
+    if (openingPhysicsFrame.current !== null) cancelAnimationFrame(openingPhysicsFrame.current);
+    openingPhysicsFrame.current = null;
+    openingPhysics.current?.dispose();
+    openingPhysics.current = null;
+  }, []);
+
+  useEffect(() => {
+    stopOpeningFlight();
+    openingParticlePoses.current.clear();
+    openingParticles.forEach((item, index) => {
+      const motion = particleMotions.get(item.key);
+      const layout = particleLayouts[index];
+      if (!motion || !layout) return;
+      const visible = item.revealStep <= openingStepRef.current;
+      motion.x.setValue(visible ? layout.x : 0);
+      motion.y.setValue(visible ? layout.y : 0);
+      if (visible) openingParticlePoses.current.set(item.key, { x: layout.x, y: layout.y });
+    });
+    return stopOpeningFlight;
+  }, [openingParticles, particleLayouts, particleMotions, stopOpeningFlight]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
@@ -180,8 +302,28 @@ export function AnnualScrollStory({
   }, []);
 
   useEffect(() => {
-    if (reducedMotion) spray.setValue(1);
-  }, [reducedMotion, spray]);
+    if (!reducedMotion) return;
+    stopOpeningFlight();
+    openingReveal.setValue(openingStepRef.current);
+    if (openingStepRef.current === OPENING_STEP_COUNT) openingForeground.setValue(0);
+  }, [openingForeground, openingReveal, reducedMotion, stopOpeningFlight]);
+
+  useEffect(() => {
+    liquidWave.stopAnimation();
+    if (reducedMotion) {
+      liquidWave.setValue(0.25);
+      return undefined;
+    }
+    liquidWave.setValue(0);
+    const animation = Animated.loop(Animated.timing(liquidWave, {
+      toValue: 1,
+      duration: 1_400,
+      easing: Easing.linear,
+      useNativeDriver: false,
+    }));
+    animation.start();
+    return () => animation.stop();
+  }, [liquidWave, reducedMotion]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || width < MIN_STORY_WIDTH || reducedMotion) return undefined;
@@ -232,20 +374,190 @@ export function AnnualScrollStory({
     }).start();
   }, [hourRotation, reducedMotion, selectedHour]);
 
-  const replaySpray = useCallback(() => {
-    spray.stopAnimation();
+  const revealNextOpeningGroup = useCallback(() => {
+    const current = openingStepRef.current;
+    const next = Math.min(OPENING_STEP_COUNT, current + 1);
+    if (next === current) return;
+    stopOpeningFlight();
+    openingReveal.stopAnimation();
+    openingReveal.setValue(current);
+    openingForeground.stopAnimation();
+    openingParticles.forEach((item) => {
+      if (item.revealStep > current) return;
+      const pose = openingParticlePoses.current.get(item.key);
+      const motion = particleMotions.get(item.key);
+      if (!pose || !motion) return;
+      motion.x.setValue(pose.x);
+      motion.y.setValue(pose.y);
+    });
+    const seed = Math.floor(Math.random() * 4_294_967_296);
+    openingStepRef.current = next;
+    setOpeningStep(next);
+
+    const physics = new OpeningParticlePhysics(width, sceneHeight);
+    const activeKeys: string[] = [];
+    const newKeys: string[] = [];
+    const flightFrameCount = OPENING_REVEAL_DURATION / (1000 / 60);
+    const destinations = planOpeningDestinations({
+      seed,
+      width,
+      height: sceneHeight,
+      step: next,
+      stepCount: OPENING_STEP_COUNT,
+      items: openingParticles.flatMap((item, index) => {
+        const layout = particleLayouts[index];
+        if (item.revealStep !== next || !layout) return [];
+        const itemHeight = item.kind === "title" ? 58 : item.kind === "tag" ? 26 : 23;
+        const collision = insetCollisionBox(layout.width, itemHeight);
+        return [{
+          key: item.key,
+          collisionWidth: collision.width,
+          collisionHeight: collision.height,
+        }];
+      }),
+    });
+    openingParticles.forEach((item, index) => {
+      if (item.revealStep > next) return;
+      const motion = particleMotions.get(item.key);
+      const layout = particleLayouts[index];
+      if (!motion || !layout) return;
+      const previousPose = openingParticlePoses.current.get(item.key) ?? { x: layout.x, y: layout.y };
+      const isNew = item.revealStep === next;
+      const settledX = width / 2 + previousPose.x;
+      const settledY = sceneHeight / 2 + previousPose.y;
+      const itemHeight = item.kind === "title" ? 58 : item.kind === "tag" ? 26 : 23;
+      const collision = insetCollisionBox(layout.width, itemHeight);
+      const destination = destinations.get(item.key) ?? previousPose;
+      const targetX = isNew ? width / 2 + destination.x : settledX;
+      const targetY = isNew ? sceneHeight / 2 + destination.y : settledY;
+      const isFlying = isNew && !reducedMotion;
+      activeKeys.push(item.key);
+      physics.add({
+        key: item.key,
+        targetX,
+        targetY,
+        collisionWidth: collision.width,
+        collisionHeight: collision.height,
+        angle: layout.rotation * Math.PI / 180,
+        spawnX: isFlying ? width / 2 : targetX,
+        spawnY: isFlying ? sceneHeight / 2 : targetY,
+        velocityX: isFlying ? destination.x / flightFrameCount : 0,
+        velocityY: isFlying ? destination.y / flightFrameCount : 0,
+        isStatic: !isNew && reducedMotion,
+        frictionAir: isFlying ? 0 : !isNew && !reducedMotion ? OPENING_IMPACT_FRICTION : undefined,
+        restitution: !reducedMotion ? 0.68 : undefined,
+        targetForce: !reducedMotion ? 0 : undefined,
+        collisionGroup: isFlying ? -1 : undefined,
+      });
+      if (isNew) {
+        newKeys.push(item.key);
+        if (isFlying) {
+          motion.x.setValue(0);
+          motion.y.setValue(0);
+          openingParticlePoses.current.set(item.key, { x: 0, y: 0 });
+        }
+      }
+    });
+
     if (reducedMotion) {
-      spray.setValue(1);
+      for (let frame = 0; frame < OPENING_COLLISION_SETTLE_FRAMES; frame += 1) {
+        physics.advance(1000 / 60);
+      }
+      const poses = physics.poses();
+      newKeys.forEach((key) => {
+        const pose = poses.get(key);
+        const motion = particleMotions.get(key);
+        if (!pose || !motion) return;
+        const relativePose = { x: pose.x - width / 2, y: pose.y - sceneHeight / 2 };
+        motion.x.setValue(relativePose.x);
+        motion.y.setValue(relativePose.y);
+        openingParticlePoses.current.set(key, relativePose);
+      });
+      physics.dispose();
+      openingReveal.setValue(next);
+      if (next === OPENING_STEP_COUNT) openingForeground.setValue(0);
       return;
     }
-    spray.setValue(0);
-    Animated.timing(spray, {
-      toValue: 1,
-      duration: 560,
+
+    openingPhysics.current = physics;
+    let startedAt = 0;
+    let collisionsArmed = false;
+    let decelerationArmed = false;
+    const animateFlight = (frameTime: number) => {
+      if (openingPhysics.current !== physics) return;
+      if (startedAt === 0) startedAt = frameTime;
+      const elapsed = frameTime - startedAt;
+      if (!collisionsArmed && elapsed >= OPENING_COLLISION_ARM_DELAY) {
+        physics.setCollisionGroup(newKeys, 0);
+        collisionsArmed = true;
+      }
+      if (!decelerationArmed && elapsed >= OPENING_DECELERATION_DELAY) {
+        physics.setFrictionAir(activeKeys, OPENING_DECELERATION_FRICTION);
+        decelerationArmed = true;
+      }
+      const poses = physics.advance(1000 / 60);
+      activeKeys.forEach((key) => {
+        const pose = poses.get(key);
+        const motion = particleMotions.get(key);
+        if (!pose || !motion) return;
+        const relativePose = { x: pose.x - width / 2, y: pose.y - sceneHeight / 2 };
+        motion.x.setValue(relativePose.x);
+        motion.y.setValue(relativePose.y);
+        openingParticlePoses.current.set(key, relativePose);
+      });
+      if (elapsed < OPENING_FLIGHT_DURATION) {
+        openingPhysicsFrame.current = requestAnimationFrame(animateFlight);
+        return;
+      }
+      openingPhysicsFrame.current = null;
+      physics.dispose();
+      if (openingPhysics.current === physics) openingPhysics.current = null;
+    };
+    openingPhysicsFrame.current = requestAnimationFrame(animateFlight);
+
+    Animated.timing(openingReveal, {
+      toValue: next,
+      duration: OPENING_REVEAL_DURATION,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: Platform.OS !== "web",
-    }).start();
-  }, [reducedMotion, spray]);
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (!finished || next !== OPENING_STEP_COUNT) return;
+      Animated.sequence([
+        Animated.delay(500),
+        Animated.timing(openingForeground, {
+          toValue: 0,
+          duration: 900,
+          easing: Easing.inOut(Easing.cubic),
+          useNativeDriver: false,
+        }),
+      ]).start();
+    });
+  }, [
+    openingForeground,
+    openingParticles,
+    openingReveal,
+    particleLayouts,
+    particleMotions,
+    reducedMotion,
+    sceneHeight,
+    stopOpeningFlight,
+    width,
+  ]);
+
+  useEffect(() => {
+    if (openingStep === 0 || openingStep >= OPENING_STEP_COUNT) return undefined;
+    const timer = setTimeout(
+      revealNextOpeningGroup,
+      reducedMotion ? 120 : OPENING_AUTO_STEP_DELAY,
+    );
+    return () => clearTimeout(timer);
+  }, [openingStep, reducedMotion, revealNextOpeningGroup]);
+
+  const startOpeningSequence = useCallback(() => {
+    if (openingSequenceStarted.current || openingStepRef.current > 0) return;
+    openingSequenceStarted.current = true;
+    revealNextOpeningGroup();
+  }, [revealNextOpeningGroup]);
 
   const registerChapter = useCallback((index: number) => (event: LayoutChangeEvent) => {
     sectionOffsets.current[index - 1] = event.nativeEvent.layout.y;
@@ -389,63 +701,183 @@ export function AnnualScrollStory({
       >
         <View onLayout={registerChapter(1)} style={[styles.stickyChapter, { minHeight: sceneHeight + 460 }]}>
           <View style={[styles.scene, { minHeight: sceneHeight }, stickyStyle]}>
-            <View style={[styles.sceneInner, compact && styles.sceneInnerCompact]}>
-              <View style={styles.openingCopy} {...revealDataSet()}>
-                <Text style={styles.chapterNo}>CHAPTER 01 · 你的内容世界</Text>
-                <Text style={styles.openingTitle}>你的内容世界，{`\n`}已经有了形状。</Text>
-                <Text style={styles.lead}>点一下音符，让当前样本中的高频标签散开。</Text>
+            <View style={styles.openingBackdrop} testID="opening-cover-collage">
+              {openingCovers.map((item, index) => (
+                <OpeningCoverTile
+                  item={item.record}
+                  key={`${item.key}:${index}`}
+                  layout={OPENING_COVER_LAYOUTS[index]!}
+                  privacy={privacy}
+                />
+              ))}
+              <View pointerEvents="none" style={styles.openingBackdropShade} />
+              <View
+                accessible
+                accessibilityLabel="你的内容世界，已经有了形状。"
+                accessibilityElementsHidden={openingStep < OPENING_STEP_COUNT}
+                aria-hidden={openingStep < OPENING_STEP_COUNT}
+                importantForAccessibility={openingStep < OPENING_STEP_COUNT ? "no-hide-descendants" : "auto"}
+                style={styles.openingFinalCopy}
+                testID="opening-final-copy"
+              >
+                <Text style={[styles.openingFinalTitle, compact && styles.openingFinalTitleCompact]}>
+                  你的内容世界，{`\n`}已经有了形状。
+                </Text>
               </View>
+            </View>
+
+            <Animated.View
+              accessibilityElementsHidden={openingStep === OPENING_STEP_COUNT}
+              aria-hidden={openingStep === OPENING_STEP_COUNT}
+              importantForAccessibility={openingStep === OPENING_STEP_COUNT ? "no-hide-descendants" : "auto"}
+              pointerEvents={openingStep === OPENING_STEP_COUNT ? "none" : "box-none"}
+              style={[styles.openingForeground, { opacity: openingForeground }]}
+              testID="opening-foreground"
+            >
+              <Svg
+                height="100%"
+                pointerEvents="none"
+                preserveAspectRatio="none"
+                style={styles.openingForegroundFill}
+                viewBox={`0 0 ${width} ${sceneHeight}`}
+                width="100%"
+              >
+                <Defs>
+                  <ClipPath id="opening-foreground-note-clip">
+                    <Path d={NOTE_PATH} />
+                  </ClipPath>
+                  <Mask
+                    height={sceneHeight}
+                    id="opening-foreground-mask"
+                    maskUnits="userSpaceOnUse"
+                    width={width}
+                    x="0"
+                    y="0"
+                  >
+                    <Rect fill="white" height={sceneHeight} width={width} x="0" y="0" />
+                    <G
+                      clipPath="url(#opening-foreground-note-clip)"
+                      transform={`translate(${noteLeft} ${noteTop})`}
+                    >
+                      <AnimatedSvgGroup transform={liquidTransform}>
+                        <AnimatedSvgGroup transform={waveTransform}>
+                          <Path d={LIQUID_PATH} fill="black" />
+                        </AnimatedSvgGroup>
+                      </AnimatedSvgGroup>
+                    </G>
+                  </Mask>
+                </Defs>
+                <Rect fill={color.black} height={sceneHeight} mask="url(#opening-foreground-mask)" width={width} x="0" y="0" />
+              </Svg>
 
               <View
                 accessible
-                accessibilityLabel={`高频标签：${model.openingTags.map((tag, index) => openingTagLabel(tag, privacy, index)).join("、") || "暂无可识别标签"}`}
-                style={[styles.tagStage, { height: Math.min(500, sceneHeight * 0.52) }]}
+                accessibilityLabel={`年度内容已展开 ${openingProgress}%`}
+                style={styles.openingParticleStage}
               >
-                {model.openingTags.map((tag, index) => {
-                  const position = tagPositions[index] ?? { x: 0, y: 0 };
+                {openingParticles.map((item, index) => {
+                  const layout = particleLayouts[index]!;
+                  const motion = particleMotions.get(item.key);
+                  if (!motion) return null;
+                  const inputStart = item.revealStep - 1;
+                  const hidden = item.revealStep > openingStep;
                   return (
                     <Animated.View
-                      key={tag.key}
+                      accessible
+                      accessibilityLabel={openingParticleAccessibilityLabel(item)}
+                      accessibilityElementsHidden={hidden}
+                      aria-hidden={hidden}
+                      importantForAccessibility={hidden ? "no-hide-descendants" : "auto"}
+                      key={item.key}
+                      pointerEvents="none"
                       style={[
-                        styles.sprayTag,
-                        index % 3 === 0 ? styles.sprayTagCyan : index % 3 === 1 ? styles.sprayTagRed : styles.sprayTagAmber,
+                        styles.floatingItem,
                         {
-                          opacity: spray,
+                          width: layout.width,
+                          height: item.kind === "title" ? 58 : item.kind === "tag" ? 26 : 23,
+                          marginLeft: -layout.width / 2,
+                          marginTop: item.kind === "title" ? -29 : item.kind === "tag" ? -13 : -11.5,
+                          opacity: openingReveal.interpolate({
+                            inputRange: [inputStart, item.revealStep],
+                            outputRange: [0, 1],
+                            extrapolate: "clamp",
+                          }),
                           transform: [
-                            { translateX: spray.interpolate({ inputRange: [0, 1], outputRange: [0, position.x] }) },
-                            { translateY: spray.interpolate({ inputRange: [0, 1], outputRange: [0, position.y] }) },
-                            { scale: spray.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }) },
+                            { translateX: motion.x },
+                            { translateY: motion.y },
+                            { rotate: `${layout.rotation}deg` },
+                            { scale: openingReveal.interpolate({ inputRange: [inputStart, item.revealStep], outputRange: [0.72, 1], extrapolate: "clamp" }) },
                           ],
                         },
                       ]}
                     >
-                      <Text style={styles.sprayTagText}>{openingTagLabel(tag, privacy, index)}</Text>
-                      <Text style={styles.sprayTagCount}>{tag.count}</Text>
+                      <Text
+                        numberOfLines={item.kind === "title" ? 2 : 1}
+                        style={[
+                          item.kind === "tag" ? styles.floatingTag : item.kind === "title" ? styles.floatingTitle : styles.floatingCreator,
+                          { fontSize: layout.fontSize, textAlign: layout.textAlign },
+                        ]}
+                      >
+                        {item.label}
+                        {item.count === undefined ? null : <Text style={styles.floatingCount}> {formatNumber(item.count)}</Text>}
+                      </Text>
                     </Animated.View>
                   );
                 })}
                 <Pressable
-                  accessibilityHint="展开或重新播放高频标签"
-                  accessibilityLabel="播放标签喷发动画"
+                  accessibilityHint="点击一次后自动展开全部真实标签、视频标题和创作者"
+                  accessibilityLabel={openingStep >= OPENING_STEP_COUNT
+                    ? "年度内容已全部展开"
+                    : openingStep > 0
+                      ? "年度内容正在自动展开"
+                      : "自动展开年度内容"}
                   accessibilityRole="button"
-                  onPress={replaySpray}
-                  style={({ pressed }) => [styles.noteButton, pressed && styles.noteButtonPressed, WEB_POINTER]}
+                  accessibilityState={{ disabled: openingStep > 0 }}
+                  disabled={openingStep > 0}
+                  {...(Platform.OS === "web" ? { dataSet: { focusTreatment: "scale" } } : {})}
+                  onPress={startOpeningSequence}
+                  style={({ pressed }) => [styles.logoButton, pressed && styles.logoButtonPressed, WEB_POINTER]}
+                  testID="opening-logo-button"
                 >
-                  <Music2 color={color.white} size={48} strokeWidth={1.7} />
+                  <View
+                    accessible
+                    accessibilityLabel={`内容展开进度 ${openingProgress}%`}
+                    accessibilityRole="progressbar"
+                    accessibilityValue={{ min: 0, max: 100, now: openingProgress }}
+                    style={styles.logoProgress}
+                  >
+                    <Svg
+                      accessibilityLabel="抖音音符标志"
+                      height={NOTE_HEIGHT}
+                      pointerEvents="none"
+                      viewBox={`0 0 ${NOTE_VIEWBOX_WIDTH} ${NOTE_VIEWBOX_HEIGHT}`}
+                      width={NOTE_WIDTH}
+                    >
+                      <Defs>
+                        <Mask
+                          height={NOTE_VIEWBOX_HEIGHT}
+                          id="opening-logo-fill-mask"
+                          maskUnits="userSpaceOnUse"
+                          width={NOTE_VIEWBOX_WIDTH}
+                          x="0"
+                          y="0"
+                        >
+                          <Path d={NOTE_PATH} fill="white" />
+                          <AnimatedSvgGroup transform={liquidTransform}>
+                            <AnimatedSvgGroup transform={waveTransform}>
+                              <Path d={LIQUID_PATH} fill="black" />
+                            </AnimatedSvgGroup>
+                          </AnimatedSvgGroup>
+                        </Mask>
+                      </Defs>
+                      <Path d={NOTE_PATH} fill="none" stroke="#25F4EE" strokeLinejoin="round" strokeWidth={14} transform="translate(-7 5)" />
+                      <Path d={NOTE_PATH} fill="none" stroke="#FE2C55" strokeLinejoin="round" strokeWidth={14} transform="translate(7 -4)" />
+                      <Rect fill="#F4F6FA" height={NOTE_VIEWBOX_HEIGHT} mask="url(#opening-logo-fill-mask)" width={NOTE_VIEWBOX_WIDTH} />
+                    </Svg>
+                  </View>
                 </Pressable>
               </View>
-
-              <View style={styles.openingStats} {...revealDataSet()}>
-                <View>
-                  <Text style={styles.openingNumber}>{formatNumber(overview.counts.total)}</Text>
-                  <Text style={styles.openingStatLabel}>条去重内容，构成这份故事</Text>
-                </View>
-                <View style={styles.openingRange}>
-                  <Text style={styles.openingRangeValue}>{formatDateRange(overview.dateRange)}</Text>
-                  <Text style={styles.openingRangeLabel}>{overview.activeDays} 个活跃日 · {report.timezone}</Text>
-                </View>
-              </View>
-            </View>
+            </Animated.View>
           </View>
         </View>
 
@@ -729,6 +1161,43 @@ function StoryCover({ item, privacy }: { item: StoryContentItem["record"]; priva
   return <View style={[styles.recordCover, styles.recordCoverFallback]}><Play color={color.cyan} size={15} /></View>;
 }
 
+function OpeningCoverTile({
+  item,
+  layout,
+  privacy,
+}: {
+  item: StoryContentItem["record"];
+  layout: ViewStyle;
+  privacy: boolean;
+}) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [item.coverUrl]);
+
+  return (
+    <View accessibilityElementsHidden aria-hidden importantForAccessibility="no-hide-descendants" pointerEvents="none" style={[styles.openingCoverTile, layout]}>
+      {item.coverUrl && !privacy && !failed ? (
+        <ImageBackground
+          onError={() => setFailed(true)}
+          resizeMode="cover"
+          source={{ uri: item.coverUrl }}
+          style={styles.openingCoverImage}
+        >
+          <View style={styles.openingCoverImageShade} />
+        </ImageBackground>
+      ) : (
+        <View style={[styles.openingCoverFallback, { backgroundColor: openingCoverColor(item.id) }]}>
+          <Text numberOfLines={3} style={styles.openingCoverFallbackTitle}>
+            {privacy ? "内容封面" : item.title}
+          </Text>
+          <Text numberOfLines={1} style={styles.openingCoverFallbackAuthor}>
+            {privacy ? "创作者已隐藏" : item.author ?? "未知创作者"}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 function HourDial({
   hourRotation,
   hours,
@@ -966,9 +1435,74 @@ function revealDataSet(): Record<string, unknown> {
   return Platform.OS === "web" ? { dataSet: { storyReveal: "true" } } : {};
 }
 
-function openingTagLabel(tag: StoryOpeningTag, privacy: boolean, index: number): string {
-  if (privacy) return tag.source === "topic" ? `话题 ${index + 1}` : `创作者 ${index + 1}`;
-  return tag.source === "topic" ? `#${tag.name}` : tag.name;
+function collectOpeningContent(model: StoryModel): StoryContentItem[] {
+  const items = new Map<string, StoryContentItem>();
+  Object.values(model.streams).forEach((stream) => {
+    stream.records.forEach((item) => {
+      if (!items.has(item.key)) items.set(item.key, item);
+    });
+  });
+  return [...items.values()];
+}
+
+function buildOpeningCovers(items: readonly StoryContentItem[]): StoryContentItem[] {
+  if (items.length === 0) return [];
+  return OPENING_COVER_LAYOUTS.map((_, index) => items[index % items.length]!);
+}
+
+function buildOpeningParticles(
+  model: StoryModel,
+  content: readonly StoryContentItem[],
+  privacy: boolean,
+): OpeningParticle[] {
+  const tags = model.topics.slice(0, OPENING_TAG_LIMIT);
+  const titles: Array<{ key: string; label: string }> = [];
+  const creators: Array<{ key: string; label: string }> = [];
+  const seenTitles = new Set<string>();
+
+  for (const item of content) {
+    const title = item.record.title.trim();
+    const titleKey = title.toLocaleLowerCase("zh-Hans");
+    if (title && !seenTitles.has(titleKey) && titles.length < OPENING_TITLE_LIMIT) {
+      titles.push({ key: item.key, label: title });
+      seenTitles.add(titleKey);
+    }
+
+    const creator = item.record.author?.trim();
+    if (creator && creators.length < OPENING_CREATOR_LIMIT) {
+      creators.push({ key: item.key, label: creator });
+    }
+
+    if (titles.length >= OPENING_TITLE_LIMIT && creators.length >= OPENING_CREATOR_LIMIT) break;
+  }
+
+  const particles: OpeningParticle[] = [];
+  tags.forEach((tag, index) => particles.push({
+    key: `tag:${tag.name}`,
+    kind: "tag",
+    label: privacy ? `话题 ${index + 1}` : `#${tag.name}`,
+    count: tag.count,
+    revealStep: (index % OPENING_STEP_COUNT) + 1,
+  }));
+  titles.forEach((title, index) => particles.push({
+    key: `title:${title.key}`,
+    kind: "title",
+    label: privacy ? `视频标题 ${index + 1}` : title.label,
+    revealStep: (index % OPENING_STEP_COUNT) + 1,
+  }));
+  creators.forEach((creator, index) => particles.push({
+    key: `creator:${creator.key}`,
+    kind: "creator",
+    label: privacy ? `创作者 ${index + 1}` : `@${creator.label}`,
+    revealStep: (index % OPENING_STEP_COUNT) + 1,
+  }));
+  return particles;
+}
+
+function openingParticleAccessibilityLabel(item: OpeningParticle): string {
+  if (item.kind === "tag") return `视频标签 ${item.label}${item.count === undefined ? "" : `，出现 ${item.count} 次`}`;
+  if (item.kind === "title") return `视频标题 ${item.label}`;
+  return `创作者 ${item.label.replace(/^@/u, "")}`;
 }
 
 function privateHourStory(hour: StoryHour): string {
@@ -992,22 +1526,43 @@ function collectStoryContent(model: StoryModel): StoryContentItem[] {
   return [...items.values()];
 }
 
-function storyTagPositions(tags: string[], width: number): Array<{ x: number; y: number }> {
-  const radiusX = Math.min(350, Math.max(250, (width - 160) * 0.34));
-  const radiusY = 170;
-  const slots = [
-    { x: -0.88, y: -0.9 }, { x: -0.3, y: -1.04 }, { x: 0.3, y: -1.04 }, { x: 0.78, y: -0.9 },
-    { x: -1.06, y: -0.28 }, { x: 0.78, y: -0.28 },
-    { x: -1.06, y: 0.36 }, { x: 0.78, y: 0.36 },
-    { x: -0.88, y: 0.92 }, { x: -0.3, y: 1.02 }, { x: 0.3, y: 1.02 }, { x: 0.78, y: 0.92 },
-  ];
+function storyParticleLayouts(items: readonly OpeningParticle[], width: number, height: number): OpeningParticleLayout[] {
+  const radiusX = Math.min(610, Math.max(420, (width - 160) * 0.46));
+  const radiusY = Math.min(340, Math.max(260, height * 0.43));
+  const slots = Array.from({ length: 90 }, (_, index) => ({
+    column: index % 9,
+    row: Math.floor(index / 9),
+  })).filter(({ column, row }) => !([3, 4, 5].includes(column) && row >= 3 && row <= 6)).map(({ column, row }) => ({
+    x: ((column + 0.5) / 9) * 2 - 1,
+    y: ((row + 0.5) / 10) * 2 - 1,
+  }));
   const availableSlots = slots.map((_, index) => index);
+  const alignments = ["left", "center", "right"] as const;
 
-  return tags.map((tag) => {
-    const availableIndex = hashString(tag) % availableSlots.length;
+  return items.map((item) => {
+    const hash = hashString(item.key);
+    const availableIndex = hash % availableSlots.length;
     const slotIndex = availableSlots.splice(availableIndex, 1)[0] ?? 0;
     const slot = slots[slotIndex]!;
-    return { x: slot.x * radiusX, y: slot.y * radiusY };
+    const narrow = width < 1180;
+    const widthForKind = item.kind === "title"
+      ? (narrow ? 104 + (hash % 19) : 145 + (hash % 32))
+      : item.kind === "creator"
+        ? (narrow ? 112 + (hash % 17) : 120 + (hash % 41))
+        : (narrow ? 88 + (hash % 18) : 110 + (hash % 36));
+    const fontSize = item.kind === "title"
+      ? (narrow ? 12 + (hash % 5) : 14 + (hash % 7))
+      : item.kind === "tag"
+        ? (narrow ? 11 + (hash % 5) : 13 + (hash % 7))
+        : (narrow ? 10 + (hash % 4) : 11 + (hash % 6));
+    return {
+      x: slot.x * radiusX + (narrow ? ((hash >>> 12) % 9) - 4 : ((hash >>> 12) % 17) - 8),
+      y: slot.y * radiusY + (narrow ? ((hash >>> 17) % 11) - 5 : ((hash >>> 17) % 17) - 8),
+      width: widthForKind,
+      fontSize,
+      rotation: ((hash >>> 5) % 15) - 7,
+      textAlign: alignments[(hash >>> 9) % alignments.length]!,
+    };
   });
 }
 
@@ -1041,11 +1596,6 @@ function formatDateTime(value: string | null): string {
   });
 }
 
-function formatDateRange(range: AnnualOverviewData["dateRange"]): string {
-  if (!range) return "可靠时间范围不足";
-  return `${range.start.replaceAll("-", ".")} — ${range.end.replaceAll("-", ".")}`;
-}
-
 function formatDuration(seconds: number): string {
   const rounded = Math.max(0, Math.round(seconds));
   return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, "0")}`;
@@ -1062,6 +1612,11 @@ function hashString(value: string): number {
 
 function fallbackColor(value: string): string {
   const palette = [color.cyanSoft, color.accentSoft, color.amberSoft, color.greenSoft, color.surfaceMuted];
+  return palette[hashString(value) % palette.length]!;
+}
+
+function openingCoverColor(value: string): string {
+  const palette = ["#153334", "#3A1721", "#382E19", "#1D2940", "#2D2038", "#173429"];
   return palette[hashString(value) % palette.length]!;
 }
 
@@ -1096,27 +1651,30 @@ const styles = StyleSheet.create({
   scrollContent: { backgroundColor: color.canvas, paddingBottom: 40 },
   stickyChapter: { position: "relative", backgroundColor: color.canvas },
   scene: { position: "relative", justifyContent: "center", overflow: "hidden", backgroundColor: color.canvas },
-  sceneInner: { width: "100%", maxWidth: 1240, minHeight: "100%", alignSelf: "center", justifyContent: "space-between", paddingHorizontal: 68, paddingVertical: 56 },
-  sceneInnerCompact: { paddingHorizontal: 44 },
-  openingCopy: { zIndex: 5, maxWidth: 760 },
+  openingBackdrop: { ...ABSOLUTE_FILL, overflow: "hidden", backgroundColor: color.surfaceMuted },
+  openingCoverTile: { position: "absolute", overflow: "hidden", borderRadius: radius.small, backgroundColor: color.surfaceMuted },
+  openingCoverImage: { flex: 1 },
+  openingCoverImageShade: { ...ABSOLUTE_FILL, backgroundColor: "rgba(5,5,6,0.12)" },
+  openingCoverFallback: { flex: 1, justifyContent: "space-between", padding: 20 },
+  openingCoverFallbackTitle: { maxWidth: 250, color: "rgba(255,255,255,0.62)", fontSize: 22, lineHeight: 29, fontWeight: "900" },
+  openingCoverFallbackAuthor: { color: "rgba(255,255,255,0.42)", fontSize: 11, fontWeight: "800" },
+  openingBackdropShade: { ...ABSOLUTE_FILL, backgroundColor: "rgba(5,5,6,0.46)" },
+  openingFinalCopy: { ...ABSOLUTE_FILL, zIndex: 2, alignItems: "center", justifyContent: "center", paddingHorizontal: 56 },
+  openingFinalTitle: { maxWidth: 1050, color: color.white, fontSize: 84, lineHeight: 100, fontWeight: "900", textAlign: "center", textShadowColor: "rgba(5,5,6,0.72)", textShadowOffset: { width: 0, height: 3 }, textShadowRadius: 18 },
+  openingFinalTitleCompact: { fontSize: 68, lineHeight: 82 },
+  openingForeground: { ...ABSOLUTE_FILL, zIndex: 5 },
+  openingForegroundFill: { ...ABSOLUTE_FILL },
+  openingParticleStage: { ...ABSOLUTE_FILL, alignItems: "center", justifyContent: "center" },
   chapterNo: { color: color.cyan, fontSize: 10, fontWeight: "900" },
-  openingTitle: { color: color.text, fontSize: 58, lineHeight: 68, fontWeight: "900", marginTop: 12 },
   lead: { maxWidth: 640, color: color.textSecondary, fontSize: 16, lineHeight: 26, marginTop: 18 },
-  tagStage: { position: "relative", width: "100%", minHeight: 390, alignItems: "center", justifyContent: "center", marginVertical: 8 },
-  noteButton: { zIndex: 10, width: 142, height: 142, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: color.border, borderRadius: 71, backgroundColor: color.surfaceRaised },
-  noteButtonPressed: { opacity: 0.82, transform: [{ scale: 0.98 }] },
-  sprayTag: { position: "absolute", zIndex: 4, left: "50%", top: "50%", minHeight: 34, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 12, borderWidth: 1, borderRadius: 17, backgroundColor: color.surface },
-  sprayTagCyan: { borderColor: color.cyan, backgroundColor: color.cyanSoft },
-  sprayTagRed: { borderColor: color.accent, backgroundColor: color.accentSoft },
-  sprayTagAmber: { borderColor: color.amber, backgroundColor: color.amberSoft },
-  sprayTagText: { color: color.text, fontSize: 12, fontWeight: "800" },
-  sprayTagCount: { color: color.textMuted, fontSize: 9, fontWeight: "900" },
-  openingStats: { minHeight: 92, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 28, paddingTop: 22, borderTopWidth: 1, borderTopColor: color.border },
-  openingNumber: { color: color.text, fontSize: 48, lineHeight: 52, fontWeight: "900", fontVariant: ["tabular-nums"] },
-  openingStatLabel: { color: color.textSecondary, fontSize: 13, marginTop: 7 },
-  openingRange: { alignItems: "flex-end" },
-  openingRangeValue: { color: color.text, fontSize: 16, fontWeight: "900" },
-  openingRangeLabel: { color: color.textMuted, fontSize: 11, marginTop: 7 },
+  floatingItem: { position: "absolute", zIndex: 4, left: "50%", top: "50%", justifyContent: "center" },
+  floatingTag: { color: color.cyan, fontWeight: "900", lineHeight: 26 },
+  floatingTitle: { color: color.text, fontWeight: "900", lineHeight: 29 },
+  floatingCreator: { color: color.accent, fontWeight: "800", lineHeight: 23 },
+  floatingCount: { color: color.textMuted, fontSize: 10, fontWeight: "900" },
+  logoButton: { zIndex: 10, width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
+  logoButtonPressed: { opacity: 0.86, transform: [{ scale: 0.97 }] },
+  logoProgress: { width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
   chapter: { minHeight: 820, justifyContent: "center", paddingHorizontal: 52, paddingVertical: 92, borderTopWidth: 1, borderTopColor: color.borderSoft, backgroundColor: color.canvas },
   sectionInner: { width: "100%", maxWidth: 1180, alignSelf: "center" },
   sectionHeading: { flexDirection: "row", alignItems: "flex-start", gap: 38, marginBottom: 48 },

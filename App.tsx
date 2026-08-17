@@ -690,6 +690,11 @@ function AppContent() {
         outline: 2px solid ${workspaceColors.cyan} !important;
         outline-offset: 2px !important;
       }
+      [data-focus-treatment="scale"]:focus-visible {
+        outline: none !important;
+        outline-offset: 0 !important;
+        transform: scale(1.04);
+      }
     `;
     document.head.appendChild(focusStyles);
     return () => focusStyles.remove();

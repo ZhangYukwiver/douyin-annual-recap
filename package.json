@@ -31,6 +31,7 @@
     "fflate": "^0.8.2",
     "gsap": "3.12.5",
     "lucide-react-native": "^1.30.0",
+    "matter-js": "^0.20.0",
     "playwright-core": "^1.62.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -40,6 +41,7 @@
     "react-native-web": "^0.21.2"
   },
   "devDependencies": {
+    "@types/matter-js": "^0.20.2",
     "@types/react": "~19.2.2",
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
