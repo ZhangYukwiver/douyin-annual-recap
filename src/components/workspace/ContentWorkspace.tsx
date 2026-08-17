@@ -212,7 +212,7 @@ export function ContentWorkspace({
               {privacy ? <EyeOff color={color.cyan} size={19} /> : <Eye color={color.textSecondary} size={19} />}
             </Pressable>
             <Pressable
-              accessibilityLabel="重新读取记录"
+              accessibilityLabel="重新增量读取记录"
               accessibilityRole="button"
               disabled={busy}
               onPress={onSync}

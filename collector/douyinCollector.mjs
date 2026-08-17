@@ -48,21 +48,21 @@ const MANUAL_OBSERVATION_WARNING = "手动监听模式：仅保存你在独立�
 const DIRECT_COMPLETE_WARNING_PREFIX = "无界面读取完成：";
 
 export function directContextLaunchOptions({ executablePath, userAgent, platform = process.platform }) {
-  const useBackgroundWindow = platform === "win32";
   return {
     executablePath,
-    headless: !useBackgroundWindow,
+    // Incremental reads must not create a visible or taskbar Chrome window.
+    // Chrome's new headless mode still provides the page runtime needed by
+    // Douyin to generate signed list requests.
+    headless: true,
     locale: "zh-CN",
     userAgent,
     viewport: { width: 1280, height: 900 },
     acceptDownloads: false,
     serviceWorkers: "block",
-    ...(useBackgroundWindow ? {
-      args: [
-        "--window-position=-32000,-32000",
-        "--window-size=1280,900",
-      ],
-    } : {}),
+    args: [
+      "--headless=new",
+      "--window-size=1280,900",
+    ],
   };
 }
 

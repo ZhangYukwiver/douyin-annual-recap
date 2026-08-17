@@ -61,8 +61,8 @@ export interface SetupWorkspaceProps {
   onDisconnect: () => Promise<void>;
   onStartObservation: () => Promise<void>;
   onStopObservation: () => Promise<void>;
-  onStartDirectHistory: () => void;
-  onStartSync: () => void;
+  onStartIncrementalSync: () => void;
+  onStartFullSync: () => void;
   onStopSync: () => Promise<void>;
   onSwitchAccount: () => void;
   onClearCache: () => void;
@@ -93,8 +93,8 @@ export function SetupWorkspace({
   onDisconnect,
   onStartObservation,
   onStopObservation,
-  onStartDirectHistory,
-  onStartSync,
+  onStartIncrementalSync,
+  onStartFullSync,
   onStopSync,
   onSwitchAccount,
   onClearCache,
@@ -312,9 +312,9 @@ export function SetupWorkspace({
             <View style={[styles.collectionActions, phone && styles.collectionActionsPhone]}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={syncActive ? "停止读取记录" : "读取全部记录"}
+                accessibilityLabel={syncActive ? "停止读取记录" : "增量读取记录"}
                 disabled={syncActive ? stoppingSync : !connected || busy || observing}
-                onPress={() => void (syncActive ? onStopSync() : onStartSync())}
+                onPress={() => void (syncActive ? onStopSync() : onStartIncrementalSync())}
                 style={({ pressed }) => [
                   styles.primaryButton,
                   styles.collectionPrimary,
@@ -334,19 +334,18 @@ export function SetupWorkspace({
                   <Play color={color.white} size={18} fill={color.white} strokeWidth={2} />
                 )}
                 <Text style={styles.primaryButtonText}>
-                  {stoppingSync ? "正在停止" : syncActive ? "停止读取" : busy ? "正在读取" : "读取全部记录"}
+                  {stoppingSync ? "正在停止" : syncActive ? "停止读取" : busy ? "正在读取" : "增量读取"}
                 </Text>
               </Pressable>
 
               <Pressable
                 accessibilityRole="button"
                 disabled={!connected || busy || observing}
-                onPress={onStartDirectHistory}
+                onPress={onStartFullSync}
                 style={({ pressed }) => [styles.secondaryButton, (!connected || busy || observing) && styles.buttonDisabled, pressed && styles.buttonPressed, webPointer]}
               >
                 <RefreshCw color={color.textSecondary} size={18} strokeWidth={2} />
-                <Text style={styles.secondaryButtonText}>增量读取</Text>
-                <View style={styles.experimentalBadge}><Text style={styles.experimentalBadgeText}>实验</Text></View>
+                <Text style={styles.secondaryButtonText}>完整读取</Text>
               </Pressable>
 
               <Pressable
@@ -590,8 +589,6 @@ const styles = StyleSheet.create({
   stopButton: { backgroundColor: color.danger },
   secondaryButton: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surface },
   secondaryButtonText: { color: color.textSecondary, fontSize: 12, fontWeight: "800" },
-  experimentalBadge: { minHeight: 20, alignItems: "center", justifyContent: "center", paddingHorizontal: 6, borderRadius: radius.small, backgroundColor: color.amberSoft },
-  experimentalBadgeText: { color: color.amber, fontSize: 9, fontWeight: "900" },
   utilityRow: { minHeight: 48, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, marginTop: 10 },
   utilityButton: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, borderRadius: radius.small },
   utilityButtonText: { color: color.textMuted, fontSize: 11, fontWeight: "700" },

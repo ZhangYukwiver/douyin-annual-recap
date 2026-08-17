@@ -300,7 +300,7 @@ function RecordsView({
           </View>
           {collectorConnected ? (
             <Pressable
-              accessibilityLabel="重新读取全部可见记录"
+              accessibilityLabel="重新增量读取记录"
               accessibilityRole="button"
               disabled={collectorBusy}
               onPress={() => void onSync()}
@@ -377,7 +377,7 @@ function RecordsView({
                 {collectorConnected
                   ? <RefreshCw color={colors.surface} size={17} />
                   : <Link2 color={colors.surface} size={17} />}
-                <Text style={styles.primaryButtonText}>{collectorConnected ? "读取记录" : "连接采集器"}</Text>
+                <Text style={styles.primaryButtonText}>{collectorConnected ? "增量读取" : "连接采集器"}</Text>
               </>
             )}
           </Pressable>
@@ -425,8 +425,8 @@ interface SourcesViewProps {
   onDisconnect: () => Promise<void>;
   onStartObservation: () => Promise<void>;
   onStopObservation: () => Promise<void>;
-  onStartDirectHistory: () => void;
-  onStartSync: () => void;
+  onStartIncrementalSync: () => void;
+  onStartFullSync: () => void;
   onSwitchAccount: () => void;
   onPickArchive: () => Promise<void>;
 }
@@ -449,8 +449,8 @@ function SourcesView({
   onDisconnect,
   onStartObservation,
   onStopObservation,
-  onStartDirectHistory,
-  onStartSync,
+  onStartIncrementalSync,
+  onStartFullSync,
   onSwitchAccount,
   onPickArchive,
 }: SourcesViewProps) {
@@ -532,14 +532,14 @@ function SourcesView({
           {connected ? (
             <>
               <Pressable
-                accessibilityLabel="自动读取全部可见记录"
+                accessibilityLabel="增量读取记录"
                 accessibilityRole="button"
                 disabled={busy || observing}
-                onPress={onStartSync}
+                onPress={onStartIncrementalSync}
                 style={({ pressed }) => [styles.sampleButton, (busy || observing) && styles.disabled, pressed && styles.pressed]}
               >
                 <Play color={colors.secondaryText} size={18} />
-                <Text style={styles.sampleButtonText}>读取记录</Text>
+                <Text style={styles.sampleButtonText}>增量读取</Text>
               </Pressable>
               <Pressable
                 accessibilityLabel="断开采集器"
@@ -556,10 +556,10 @@ function SourcesView({
 
         {connected ? (
           <Pressable
-            accessibilityLabel="无界面读取新增记录"
+            accessibilityLabel="完整读取记录"
             accessibilityRole="button"
             disabled={busy || observing}
-            onPress={onStartDirectHistory}
+            onPress={onStartFullSync}
             style={({ pressed }) => [
               styles.accountSwitchButton,
               (busy || observing) && styles.disabled,
@@ -567,7 +567,7 @@ function SourcesView({
             ]}
           >
             <History color={colors.secondaryText} size={18} />
-            <Text style={styles.accountSwitchText}>无界面读取新记录（实验）</Text>
+            <Text style={styles.accountSwitchText}>完整读取</Text>
           </Pressable>
         ) : null}
 
@@ -770,14 +770,14 @@ function AppContent() {
     }
   }
 
-  async function beginSync(baseUrl: string, token: string, directHistory = false) {
+  async function beginSync(baseUrl: string, token: string, incremental = false) {
     const requestId = pollRequest.current + 1;
     pollRequest.current = requestId;
     setCollectorBusy(true);
     setStoppingSync(false);
     setCollectorError(null);
     try {
-      const status = directHistory
+      const status = incremental
         ? await startDirectRecordsSync(baseUrl, token)
         : await startCollectorSync(baseUrl, token);
       if (pollRequest.current !== requestId) return;
@@ -788,7 +788,7 @@ function AppContent() {
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(message);
-      showAlert(directHistory ? "无法直接读取记录" : "无法开始同步", message);
+      showAlert(incremental ? "无法增量读取记录" : "无法完整读取记录", message);
     }
   }
 
@@ -944,7 +944,7 @@ function AppContent() {
     }
   }
 
-  function confirmAutomaticSync() {
+  function confirmFullSync() {
     if (!collectorToken || collectorBusy || collectorStatus?.state === "observing" || syncConfirmationOpenRef.current) return;
     syncConfirmationOpenRef.current = true;
     confirmAlert(
@@ -958,11 +958,11 @@ function AppContent() {
     );
   }
 
-  function confirmDirectHistorySync() {
+  function confirmIncrementalSync() {
     if (!collectorToken || collectorBusy || collectorStatus?.state === "observing" || syncConfirmationOpenRef.current) return;
     syncConfirmationOpenRef.current = true;
     confirmAlert(
-      "实验性直接读取",
+      "增量读取",
       "尚未建立边界的分类会读取全部可见记录；已有边界的分类只读取到本地已知记录为止。每个分类完成后立即合并保存，全程不会弹出浏览器。",
       "读取新记录",
       (confirmed) => {
@@ -1202,9 +1202,9 @@ function AppContent() {
           onDisconnect={disconnectCollector}
           onEnterWorkspace={enterWorkspace}
           onPickArchive={pickArchive}
-          onStartDirectHistory={confirmDirectHistorySync}
+          onStartIncrementalSync={confirmIncrementalSync}
           onStartObservation={() => collectorToken ? beginObservation(collectorUrl, collectorToken) : Promise.resolve()}
-          onStartSync={confirmAutomaticSync}
+          onStartFullSync={confirmFullSync}
           onStopSync={() => collectorToken ? endSync(collectorUrl, collectorToken) : Promise.resolve()}
           onStopObservation={() => collectorToken ? endObservation(collectorUrl, collectorToken) : Promise.resolve()}
           onSwitchAccount={confirmAccountSwitch}
@@ -1233,7 +1233,7 @@ function AppContent() {
           onOpenRecord={openRecord}
           onOpenSettings={() => setActiveView("sources")}
           onReplayStory={replayStory}
-          onSync={() => collectorToken ? confirmAutomaticSync() : setActiveView("sources")}
+          onSync={() => collectorToken ? confirmIncrementalSync() : setActiveView("sources")}
           onTogglePrivacy={() => setPrivacy((value) => !value)}
           privacy={privacy}
           records={workspaceRecords}
