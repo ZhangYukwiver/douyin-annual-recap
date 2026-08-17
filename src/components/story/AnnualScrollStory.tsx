@@ -54,25 +54,34 @@ import {
   type StoryTopic,
 } from "./storyModel";
 import {
+  consumeFixedSteps,
+  FIXED_STEP_MS,
   insetCollisionBox,
+  openingSurfaceY,
   OpeningParticlePhysics,
   planOpeningDestinations,
 } from "./openingParticlePhysics";
 
 const MIN_STORY_WIDTH = 1024;
 const CHAPTER_COUNT = 6;
-const OPENING_STEP_COUNT = 5;
+const OPENING_STEP_COUNT = 12;
 const OPENING_TAG_LIMIT = 18;
 const OPENING_TITLE_LIMIT = 36;
 const OPENING_CREATOR_LIMIT = 18;
+const OPENING_PARTICLE_SCALE = 1.12;
 const OPENING_COLLISION_SETTLE_FRAMES = 42;
-const OPENING_REVEAL_DURATION = 560;
-const OPENING_FLIGHT_DURATION = 780;
-const OPENING_AUTO_STEP_DELAY = 860;
-const OPENING_COLLISION_ARM_DELAY = 140;
-const OPENING_DECELERATION_DELAY = 420;
+// 词条逐个释放、物理世界全程常驻：没有波次边界，水位是连续涨上来的。
+const OPENING_TOTAL_DURATION = 4_300;
+const OPENING_RISE_DURATION = 270;
+const OPENING_WORD_FADE_SLOTS = 3;
+const OPENING_COLLISION_ARM_DELAY = 70;
+const OPENING_DECELERATION_DELAY = 200;
+const OPENING_SETTLE_TIMEOUT = 900;
+// 回位力：碰撞把词条推开后再把它拉回本层水位，没有它后来的词会把先到的搅散。
+const OPENING_SETTLE_FORCE = 0.000_16;
 const OPENING_DECELERATION_FRICTION = 0.14;
-const OPENING_IMPACT_FRICTION = 0.08;
+const OPENING_REST_EPSILON = 0.06;
+const OPENING_DRIFT_DURATION = 16_000;
 const NOTE_WIDTH = 220;
 const NOTE_HEIGHT = 240;
 const NOTE_VIEWBOX_WIDTH = 220;
@@ -145,7 +154,13 @@ interface OpeningParticle {
   kind: "tag" | "title" | "creator";
   label: string;
   count?: number;
+  /** 水位层（自下而上 1..OPENING_STEP_COUNT），决定落点所在的那一层。 */
   revealStep: number;
+  /** 全局释放次序，词条逐个入场而不是整层一起出现。 */
+  revealOrder: number;
+  /** 淡入窗口，与 openingReveal（0..1）同一把尺子。 */
+  revealFrom: number;
+  revealTo: number;
 }
 
 interface OpeningParticleLayout {
@@ -233,6 +248,8 @@ export function AnnualScrollStory({
   const openingPhysicsFrame = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   const openingReveal = useRef(new Animated.Value(0)).current;
   const openingForeground = useRef(new Animated.Value(1)).current;
+  const openingDrift = useRef(new Animated.Value(0)).current;
+  const storyProgress = useRef(new Animated.Value(0)).current;
   const liquidWave = useRef(new Animated.Value(0)).current;
   const hourRotation = useRef(new Animated.Value(selectedHour)).current;
   const rootRef = useRef<View | null>(null);
@@ -258,8 +275,14 @@ export function AnnualScrollStory({
     [openingParticles],
   );
   const openingProgress = Math.round((openingStep / OPENING_STEP_COUNT) * 100);
+  const progressWidth = storyProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0%", "100%"],
+    extrapolate: "clamp",
+  });
+  // 液面和词条水位共用 openingReveal（0..1），两边的进度按定义就是一致的。
   const liquidTransform = openingReveal.interpolate({
-    inputRange: [0, OPENING_STEP_COUNT],
+    inputRange: [0, 1],
     outputRange: [`translate(0 ${NOTE_VIEWBOX_HEIGHT})`, "translate(0 -12)"],
     extrapolate: "clamp",
   });
@@ -269,6 +292,21 @@ export function AnnualScrollStory({
   });
   const noteLeft = (width - NOTE_WIDTH) / 2;
   const noteTop = (sceneHeight - NOTE_HEIGHT) / 2;
+  const collageTransform = [
+    { scale: openingDrift.interpolate({ inputRange: [0, 1], outputRange: [1.04, 1.1] }) },
+    { translateY: openingDrift.interpolate({ inputRange: [0, 1], outputRange: [12, -12] }) },
+  ];
+  const foregroundTransform = [
+    { scale: openingForeground.interpolate({ inputRange: [0, 1], outputRange: [1.06, 1], extrapolate: "clamp" }) },
+  ];
+  const finalCopyOpacity = openingForeground.interpolate({
+    inputRange: [0, 0.6],
+    outputRange: [1, 0],
+    extrapolate: "clamp",
+  });
+  const finalCopyTransform = [
+    { scale: openingForeground.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08], extrapolate: "clamp" }) },
+  ];
 
   const stopOpeningFlight = useCallback(() => {
     if (openingPhysicsFrame.current !== null) cancelAnimationFrame(openingPhysicsFrame.current);
@@ -304,9 +342,26 @@ export function AnnualScrollStory({
   useEffect(() => {
     if (!reducedMotion) return;
     stopOpeningFlight();
-    openingReveal.setValue(openingStepRef.current);
+    openingReveal.setValue(openingStepRef.current / OPENING_STEP_COUNT);
     if (openingStepRef.current === OPENING_STEP_COUNT) openingForeground.setValue(0);
   }, [openingForeground, openingReveal, reducedMotion, stopOpeningFlight]);
+
+  useEffect(() => {
+    openingDrift.stopAnimation();
+    if (reducedMotion || activeChapter !== 1) {
+      openingDrift.setValue(0);
+      return undefined;
+    }
+    const leg = (toValue: number) => Animated.timing(openingDrift, {
+      toValue,
+      duration: OPENING_DRIFT_DURATION,
+      easing: Easing.inOut(Easing.sin),
+      useNativeDriver: Platform.OS !== "web",
+    });
+    const animation = Animated.loop(Animated.sequence([leg(1), leg(0)]));
+    animation.start();
+    return () => animation.stop();
+  }, [activeChapter, openingDrift, reducedMotion]);
 
   useEffect(() => {
     liquidWave.stopAnimation();
@@ -374,154 +429,170 @@ export function AnnualScrollStory({
     }).start();
   }, [hourRotation, reducedMotion, selectedHour]);
 
-  const revealNextOpeningGroup = useCallback(() => {
-    const current = openingStepRef.current;
-    const next = Math.min(OPENING_STEP_COUNT, current + 1);
-    if (next === current) return;
+  const startOpeningSequence = useCallback(() => {
+    if (openingSequenceStarted.current || openingStepRef.current > 0) return;
+    openingSequenceStarted.current = true;
     stopOpeningFlight();
     openingReveal.stopAnimation();
-    openingReveal.setValue(current);
+    openingReveal.setValue(0);
     openingForeground.stopAnimation();
-    openingParticles.forEach((item) => {
-      if (item.revealStep > current) return;
-      const pose = openingParticlePoses.current.get(item.key);
-      const motion = particleMotions.get(item.key);
-      if (!pose || !motion) return;
-      motion.x.setValue(pose.x);
-      motion.y.setValue(pose.y);
-    });
+
     const seed = Math.floor(Math.random() * 4_294_967_296);
-    openingStepRef.current = next;
-    setOpeningStep(next);
+    const entries = openingParticles.flatMap((item, index) => {
+      const layout = particleLayouts[index];
+      if (!layout) return [];
+      return [{
+        item,
+        layout,
+        collision: insetCollisionBox(layout.width, openingParticleHeight(item.kind)),
+      }];
+    });
+
+    // 世界常驻，所以每层落点一次算完，不再逐波重建。
+    const destinations = new Map<string, { x: number; y: number }>();
+    for (let row = 1; row <= OPENING_STEP_COUNT; row += 1) {
+      const rowEntries = entries.filter((entry) => entry.item.revealStep === row);
+      if (rowEntries.length === 0) continue;
+      planOpeningDestinations({
+        seed,
+        width,
+        height: sceneHeight,
+        step: row,
+        stepCount: OPENING_STEP_COUNT,
+        items: rowEntries.map((entry) => ({
+          key: entry.item.key,
+          collisionWidth: entry.collision.width,
+          collisionHeight: entry.collision.height,
+        })),
+      }).forEach((pose, key) => destinations.set(key, pose));
+    }
 
     const physics = new OpeningParticlePhysics(width, sceneHeight);
-    const activeKeys: string[] = [];
-    const newKeys: string[] = [];
-    const flightFrameCount = OPENING_REVEAL_DURATION / (1000 / 60);
-    const destinations = planOpeningDestinations({
-      seed,
-      width,
-      height: sceneHeight,
-      step: next,
-      stepCount: OPENING_STEP_COUNT,
-      items: openingParticles.flatMap((item, index) => {
-        const layout = particleLayouts[index];
-        if (item.revealStep !== next || !layout) return [];
-        const itemHeight = item.kind === "title" ? 58 : item.kind === "tag" ? 26 : 23;
-        const collision = insetCollisionBox(layout.width, itemHeight);
-        return [{
-          key: item.key,
-          collisionWidth: collision.width,
-          collisionHeight: collision.height,
-        }];
-      }),
-    });
-    openingParticles.forEach((item, index) => {
-      if (item.revealStep > next) return;
-      const motion = particleMotions.get(item.key);
-      const layout = particleLayouts[index];
-      if (!motion || !layout) return;
-      const previousPose = openingParticlePoses.current.get(item.key) ?? { x: layout.x, y: layout.y };
-      const isNew = item.revealStep === next;
-      const settledX = width / 2 + previousPose.x;
-      const settledY = sceneHeight / 2 + previousPose.y;
-      const itemHeight = item.kind === "title" ? 58 : item.kind === "tag" ? 26 : 23;
-      const collision = insetCollisionBox(layout.width, itemHeight);
-      const destination = destinations.get(item.key) ?? previousPose;
-      const targetX = isNew ? width / 2 + destination.x : settledX;
-      const targetY = isNew ? sceneHeight / 2 + destination.y : settledY;
-      const isFlying = isNew && !reducedMotion;
-      activeKeys.push(item.key);
+    const releaseWord = (entry: typeof entries[number], settled: boolean) => {
+      const destination = destinations.get(entry.item.key) ?? { x: entry.layout.x, y: entry.layout.y };
+      const targetX = width / 2 + destination.x;
+      const targetY = sceneHeight / 2 + destination.y;
+      // 从本层的水位线原地涌起，只走一层的高度。
+      const spawnY = sceneHeight / 2 + openingSurfaceY(sceneHeight, entry.item.revealStep, OPENING_STEP_COUNT);
       physics.add({
-        key: item.key,
+        key: entry.item.key,
         targetX,
         targetY,
-        collisionWidth: collision.width,
-        collisionHeight: collision.height,
-        angle: layout.rotation * Math.PI / 180,
-        spawnX: isFlying ? width / 2 : targetX,
-        spawnY: isFlying ? sceneHeight / 2 : targetY,
-        velocityX: isFlying ? destination.x / flightFrameCount : 0,
-        velocityY: isFlying ? destination.y / flightFrameCount : 0,
-        isStatic: !isNew && reducedMotion,
-        frictionAir: isFlying ? 0 : !isNew && !reducedMotion ? OPENING_IMPACT_FRICTION : undefined,
-        restitution: !reducedMotion ? 0.68 : undefined,
-        targetForce: !reducedMotion ? 0 : undefined,
-        collisionGroup: isFlying ? -1 : undefined,
+        collisionWidth: entry.collision.width,
+        collisionHeight: entry.collision.height,
+        angle: entry.layout.rotation * Math.PI / 180,
+        spawnX: targetX,
+        spawnY: settled ? targetY : spawnY,
+        velocityX: 0,
+        velocityY: settled ? 0 : (targetY - spawnY) / (OPENING_RISE_DURATION / FIXED_STEP_MS),
+        frictionAir: settled ? undefined : 0,
+        restitution: 0.68,
+        targetForce: OPENING_SETTLE_FORCE,
+        collisionGroup: settled ? undefined : -1,
       });
-      if (isNew) {
-        newKeys.push(item.key);
-        if (isFlying) {
-          motion.x.setValue(0);
-          motion.y.setValue(0);
-          openingParticlePoses.current.set(item.key, { x: 0, y: 0 });
-        }
-      }
-    });
+      const pose = { x: destination.x, y: settled ? destination.y : spawnY - sceneHeight / 2 };
+      const motion = particleMotions.get(entry.item.key);
+      motion?.x.setValue(pose.x);
+      motion?.y.setValue(pose.y);
+      openingParticlePoses.current.set(entry.item.key, pose);
+    };
 
-    if (reducedMotion) {
-      for (let frame = 0; frame < OPENING_COLLISION_SETTLE_FRAMES; frame += 1) {
-        physics.advance(1000 / 60);
-      }
-      const poses = physics.poses();
-      newKeys.forEach((key) => {
-        const pose = poses.get(key);
+    const commitPoses = (poses: ReturnType<typeof physics.poses>): number => {
+      let movedCount = 0;
+      poses.forEach((pose, key) => {
         const motion = particleMotions.get(key);
-        if (!pose || !motion) return;
+        if (!motion) return;
+        const previous = openingParticlePoses.current.get(key);
         const relativePose = { x: pose.x - width / 2, y: pose.y - sceneHeight / 2 };
+        // ponytail: skip sub-pixel writes so settled words stop churning styles every frame.
+        if (previous
+          && Math.abs(previous.x - relativePose.x) < OPENING_REST_EPSILON
+          && Math.abs(previous.y - relativePose.y) < OPENING_REST_EPSILON) return;
+        movedCount += 1;
         motion.x.setValue(relativePose.x);
         motion.y.setValue(relativePose.y);
         openingParticlePoses.current.set(key, relativePose);
       });
+      return movedCount;
+    };
+
+    const finish = () => {
+      openingStepRef.current = OPENING_STEP_COUNT;
+      setOpeningStep(OPENING_STEP_COUNT);
+      openingReveal.setValue(1);
+    };
+
+    if (reducedMotion) {
+      entries.forEach((entry) => releaseWord(entry, true));
+      for (let frame = 0; frame < OPENING_COLLISION_SETTLE_FRAMES; frame += 1) physics.advance(FIXED_STEP_MS);
+      commitPoses(physics.poses());
       physics.dispose();
-      openingReveal.setValue(next);
-      if (next === OPENING_STEP_COUNT) openingForeground.setValue(0);
+      finish();
+      openingForeground.setValue(0);
       return;
     }
 
+    const schedule = [...entries]
+      .sort((left, right) => left.item.revealOrder - right.item.revealOrder)
+      .map((entry) => ({ entry, releaseAt: entry.item.revealFrom * OPENING_TOTAL_DURATION }));
+
     openingPhysics.current = physics;
-    let startedAt = 0;
-    let collisionsArmed = false;
-    let decelerationArmed = false;
-    const animateFlight = (frameTime: number) => {
+    let lastFrameTime = 0;
+    let stepRemainder = 0;
+    // ponytail: simulated time, not wall clock — a hidden tab pauses rAF, and the reveal, the note
+    // level and the physics all read this one clock so they can never drift apart.
+    let simulated = 0;
+    let releasedCount = 0;
+    let armedCount = 0;
+    let deceleratedCount = 0;
+    let settleTail = 0;
+    const animateFlood = (frameTime: number) => {
       if (openingPhysics.current !== physics) return;
-      if (startedAt === 0) startedAt = frameTime;
-      const elapsed = frameTime - startedAt;
-      if (!collisionsArmed && elapsed >= OPENING_COLLISION_ARM_DELAY) {
-        physics.setCollisionGroup(newKeys, 0);
-        collisionsArmed = true;
+      if (lastFrameTime === 0) lastFrameTime = frameTime;
+      const drained = consumeFixedSteps(stepRemainder, frameTime - lastFrameTime);
+      lastFrameTime = frameTime;
+      stepRemainder = drained.remainder;
+      let movedCount = 0;
+      for (let step = 0; step < drained.steps; step += 1) {
+        simulated += FIXED_STEP_MS;
+        while (releasedCount < schedule.length && schedule[releasedCount]!.releaseAt <= simulated) {
+          releaseWord(schedule[releasedCount]!.entry, false);
+          releasedCount += 1;
+        }
+        // releaseAt 单调递增，所以两个游标就够，不用每帧扫全表。
+        while (armedCount < releasedCount
+          && simulated - schedule[armedCount]!.releaseAt >= OPENING_COLLISION_ARM_DELAY) {
+          physics.setCollisionGroup([schedule[armedCount]!.entry.item.key], 0);
+          armedCount += 1;
+        }
+        while (deceleratedCount < releasedCount
+          && simulated - schedule[deceleratedCount]!.releaseAt >= OPENING_DECELERATION_DELAY) {
+          physics.setFrictionAir([schedule[deceleratedCount]!.entry.item.key], OPENING_DECELERATION_FRICTION);
+          deceleratedCount += 1;
+        }
+        movedCount += commitPoses(physics.advance(FIXED_STEP_MS));
       }
-      if (!decelerationArmed && elapsed >= OPENING_DECELERATION_DELAY) {
-        physics.setFrictionAir(activeKeys, OPENING_DECELERATION_FRICTION);
-        decelerationArmed = true;
+
+      const progress = Math.min(1, simulated / OPENING_TOTAL_DURATION);
+      openingReveal.setValue(progress);
+      const row = Math.min(OPENING_STEP_COUNT, Math.floor(progress * OPENING_STEP_COUNT) + 1);
+      if (row !== openingStepRef.current) {
+        openingStepRef.current = row;
+        setOpeningStep(row);
       }
-      const poses = physics.advance(1000 / 60);
-      activeKeys.forEach((key) => {
-        const pose = poses.get(key);
-        const motion = particleMotions.get(key);
-        if (!pose || !motion) return;
-        const relativePose = { x: pose.x - width / 2, y: pose.y - sceneHeight / 2 };
-        motion.x.setValue(relativePose.x);
-        motion.y.setValue(relativePose.y);
-        openingParticlePoses.current.set(key, relativePose);
-      });
-      if (elapsed < OPENING_FLIGHT_DURATION) {
-        openingPhysicsFrame.current = requestAnimationFrame(animateFlight);
+
+      const allReleased = releasedCount >= schedule.length;
+      if (allReleased) settleTail += drained.steps * FIXED_STEP_MS;
+      const atRest = allReleased && deceleratedCount >= schedule.length && movedCount === 0;
+      if (!atRest && settleTail < OPENING_SETTLE_TIMEOUT) {
+        openingPhysicsFrame.current = requestAnimationFrame(animateFlood);
         return;
       }
+
       openingPhysicsFrame.current = null;
       physics.dispose();
       if (openingPhysics.current === physics) openingPhysics.current = null;
-    };
-    openingPhysicsFrame.current = requestAnimationFrame(animateFlight);
-
-    Animated.timing(openingReveal, {
-      toValue: next,
-      duration: OPENING_REVEAL_DURATION,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (!finished || next !== OPENING_STEP_COUNT) return;
+      finish();
       Animated.sequence([
         Animated.delay(500),
         Animated.timing(openingForeground, {
@@ -531,7 +602,8 @@ export function AnnualScrollStory({
           useNativeDriver: false,
         }),
       ]).start();
-    });
+    };
+    openingPhysicsFrame.current = requestAnimationFrame(animateFlood);
   }, [
     openingForeground,
     openingParticles,
@@ -544,33 +616,21 @@ export function AnnualScrollStory({
     width,
   ]);
 
-  useEffect(() => {
-    if (openingStep === 0 || openingStep >= OPENING_STEP_COUNT) return undefined;
-    const timer = setTimeout(
-      revealNextOpeningGroup,
-      reducedMotion ? 120 : OPENING_AUTO_STEP_DELAY,
-    );
-    return () => clearTimeout(timer);
-  }, [openingStep, reducedMotion, revealNextOpeningGroup]);
-
-  const startOpeningSequence = useCallback(() => {
-    if (openingSequenceStarted.current || openingStepRef.current > 0) return;
-    openingSequenceStarted.current = true;
-    revealNextOpeningGroup();
-  }, [revealNextOpeningGroup]);
-
   const registerChapter = useCallback((index: number) => (event: LayoutChangeEvent) => {
     sectionOffsets.current[index - 1] = event.nativeEvent.layout.y;
   }, []);
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const scrollable = Math.max(1, contentSize.height - layoutMeasurement.height);
+    storyProgress.setValue(Math.min(1, Math.max(0, contentOffset.y / scrollable)));
     const marker = event.nativeEvent.contentOffset.y + event.nativeEvent.layoutMeasurement.height * 0.38;
     let next = 1;
     sectionOffsets.current.forEach((offset, index) => {
       if (Number.isFinite(offset) && marker >= offset) next = index + 1;
     });
     setActiveChapter((current) => current === next ? current : next);
-  }, []);
+  }, [storyProgress]);
 
   const handleHourWheel = useCallback((event: unknown) => {
     if (Platform.OS !== "web") return;
@@ -672,10 +732,8 @@ export function AnnualScrollStory({
           </View>
         </View>
         <View accessibilityLabel={`年度故事第 ${activeChapter} 章，共 ${CHAPTER_COUNT} 章`} accessibilityRole="progressbar" style={styles.progressWrap}>
-          <View style={styles.progressBars}>
-            {Array.from({ length: CHAPTER_COUNT }, (_, index) => (
-              <View key={index} style={[styles.progressBar, index + 1 <= activeChapter && styles.progressBarActive]} />
-            ))}
+          <View style={styles.progressTrack}>
+            <Animated.View style={[styles.progressFill, { width: progressWidth }]} />
           </View>
           <Text style={styles.progressText}>{String(activeChapter).padStart(2, "0")} / 06</Text>
         </View>
@@ -694,7 +752,7 @@ export function AnnualScrollStory({
         ref={scrollRef}
         contentContainerStyle={styles.scrollContent}
         onScroll={handleScroll}
-        scrollEventThrottle={32}
+        scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.storyScroller}
         testID="story-scroll-view"
@@ -702,28 +760,30 @@ export function AnnualScrollStory({
         <View onLayout={registerChapter(1)} style={[styles.stickyChapter, { minHeight: sceneHeight + 460 }]}>
           <View style={[styles.scene, { minHeight: sceneHeight }, stickyStyle]}>
             <View style={styles.openingBackdrop} testID="opening-cover-collage">
-              {openingCovers.map((item, index) => (
-                <OpeningCoverTile
-                  item={item.record}
-                  key={`${item.key}:${index}`}
-                  layout={OPENING_COVER_LAYOUTS[index]!}
-                  privacy={privacy}
-                />
-              ))}
+              <Animated.View pointerEvents="none" style={[styles.openingCollageLayer, { transform: collageTransform }]}>
+                {openingCovers.map((item, index) => (
+                  <OpeningCoverTile
+                    item={item.record}
+                    key={`${item.key}:${index}`}
+                    layout={OPENING_COVER_LAYOUTS[index]!}
+                    privacy={privacy}
+                  />
+                ))}
+              </Animated.View>
               <View pointerEvents="none" style={styles.openingBackdropShade} />
-              <View
+              <Animated.View
                 accessible
                 accessibilityLabel="你的内容世界，已经有了形状。"
                 accessibilityElementsHidden={openingStep < OPENING_STEP_COUNT}
                 aria-hidden={openingStep < OPENING_STEP_COUNT}
                 importantForAccessibility={openingStep < OPENING_STEP_COUNT ? "no-hide-descendants" : "auto"}
-                style={styles.openingFinalCopy}
+                style={[styles.openingFinalCopy, { opacity: finalCopyOpacity, transform: finalCopyTransform }]}
                 testID="opening-final-copy"
               >
                 <Text style={[styles.openingFinalTitle, compact && styles.openingFinalTitleCompact]}>
                   你的内容世界，{`\n`}已经有了形状。
                 </Text>
-              </View>
+              </Animated.View>
             </View>
 
             <Animated.View
@@ -731,7 +791,7 @@ export function AnnualScrollStory({
               aria-hidden={openingStep === OPENING_STEP_COUNT}
               importantForAccessibility={openingStep === OPENING_STEP_COUNT ? "no-hide-descendants" : "auto"}
               pointerEvents={openingStep === OPENING_STEP_COUNT ? "none" : "box-none"}
-              style={[styles.openingForeground, { opacity: openingForeground }]}
+              style={[styles.openingForeground, { opacity: openingForeground, transform: foregroundTransform }]}
               testID="opening-foreground"
             >
               <Svg
@@ -779,8 +839,8 @@ export function AnnualScrollStory({
                   const layout = particleLayouts[index]!;
                   const motion = particleMotions.get(item.key);
                   if (!motion) return null;
-                  const inputStart = item.revealStep - 1;
                   const hidden = item.revealStep > openingStep;
+                  const itemHeight = openingParticleHeight(item.kind);
                   return (
                     <Animated.View
                       accessible
@@ -794,11 +854,11 @@ export function AnnualScrollStory({
                         styles.floatingItem,
                         {
                           width: layout.width,
-                          height: item.kind === "title" ? 58 : item.kind === "tag" ? 26 : 23,
+                          height: itemHeight,
                           marginLeft: -layout.width / 2,
-                          marginTop: item.kind === "title" ? -29 : item.kind === "tag" ? -13 : -11.5,
+                          marginTop: -itemHeight / 2,
                           opacity: openingReveal.interpolate({
-                            inputRange: [inputStart, item.revealStep],
+                            inputRange: [item.revealFrom, item.revealTo],
                             outputRange: [0, 1],
                             extrapolate: "clamp",
                           }),
@@ -806,7 +866,7 @@ export function AnnualScrollStory({
                             { translateX: motion.x },
                             { translateY: motion.y },
                             { rotate: `${layout.rotation}deg` },
-                            { scale: openingReveal.interpolate({ inputRange: [inputStart, item.revealStep], outputRange: [0.72, 1], extrapolate: "clamp" }) },
+                            { scale: openingReveal.interpolate({ inputRange: [item.revealFrom, item.revealTo], outputRange: [0.72, 1], extrapolate: "clamp" }) },
                           ],
                         },
                       ]}
@@ -1447,7 +1507,27 @@ function collectOpeningContent(model: StoryModel): StoryContentItem[] {
 
 function buildOpeningCovers(items: readonly StoryContentItem[]): StoryContentItem[] {
   if (items.length === 0) return [];
-  return OPENING_COVER_LAYOUTS.map((_, index) => items[index % items.length]!);
+  // 连续的观看记录常指向同一张封面，直接取前 20 条会让相邻拼图重图，接缝看着像撕裂。
+  // 相邻拼图不能取相邻记录：连续的观看记录常是同一创作者的同系列，缩略图几乎一样，
+  // 接缝看着就像撕裂。跨全表等距取样，再跳过与上一块同作者的候选。
+  const stride = Math.max(1, Math.floor(items.length / OPENING_COVER_LAYOUTS.length));
+  const picked: StoryContentItem[] = [];
+  const usedKeys = new Set<string>();
+  for (let slot = 0; slot < OPENING_COVER_LAYOUTS.length; slot += 1) {
+    let candidate = items[(slot * stride) % items.length]!;
+    for (let probe = 0; probe < stride; probe += 1) {
+      const next = items[(slot * stride + probe) % items.length]!;
+      const clashes = usedKeys.has(next.key)
+        || (picked.at(-1)?.record.author != null && next.record.author === picked.at(-1)!.record.author);
+      if (!clashes) {
+        candidate = next;
+        break;
+      }
+    }
+    usedKeys.add(candidate.key);
+    picked.push(candidate);
+  }
+  return picked;
 }
 
 function buildOpeningParticles(
@@ -1476,7 +1556,7 @@ function buildOpeningParticles(
     if (titles.length >= OPENING_TITLE_LIMIT && creators.length >= OPENING_CREATOR_LIMIT) break;
   }
 
-  const particles: OpeningParticle[] = [];
+  const particles: Array<Omit<OpeningParticle, "revealOrder" | "revealFrom" | "revealTo">> = [];
   tags.forEach((tag, index) => particles.push({
     key: `tag:${tag.name}`,
     kind: "tag",
@@ -1496,13 +1576,30 @@ function buildOpeningParticles(
     label: privacy ? `创作者 ${index + 1}` : `@${creator.label}`,
     revealStep: (index % OPENING_STEP_COUNT) + 1,
   }));
-  return particles;
+  // 先按水位层排序保证自下而上，层内用哈希打散，避免看出从左到右的扫描感。
+  const releaseOrder = new Map([...particles]
+    .sort((left, right) => left.revealStep - right.revealStep
+      || (hashString(left.key) >>> 4) - (hashString(right.key) >>> 4)
+      || left.key.localeCompare(right.key))
+    .map((item, index) => [item.key, index] as const));
+  const total = Math.max(1, particles.length);
+  const fadeWidth = OPENING_WORD_FADE_SLOTS / total;
+  return particles.map((item) => {
+    const revealOrder = releaseOrder.get(item.key) ?? 0;
+    const revealFrom = revealOrder / total;
+    return { ...item, revealOrder, revealFrom, revealTo: Math.min(1, revealFrom + fadeWidth) };
+  });
 }
 
 function openingParticleAccessibilityLabel(item: OpeningParticle): string {
   if (item.kind === "tag") return `视频标签 ${item.label}${item.count === undefined ? "" : `，出现 ${item.count} 次`}`;
   if (item.kind === "title") return `视频标题 ${item.label}`;
   return `创作者 ${item.label.replace(/^@/u, "")}`;
+}
+
+function openingParticleHeight(kind: OpeningParticle["kind"]): number {
+  const baseHeight = kind === "title" ? 58 : kind === "tag" ? 26 : 23;
+  return baseHeight * OPENING_PARTICLE_SCALE;
 }
 
 function privateHourStory(hour: StoryHour): string {
@@ -1558,8 +1655,8 @@ function storyParticleLayouts(items: readonly OpeningParticle[], width: number, 
     return {
       x: slot.x * radiusX + (narrow ? ((hash >>> 12) % 9) - 4 : ((hash >>> 12) % 17) - 8),
       y: slot.y * radiusY + (narrow ? ((hash >>> 17) % 11) - 5 : ((hash >>> 17) % 17) - 8),
-      width: widthForKind,
-      fontSize,
+      width: widthForKind * OPENING_PARTICLE_SCALE,
+      fontSize: fontSize * OPENING_PARTICLE_SCALE,
       rotation: ((hash >>> 5) % 15) - 7,
       textAlign: alignments[(hash >>> 9) % alignments.length]!,
     };
@@ -1640,9 +1737,8 @@ const styles = StyleSheet.create({
   brandTitle: { color: color.text, fontSize: 13, fontWeight: "900" },
   brandMeta: { color: color.textMuted, fontSize: 9, marginTop: 2 },
   progressWrap: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12 },
-  progressBars: { flexDirection: "row", alignItems: "center", gap: 5 },
-  progressBar: { width: 28, height: 3, backgroundColor: color.border },
-  progressBarActive: { backgroundColor: color.cyan },
+  progressTrack: { width: 197, height: 3, overflow: "hidden", backgroundColor: color.border },
+  progressFill: { height: 3, backgroundColor: color.cyan },
   progressText: { width: 44, color: color.textMuted, fontSize: 10, fontWeight: "800", fontVariant: ["tabular-nums"] },
   skipButton: { minWidth: 140, minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 15, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surface },
   skipButtonText: { color: color.text, fontSize: 12, fontWeight: "900" },
@@ -1652,6 +1748,7 @@ const styles = StyleSheet.create({
   stickyChapter: { position: "relative", backgroundColor: color.canvas },
   scene: { position: "relative", justifyContent: "center", overflow: "hidden", backgroundColor: color.canvas },
   openingBackdrop: { ...ABSOLUTE_FILL, overflow: "hidden", backgroundColor: color.surfaceMuted },
+  openingCollageLayer: { ...ABSOLUTE_FILL },
   openingCoverTile: { position: "absolute", overflow: "hidden", borderRadius: radius.small, backgroundColor: color.surfaceMuted },
   openingCoverImage: { flex: 1 },
   openingCoverImageShade: { ...ABSOLUTE_FILL, backgroundColor: "rgba(5,5,6,0.12)" },
@@ -1668,10 +1765,10 @@ const styles = StyleSheet.create({
   chapterNo: { color: color.cyan, fontSize: 10, fontWeight: "900" },
   lead: { maxWidth: 640, color: color.textSecondary, fontSize: 16, lineHeight: 26, marginTop: 18 },
   floatingItem: { position: "absolute", zIndex: 4, left: "50%", top: "50%", justifyContent: "center" },
-  floatingTag: { color: color.cyan, fontWeight: "900", lineHeight: 26 },
-  floatingTitle: { color: color.text, fontWeight: "900", lineHeight: 29 },
-  floatingCreator: { color: color.accent, fontWeight: "800", lineHeight: 23 },
-  floatingCount: { color: color.textMuted, fontSize: 10, fontWeight: "900" },
+  floatingTag: { color: color.cyan, fontWeight: "900", lineHeight: 26 * OPENING_PARTICLE_SCALE },
+  floatingTitle: { color: color.text, fontWeight: "900", lineHeight: 29 * OPENING_PARTICLE_SCALE },
+  floatingCreator: { color: color.accent, fontWeight: "800", lineHeight: 23 * OPENING_PARTICLE_SCALE },
+  floatingCount: { color: color.textMuted, fontSize: 10 * OPENING_PARTICLE_SCALE, fontWeight: "900" },
   logoButton: { zIndex: 10, width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
   logoButtonPressed: { opacity: 0.86, transform: [{ scale: 0.97 }] },
   logoProgress: { width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
