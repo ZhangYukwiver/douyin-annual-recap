@@ -3,12 +3,10 @@ import Matter from "matter-js";
 const { Bodies, Body, Composite, Engine } = Matter;
 const WALL_THICKNESS = 160;
 const TARGET_FORCE = 0.000_016;
-const TWO_PI = Math.PI * 2;
 const UINT32_RANGE = 4_294_967_296;
-const MIN_DESTINATION_RATIO = 0.34;
-const MAX_DESTINATION_RATIO = 0.98;
-const DIRECTION_JITTER_IN_SECTORS = 0.22;
 const DESTINATION_MARGIN = 24;
+const COLUMN_JITTER = 0.34;
+const BAND_INSET = 0.16;
 
 export interface OpeningDestinationItem {
   key: string;
@@ -55,11 +53,31 @@ interface TrackedParticle {
   targetForce: number;
 }
 
+export const FIXED_STEP_MS = 1000 / 60;
+const MAX_STEP_BACKLOG_MS = 100;
+
+// ponytail: fixed-step accumulator so a 120Hz display doesn't run the flight at double speed.
+export function consumeFixedSteps(accumulator: number, deltaMs: number): { steps: number; remainder: number } {
+  const pending = Math.min(accumulator + Math.max(0, deltaMs), MAX_STEP_BACKLOG_MS);
+  const steps = Math.floor(pending / FIXED_STEP_MS);
+  return { steps, remainder: pending - steps * FIXED_STEP_MS };
+}
+
 export function insetCollisionBox(width: number, height: number): { width: number; height: number } {
   return {
     width: Math.max(18, width * 0.88),
     height: Math.max(14, height * 0.88),
   };
+}
+
+/**
+ * 水位线：场景中心为原点、y 向下为正，返回第 `step` 层的下沿。
+ * 第 1 步的下沿是屏幕最底部，之后逐层上移，第 `stepCount` 步填到最顶。
+ */
+export function openingSurfaceY(height: number, step: number, stepCount: number): number {
+  const safeStepCount = Math.max(1, Math.floor(stepCount));
+  const safeStep = Math.min(safeStepCount + 1, Math.max(1, Math.floor(step)));
+  return height / 2 - (safeStep - 1) * (height / safeStepCount);
 }
 
 export function planOpeningDestinations({
@@ -73,37 +91,30 @@ export function planOpeningDestinations({
   if (items.length === 0) return new Map();
 
   const safeStepCount = Math.max(1, Math.floor(stepCount));
-  const safeStep = Math.min(safeStepCount, Math.max(1, Math.floor(step)));
-  const radialBand = (MAX_DESTINATION_RATIO - MIN_DESTINATION_RATIO) / safeStepCount;
-  const outerRatio = MAX_DESTINATION_RATIO - (safeStep - 1) * radialBand;
-  const innerRatio = Math.max(MIN_DESTINATION_RATIO, outerRatio - radialBand * 0.9);
-  const sectorWidth = TWO_PI / items.length;
-  const rotation = seededUnit(seed, "rotation") * TWO_PI;
+  const bandHeight = height / safeStepCount;
+  const bandBottom = openingSurfaceY(height, step, stepCount);
+  const columnWidth = width / items.length;
   const orderedItems = [...items].sort((left, right) => {
     const order = seededHash(seed, `order:${left.key}`) - seededHash(seed, `order:${right.key}`);
     return order || left.key.localeCompare(right.key);
   });
 
-  return new Map(orderedItems.map((item, sectorIndex) => {
-    const sectorJitter = (
-      seededUnit(seed, `direction:${item.key}`) * 2 - 1
-    ) * DIRECTION_JITTER_IN_SECTORS;
-    const angle = rotation + (sectorIndex + 0.5 + sectorJitter) * sectorWidth;
-    const distanceRatio = innerRatio + (
-      outerRatio - innerRatio
-    ) * seededUnit(seed, `distance:${item.key}`);
-    const directionX = Math.cos(angle);
-    const directionY = Math.sin(angle);
-    const radiusX = Math.max(80, width / 2 - item.collisionWidth / 2 - DESTINATION_MARGIN);
-    const radiusY = Math.max(80, height / 2 - item.collisionHeight / 2 - DESTINATION_MARGIN);
-    const rayLimitX = Math.abs(directionX) < 0.000_001 ? Number.POSITIVE_INFINITY : radiusX / Math.abs(directionX);
-    const rayLimitY = Math.abs(directionY) < 0.000_001 ? Number.POSITIVE_INFINITY : radiusY / Math.abs(directionY);
-    const distance = Math.min(rayLimitX, rayLimitY) * distanceRatio;
+  return new Map(orderedItems.map((item, columnIndex) => {
+    const limitX = Math.max(0, width / 2 - item.collisionWidth / 2 - DESTINATION_MARGIN);
+    const limitY = Math.max(0, height / 2 - item.collisionHeight / 2 - DESTINATION_MARGIN);
+    const columnJitter = (
+      seededUnit(seed, `column:${item.key}`) * 2 - 1
+    ) * columnWidth * COLUMN_JITTER;
+    const depth = BAND_INSET + (1 - BAND_INSET * 2) * seededUnit(seed, `depth:${item.key}`);
     return [item.key, {
-      x: directionX * distance,
-      y: directionY * distance,
+      x: clamp(-width / 2 + (columnIndex + 0.5) * columnWidth + columnJitter, -limitX, limitX),
+      y: clamp(bandBottom - bandHeight * depth, -limitY, limitY),
     }];
   }));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function seededHash(seed: number, value: string): number {

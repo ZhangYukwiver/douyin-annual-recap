@@ -1,14 +1,53 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  consumeFixedSteps,
+  FIXED_STEP_MS,
   insetCollisionBox,
+  openingSurfaceY,
   OpeningParticlePhysics,
   planOpeningDestinations,
 } from "./openingParticlePhysics";
 
 describe("opening particle physics", () => {
+  it("advances the same simulated time per second on 60Hz and 120Hz displays", () => {
+    const simulate = (frameMs: number) => {
+      let accumulator = 0;
+      let steps = 0;
+      for (let elapsed = 0; elapsed < 1000; elapsed += frameMs) {
+        const drained = consumeFixedSteps(accumulator, frameMs);
+        steps += drained.steps;
+        accumulator = drained.remainder;
+      }
+      return steps;
+    };
+
+    const sixtyHz = simulate(1000 / 60);
+    const oneTwentyHz = simulate(1000 / 120);
+
+    expect(sixtyHz).toBeGreaterThanOrEqual(59);
+    expect(Math.abs(sixtyHz - oneTwentyHz)).toBeLessThanOrEqual(1);
+  });
+
+  it("caps the backlog after a long stall instead of fast-forwarding the flight", () => {
+    const drained = consumeFixedSteps(0, 5_000);
+
+    expect(drained.steps).toBe(6);
+    expect(drained.remainder).toBeLessThan(FIXED_STEP_MS);
+  });
+
+
   it("uses collision bodies slightly smaller than their text boxes", () => {
     expect(insetCollisionBox(120, 30)).toEqual({ width: 105.6, height: 26.4 });
+  });
+
+  it("scales collision bodies proportionally with enlarged text boxes", () => {
+    const scale = 1.12;
+    const base = insetCollisionBox(120, 30);
+    const enlarged = insetCollisionBox(120 * scale, 30 * scale);
+
+    expect(enlarged.width).toBeCloseTo(base.width * scale);
+    expect(enlarged.height).toBeCloseTo(base.height * scale);
   });
 
   it("separates overlapping word bodies", () => {
@@ -173,7 +212,7 @@ describe("opening particle physics", () => {
     physics.dispose();
   });
 
-  it("keeps randomized directions distributed around the full circle", () => {
+  it("spreads one wave across the full width instead of clumping", () => {
     const items = Array.from({ length: 12 }, (_, index) => ({
       key: `word-${index}`,
       collisionWidth: 120,
@@ -187,24 +226,21 @@ describe("opening particle physics", () => {
       stepCount: 5,
       items,
     });
-    const angles = [...destinations.values()]
-      .map(({ x, y }) => (Math.atan2(y, x) + Math.PI * 2) % (Math.PI * 2))
-      .sort((left, right) => left - right);
-    const gaps = angles.map((angle, index) => {
-      const next = angles[(index + 1) % angles.length]!;
-      return (next - angle + Math.PI * 2) % (Math.PI * 2);
-    });
+    const xs = [...destinations.values()].map(({ x }) => x).sort((left, right) => left - right);
+    const gaps = xs.slice(1).map((x, index) => x - xs[index]!);
 
-    expect(Math.max(...gaps)).toBeLessThanOrEqual((Math.PI * 2 / items.length) * 1.45);
+    expect(xs[0]).toBeLessThan(-1_280 / 4);
+    expect(xs.at(-1)).toBeGreaterThan(1_280 / 4);
+    expect(Math.max(...gaps)).toBeLessThan((1_280 / items.length) * 2.2);
   });
 
-  it("places later reveal groups progressively closer to the logo", () => {
+  it("stacks each wave above the previous one, bottom of the stage first", () => {
     const items = Array.from({ length: 10 }, (_, index) => ({
       key: `word-${index}`,
       collisionWidth: 100 + index * 3,
       collisionHeight: 28,
     }));
-    const distanceRatios = (step: number) => {
+    const bandFor = (step: number) => {
       const destinations = planOpeningDestinations({
         seed: 789_012,
         width: 1_280,
@@ -213,22 +249,23 @@ describe("opening particle physics", () => {
         stepCount: 5,
         items,
       });
-      return items.map((item) => {
-        const destination = destinations.get(item.key)!;
-        const angle = Math.atan2(destination.y, destination.x);
-        const radiusX = 1_280 / 2 - item.collisionWidth / 2 - 24;
-        const radiusY = 720 / 2 - item.collisionHeight / 2 - 24;
-        const rayLimit = Math.min(
-          radiusX / Math.max(0.000_001, Math.abs(Math.cos(angle))),
-          radiusY / Math.max(0.000_001, Math.abs(Math.sin(angle))),
-        );
-        return Math.hypot(destination.x, destination.y) / rayLimit;
-      });
+      const ys = items.map((item) => destinations.get(item.key)!.y);
+      return { top: Math.min(...ys), bottom: Math.max(...ys) };
     };
 
-    const firstStep = distanceRatios(1);
-    const lastStep = distanceRatios(5);
-    expect(Math.min(...firstStep)).toBeGreaterThan(Math.max(...lastStep));
+    const bands = [1, 2, 3, 4, 5].map(bandFor);
+    // y 向下为正：第 1 步在最下面，之后每一步整体更靠上，且层与层不互相穿插。
+    expect(bands[0]!.bottom).toBeGreaterThan(0);
+    expect(bands.at(-1)!.top).toBeLessThan(0);
+    bands.slice(1).forEach((band, index) => {
+      expect(band.bottom).toBeLessThan(bands[index]!.top);
+    });
+  });
+
+  it("reports a surface line that climbs from the floor to the ceiling", () => {
+    expect(openingSurfaceY(720, 1, 5)).toBe(360);
+    expect(openingSurfaceY(720, 3, 5)).toBe(72);
+    expect(openingSurfaceY(720, 6, 5)).toBe(-360);
   });
 
   it("keeps destinations inside the available stage", () => {
