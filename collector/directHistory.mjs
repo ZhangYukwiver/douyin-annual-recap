@@ -58,6 +58,7 @@ const REQUIRED_TEMPLATE_PARAMETERS = new Set([
 const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
 const MAX_SIGNER_OUTPUT_BYTES = 64 * 1024;
 const SIGNER_TIMEOUT_MS = 8_000;
+const DIRECT_LIST_RESPONSE_TIMEOUT_MS = 12_000;
 const MACOS_SIGNER_PROFILE = "(version 1) (allow default) (deny network*) (deny file-write*)";
 
 export class DirectHistoryError extends Error {
@@ -558,11 +559,21 @@ export async function collectDirectRecordPages(context, type, onPage) {
       !["https://www.douyin.com", "https://www-hj.douyin.com"].includes(responseUrl.origin)
       || responseUrl.pathname !== endpointPath
     ) return;
-    const task = response.finished().catch(() => undefined).then(async () => ({
+    const readTask = response.finished().catch(() => undefined).then(async () => ({
       body: await response.body(),
       headers: response.headers(),
       status: response.status(),
     }));
+    let timeout;
+    const task = Promise.race([
+      readTask,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new DirectHistoryError(
+          "response_timeout",
+          `${config.label}响应读取超时。`,
+        )), DIRECT_LIST_RESPONSE_TIMEOUT_MS);
+      }),
+    ]).finally(() => clearTimeout(timeout));
     responseQueue.push(task);
     void task.catch(() => undefined);
   });
@@ -618,9 +629,10 @@ export async function collectDirectRecordPages(context, type, onPage) {
   };
   try {
     await page.goto(config.pageUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
-    let unchanged = 0;
-    while (!terminal && !responseError && unchanged < 20) {
-      const moved = await page.evaluate(() => {
+    let stalled = 0;
+    while (!terminal && !responseError && stalled < 20) {
+      const previousResponseCount = responseCount;
+      await page.evaluate(() => {
         const candidates = [document.scrollingElement, ...document.querySelectorAll("*")]
           .filter((element) => {
             if (!element || element.scrollHeight <= element.clientHeight + 200) return false;
@@ -632,14 +644,12 @@ export async function collectDirectRecordPages(context, type, onPage) {
           })
           .sort((left, right) => right.clientWidth * right.clientHeight - left.clientWidth * left.clientHeight);
         const surface = candidates[0] ?? document.scrollingElement;
-        const before = surface?.scrollTop ?? 0;
         surface?.scrollTo?.(0, surface.scrollHeight);
         window.scrollTo(0, document.documentElement.scrollHeight);
-        return Math.abs((surface?.scrollTop ?? 0) - before) > 1;
       });
       await new Promise((resolve) => setTimeout(resolve, 800));
-      const responseAdvanced = await processQueuedResponses().catch((error) => { responseError = error; return false; });
-      unchanged = responseAdvanced || moved ? 0 : unchanged + 1;
+      await processQueuedResponses().catch((error) => { responseError = error; });
+      stalled = responseCount > previousResponseCount ? 0 : stalled + 1;
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     await processQueuedResponses().catch((error) => { responseError = error; });
