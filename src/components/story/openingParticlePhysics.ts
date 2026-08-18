@@ -7,6 +7,9 @@ const UINT32_RANGE = 4_294_967_296;
 const DESTINATION_MARGIN = 24;
 const COLUMN_JITTER = 0.34;
 const BAND_INSET = 0.16;
+const COLLISION_WIDTH_SCALE = 0.94;
+const COLLISION_HEIGHT_SCALE = 0.92;
+const WALL_RESTITUTION = 0.08;
 
 export interface OpeningDestinationItem {
   key: string;
@@ -41,9 +44,18 @@ export interface OpeningPhysicsSpec {
   collisionGroup?: number;
 }
 
+export interface OpeningPhysicsOptions {
+  gravityY?: number;
+  fallWhenUnsupported?: boolean;
+}
+
 export interface OpeningPhysicsPose {
   x: number;
   y: number;
+}
+
+export interface OpeningParticleExitPlan extends OpeningPhysicsPose {
+  radialProgress: number;
 }
 
 interface TrackedParticle {
@@ -51,6 +63,7 @@ interface TrackedParticle {
   targetX: number;
   targetY: number;
   targetForce: number;
+  verticalCatchupGap: number;
 }
 
 export const FIXED_STEP_MS = 1000 / 60;
@@ -63,10 +76,52 @@ export function consumeFixedSteps(accumulator: number, deltaMs: number): { steps
   return { steps, remainder: pending - steps * FIXED_STEP_MS };
 }
 
-export function insetCollisionBox(width: number, height: number): { width: number; height: number } {
+export function insetCollisionBox(width: number, fontSize: number): { width: number; height: number } {
   return {
-    width: Math.max(18, width * 0.88),
-    height: Math.max(14, height * 0.88),
+    width: Math.max(12, width * COLLISION_WIDTH_SCALE),
+    height: Math.max(8, fontSize * COLLISION_HEIGHT_SCALE),
+  };
+}
+
+/**
+ * Logo 的放大中心落在圆形音符内部一块约 22px 的稳定实心区域。
+ * 这个比例保证那块区域放大后覆盖视口对角线，最终不会残留黑角。
+ */
+export function openingLogoRevealScale(width: number, height: number): number {
+  const halfDiagonal = Math.hypot(Math.max(1, width) / 2, Math.max(1, height) / 2);
+  return Math.max(1, halfDiagonal / 22 + 1);
+}
+
+/**
+ * 给词条安排一条从当前位置沿 Logo 外法线方向离开屏幕的路径。
+ * `radialProgress` 用来让离中心近的词条更早被扩张轮廓碰到。
+ */
+export function planOpeningParticleExit(
+  key: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): OpeningParticleExitPlan {
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const distance = Math.hypot(x, y);
+  const fallbackAngle = seededUnit(0x51_9f_a3_2d, `exit:${key}`) * Math.PI * 2;
+  const normalX = distance > 1 ? x / distance : Math.cos(fallbackAngle);
+  const normalY = distance > 1 ? y / distance : Math.sin(fallbackAngle);
+  const margin = Math.max(160, Math.min(safeWidth, safeHeight) * 0.24);
+  const distanceToVerticalEdge = Math.abs(normalX) > 0.000_1
+    ? (safeWidth / 2 + margin) / Math.abs(normalX)
+    : Number.POSITIVE_INFINITY;
+  const distanceToHorizontalEdge = Math.abs(normalY) > 0.000_1
+    ? (safeHeight / 2 + margin) / Math.abs(normalY)
+    : Number.POSITIVE_INFINITY;
+  const exitDistance = Math.min(distanceToVerticalEdge, distanceToHorizontalEdge);
+
+  return {
+    x: normalX * exitDistance - x,
+    y: normalY * exitDistance - y,
+    radialProgress: clamp(distance / Math.hypot(safeWidth / 2, safeHeight / 2), 0, 1),
   };
 }
 
@@ -78,6 +133,15 @@ export function openingSurfaceY(height: number, step: number, stepCount: number)
   const safeStepCount = Math.max(1, Math.floor(stepCount));
   const safeStep = Math.min(safeStepCount + 1, Math.max(1, Math.floor(step)));
   return height / 2 - (safeStep - 1) * (height / safeStepCount);
+}
+
+/**
+ * 词条按出现顺序从底边进入，但最终要让最早出现的一层被后续内容顶到最上方。
+ */
+export function openingPileDestinationStep(revealStep: number, stepCount: number): number {
+  const safeStepCount = Math.max(1, Math.floor(stepCount));
+  const safeRevealStep = Math.min(safeStepCount, Math.max(1, Math.floor(revealStep)));
+  return safeStepCount - safeRevealStep + 1;
 }
 
 export function planOpeningDestinations({
@@ -133,12 +197,20 @@ function seededUnit(seed: number, value: string): number {
 export class OpeningParticlePhysics {
   private readonly engine = Engine.create();
   private readonly particles = new Map<string, TrackedParticle>();
+  private readonly fallWhenUnsupported: boolean;
 
-  constructor(width: number, height: number) {
+  constructor(width: number, height: number, options: OpeningPhysicsOptions = {}) {
+    const gravityY = Number.isFinite(options.gravityY) ? options.gravityY ?? 0 : 0;
+    this.fallWhenUnsupported = options.fallWhenUnsupported ?? false;
     this.engine.gravity.x = 0;
-    this.engine.gravity.y = 0;
-    this.engine.gravity.scale = 0;
-    const wallOptions: Matter.IChamferableBodyDefinition = { isStatic: true, restitution: 0.5 };
+    this.engine.gravity.y = gravityY;
+    this.engine.gravity.scale = gravityY === 0 ? 0 : 0.001;
+    const wallOptions: Matter.IChamferableBodyDefinition = {
+      friction: 0.04,
+      frictionStatic: 0.12,
+      isStatic: true,
+      restitution: WALL_RESTITUTION,
+    };
     Composite.add(this.engine.world, [
       Bodies.rectangle(width / 2, -WALL_THICKNESS / 2, width + WALL_THICKNESS * 2, WALL_THICKNESS, wallOptions),
       Bodies.rectangle(width / 2, height + WALL_THICKNESS / 2, width + WALL_THICKNESS * 2, WALL_THICKNESS, wallOptions),
@@ -156,11 +228,11 @@ export class OpeningParticlePhysics {
       {
         angle: spec.angle,
         chamfer: { radius: Math.min(6, spec.collisionHeight * 0.22) },
-        friction: 0,
+        friction: 0.04,
         frictionAir: spec.frictionAir ?? 0.085,
-        frictionStatic: 0,
+        frictionStatic: 0.12,
         restitution: spec.restitution ?? 0.58,
-        slop: 0.02,
+        slop: 0.08,
         isStatic: spec.isStatic,
         ...(spec.collisionGroup === undefined ? {} : {
           collisionFilter: {
@@ -180,6 +252,7 @@ export class OpeningParticlePhysics {
       targetX: spec.targetX,
       targetY: spec.targetY,
       targetForce: spec.targetForce ?? TARGET_FORCE,
+      verticalCatchupGap: spec.collisionHeight * 0.5,
     });
     Composite.add(this.engine.world, body);
   }
@@ -189,6 +262,13 @@ export class OpeningParticlePhysics {
       const tracked = this.particles.get(key);
       if (tracked) tracked.body.collisionFilter.group = group;
     });
+  }
+
+  setTarget(key: string, targetX: number, targetY: number): void {
+    const tracked = this.particles.get(key);
+    if (!tracked || tracked.body.isStatic) return;
+    tracked.targetX = targetX;
+    tracked.targetY = targetY;
   }
 
   setFrictionAir(keys: readonly string[], frictionAir: number): void {
@@ -201,9 +281,14 @@ export class OpeningParticlePhysics {
   advance(deltaMs: number): Map<string, OpeningPhysicsPose> {
     this.particles.forEach((tracked) => {
       if (tracked.body.isStatic) return;
+      const targetDeltaY = tracked.targetY - tracked.body.position.y;
+      // 上推只在词条落后时托住它；被碰撞顶高的词条由重力自然落回。
+      const guidedDeltaY = this.fallWhenUnsupported
+        ? Math.min(0, targetDeltaY + tracked.verticalCatchupGap)
+        : targetDeltaY;
       const force = {
         x: (tracked.targetX - tracked.body.position.x) * tracked.body.mass * tracked.targetForce,
-        y: (tracked.targetY - tracked.body.position.y) * tracked.body.mass * tracked.targetForce,
+        y: guidedDeltaY * tracked.body.mass * tracked.targetForce,
       };
       Body.applyForce(tracked.body, tracked.body.position, force);
     });

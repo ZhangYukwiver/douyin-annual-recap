@@ -4,8 +4,11 @@ import {
   consumeFixedSteps,
   FIXED_STEP_MS,
   insetCollisionBox,
+  openingLogoRevealScale,
+  openingPileDestinationStep,
   openingSurfaceY,
   OpeningParticlePhysics,
+  planOpeningParticleExit,
   planOpeningDestinations,
 } from "./openingParticlePhysics";
 
@@ -37,8 +40,13 @@ describe("opening particle physics", () => {
   });
 
 
-  it("uses collision bodies slightly smaller than their text boxes", () => {
-    expect(insetCollisionBox(120, 30)).toEqual({ width: 105.6, height: 26.4 });
+  it("keeps the collision box slightly smaller than the text width and font size", () => {
+    const fontSize = 18;
+    const box = insetCollisionBox(120, fontSize);
+
+    expect(box.width).toBeCloseTo(112.8);
+    expect(box.height).toBeCloseTo(16.56);
+    expect(box.height).toBeLessThan(fontSize);
   });
 
   it("scales collision bodies proportionally with enlarged text boxes", () => {
@@ -48,6 +56,64 @@ describe("opening particle physics", () => {
 
     expect(enlarged.width).toBeCloseTo(base.width * scale);
     expect(enlarged.height).toBeCloseTo(base.height * scale);
+  });
+
+  it("scales the logo aperture far enough to cover every viewport corner", () => {
+    const width = 1_280;
+    const height = 720;
+    const scale = openingLogoRevealScale(width, height);
+
+    expect(scale * 22).toBeGreaterThan(Math.hypot(width / 2, height / 2));
+  });
+
+  it("pushes words fully beyond a screen edge and catches inner words first", () => {
+    const width = 1_280;
+    const height = 720;
+    const inner = planOpeningParticleExit("inner", 20, -10, width, height);
+    const outer = planOpeningParticleExit("outer", -520, 220, width, height);
+    const outerEnd = { x: -520 + outer.x, y: 220 + outer.y };
+
+    expect(Math.abs(outerEnd.x)).toBeGreaterThan(width / 2);
+    expect(outer.x).toBeLessThan(0);
+    expect(inner.radialProgress).toBeLessThan(outer.radialProgress);
+  });
+
+  it("gives a centered word a deterministic non-zero exit path", () => {
+    const first = planOpeningParticleExit("center", 0, 0, 1_280, 720);
+    const second = planOpeningParticleExit("center", 0, 0, 1_280, 720);
+
+    expect(first).toEqual(second);
+    expect(Math.hypot(first.x, first.y)).toBeGreaterThan(500);
+  });
+
+  it("lets an unsupported word fall instead of pulling it toward a lower target", () => {
+    const physics = new OpeningParticlePhysics(800, 600, {
+      gravityY: 0.7,
+      fallWhenUnsupported: true,
+    });
+    physics.add({
+      key: "falling",
+      targetX: 400,
+      targetY: 420,
+      collisionWidth: 100,
+      collisionHeight: 18,
+      angle: 0,
+      spawnX: 400,
+      spawnY: 180,
+      velocityX: 0,
+      velocityY: 0,
+      targetForce: 0.001,
+    });
+
+    physics.advance(FIXED_STEP_MS);
+    const firstFramePose = physics.poses().get("falling")!;
+    for (let frame = 1; frame < 20; frame += 1) physics.advance(FIXED_STEP_MS);
+
+    const pose = physics.poses().get("falling")!;
+    expect(firstFramePose.y).toBeGreaterThan(180);
+    expect(pose.y).toBeGreaterThan(180);
+    expect(pose.y).toBeLessThan(230);
+    physics.dispose();
   });
 
   it("separates overlapping word bodies", () => {
@@ -266,6 +332,12 @@ describe("opening particle physics", () => {
     expect(openingSurfaceY(720, 1, 5)).toBe(360);
     expect(openingSurfaceY(720, 3, 5)).toBe(72);
     expect(openingSurfaceY(720, 6, 5)).toBe(-360);
+  });
+
+  it("places the earliest revealed pile row at the top of the final screen", () => {
+    expect(openingPileDestinationStep(1, 12)).toBe(12);
+    expect(openingPileDestinationStep(6, 12)).toBe(7);
+    expect(openingPileDestinationStep(12, 12)).toBe(1);
   });
 
   it("keeps destinations inside the available stage", () => {
