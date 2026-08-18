@@ -402,6 +402,68 @@ describe("hidden likes and favorites", () => {
     expect(page.close).toHaveBeenCalledTimes(1);
   });
 
+  it("stops when a moving likes page does not advance pagination", async () => {
+    vi.useFakeTimers();
+    const page = {
+      close: vi.fn(async () => undefined),
+      evaluate: vi.fn(async () => true),
+      goto: vi.fn(async () => undefined),
+      on: vi.fn(),
+    };
+
+    try {
+      const collection = collectDirectRecordPages(
+        { newPage: vi.fn(async () => page) },
+        "liked_videos",
+        vi.fn(),
+      );
+      const rejection = expect(collection).rejects.toMatchObject({ code: "pagination_missing" });
+
+      await vi.runAllTimersAsync();
+      await rejection;
+
+      expect(page.evaluate).toHaveBeenCalledTimes(20);
+      expect(page.close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out when a likes response never finishes", async () => {
+    vi.useFakeTimers();
+    let onResponse;
+    const page = {
+      close: vi.fn(async () => undefined),
+      evaluate: vi.fn(async () => undefined),
+      goto: vi.fn(async () => {
+        onResponse({
+          body: vi.fn(async () => Buffer.from("")),
+          finished: vi.fn(async () => new Promise(() => undefined)),
+          headers: vi.fn(() => ({})),
+          status: vi.fn(() => 200),
+          url: vi.fn(() => DIRECT_LIKED_ENDPOINT),
+        });
+      }),
+      on: vi.fn((event, callback) => { if (event === "response") onResponse = callback; }),
+    };
+
+    try {
+      const collection = collectDirectRecordPages(
+        { newPage: vi.fn(async () => page) },
+        "liked_videos",
+        vi.fn(),
+      );
+      const rejection = expect(collection).rejects.toMatchObject({ code: "response_timeout" });
+
+      await vi.runAllTimersAsync();
+      await rejection;
+
+      expect(page.close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the favorites collection route without requiring a visible browser", async () => {
     let onResponse;
     const page = {
