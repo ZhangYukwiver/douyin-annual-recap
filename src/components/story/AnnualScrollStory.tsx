@@ -38,9 +38,7 @@ import Svg, {
   G,
   Mask,
   Path,
-  RadialGradient,
   Rect,
-  Stop,
 } from "react-native-svg";
 
 import type {
@@ -102,26 +100,6 @@ const NOTE_PATH = "M121 18H158C159 43 177 64 204 70V105C187 103 171 98 158 89V17
 const LIQUID_PATH = "M-120 10C-100 -2 -80 -2 -60 10S-20 22 0 10S40 -2 60 10S100 22 120 10S160 -2 180 10S220 22 240 10S280 -2 300 10S340 22 360 10L360 260L-120 260Z";
 const NOTE_WORD_MASK_URI = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${NOTE_VIEWBOX_WIDTH} ${NOTE_VIEWBOX_HEIGHT}"><path fill="white" d="${NOTE_PATH}"/></svg>`)}")`;
 const OPENING_MESSAGE_LINES = ["你的内容世界", "已经有了形状"] as const;
-const GLOW_CANVAS = 520;
-const RING_POINTS = 132;
-const RING_GAP = 9;
-const RING_MIN_GAP = 4;
-const RING_FOLLOW = 0.11;
-const RING_WAVES = [
-  { k: 3, amp: 2.6, speed: 0.85, phase: 0 },
-  { k: 5, amp: 1.7, speed: -1.35, phase: 1.7 },
-  { k: 8, amp: 0.9, speed: 2.1, phase: 3.2 },
-];
-const RING_BREATH = 1.4;
-const RING_CREST_GAIN = 5.5;
-const RING_CREST_SPREAD = 0.5;
-const RING_CREST_RADIUS = 235;
-const RING_CHROMA = { x: 3.6, y: -2.5 };
-const RING_CORE_WIDTH = 2.4;
-const RING_EDGE_WIDTH = 5.6;
-const RING_BLOOM_WIDTH = 16;
-const RING_BLOOM_BLUR = 9;
-const RING_CORE_BLUR = 3;
 const AnimatedSvgGroup = Animated.createAnimatedComponent(G);
 const ABSOLUTE_FILL: ViewStyle = { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 };
 const OPENING_COVER_LAYOUTS: readonly ViewStyle[] = [
@@ -285,6 +263,7 @@ export function AnnualScrollStory({
   const openingReveal = useRef(new Animated.Value(0)).current;
   const openingForegroundOpacity = useRef(new Animated.Value(1)).current;
   const openingDrift = useRef(new Animated.Value(0)).current;
+  const logoNeon = useRef(new Animated.Value(1)).current;
   const storyProgress = useRef(new Animated.Value(0)).current;
   const liquidWave = useRef(new Animated.Value(0)).current;
   const hourRotation = useRef(new Animated.Value(selectedHour)).current;
@@ -407,6 +386,28 @@ export function AnnualScrollStory({
     animation.start();
     return () => animation.stop();
   }, [activeChapter, openingDrift, reducedMotion]);
+
+  useEffect(() => {
+    logoNeon.stopAnimation();
+    if (reducedMotion || activeChapter !== 1 || openingForegroundHidden) {
+      logoNeon.setValue(1);
+      return undefined;
+    }
+    const flash = (toValue: number, duration: number) => Animated.timing(logoNeon, {
+      toValue,
+      duration,
+      easing: Easing.linear,
+      useNativeDriver: Platform.OS !== "web",
+    });
+    const animation = Animated.loop(Animated.sequence([
+      Animated.delay(1_500),
+      flash(0.48, 55), flash(1, 85), flash(0.72, 45), flash(1, 95),
+      Animated.delay(2_300),
+      flash(0.62, 60), flash(1, 110),
+    ]));
+    animation.start();
+    return () => animation.stop();
+  }, [activeChapter, logoNeon, openingForegroundHidden, reducedMotion]);
 
   useEffect(() => {
     liquidWave.stopAnimation();
@@ -941,21 +942,6 @@ export function AnnualScrollStory({
                     );
                   })}
                 </View>
-                <Animated.View
-                  pointerEvents="none"
-                  style={[
-                    styles.logoGlowLayer,
-                    {
-                      opacity: openingReveal.interpolate({
-                        inputRange: [0, 0.06],
-                        outputRange: [1, 0],
-                        extrapolate: "clamp",
-                      }),
-                    },
-                  ]}
-                >
-                  <OpeningLogoGlow active={openingStep === 0} reducedMotion={reducedMotion} />
-                </Animated.View>
                 <Pressable
                   accessibilityHint="点击一次后自动展开全部真实标签、视频标题和创作者"
                   accessibilityLabel={openingStep >= OPENING_STEP_COUNT
@@ -980,10 +966,11 @@ export function AnnualScrollStory({
                   >
                     <Svg
                       accessibilityLabel="抖音音符标志"
-                      height={NOTE_HEIGHT}
+                      height={300}
                       pointerEvents="none"
-                      viewBox={`0 0 ${NOTE_VIEWBOX_WIDTH} ${NOTE_VIEWBOX_HEIGHT}`}
-                      width={NOTE_WIDTH}
+                      style={styles.logoArtwork}
+                      viewBox="-30 -30 280 300"
+                      width={280}
                     >
                       <Defs>
                         <Mask
@@ -1001,7 +988,26 @@ export function AnnualScrollStory({
                             </AnimatedSvgGroup>
                           </AnimatedSvgGroup>
                         </Mask>
+                        <Mask height={300} id="opening-logo-outer-mask" maskUnits="userSpaceOnUse" width={280} x={-30} y={-30}>
+                          <Rect fill="white" height={300} width={280} x={-30} y={-30} />
+                          <Path d={NOTE_PATH} fill="black" />
+                        </Mask>
+                        <Filter height="180%" id="opening-logo-edge-bloom" width="180%" x="-40%" y="-40%">
+                          <FeGaussianBlur stdDeviation={7} />
+                        </Filter>
                       </Defs>
+                      <G mask="url(#opening-logo-outer-mask)">
+                        <Path d={NOTE_PATH} fill="#0A0D12" opacity={0.96} stroke="#030406" strokeLinejoin="round" strokeWidth={8} transform="translate(10 12)" />
+                        <Path d={NOTE_PATH} fill="none" opacity={0.72} stroke="#53616B" strokeLinejoin="round" strokeWidth={4} transform="translate(7 8)" />
+                        <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(-7 5)" />
+                        <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(7 -4)" />
+                        <AnimatedSvgGroup opacity={logoNeon}>
+                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.46} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(-7 5)" />
+                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.46} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(7 -4)" />
+                          <Path d={NOTE_PATH} fill="none" opacity={0.94} stroke="#D2FEFF" strokeLinejoin="round" strokeWidth={18} transform="translate(-7 5)" />
+                          <Path d={NOTE_PATH} fill="none" opacity={0.94} stroke="#D2FEFF" strokeLinejoin="round" strokeWidth={18} transform="translate(7 -4)" />
+                        </AnimatedSvgGroup>
+                      </G>
                       <Path d={NOTE_PATH} fill="none" stroke="#25F4EE" strokeLinejoin="round" strokeWidth={14} transform="translate(-7 5)" />
                       <Path d={NOTE_PATH} fill="none" stroke="#FE2C55" strokeLinejoin="round" strokeWidth={14} transform="translate(7 -4)" />
                       <Rect fill="#F4F6FA" height={NOTE_VIEWBOX_HEIGHT} mask="url(#opening-logo-fill-mask)" width={NOTE_VIEWBOX_WIDTH} />
@@ -1291,181 +1297,6 @@ function StoryCover({ item, privacy }: { item: StoryContentItem["record"]; priva
     return <ImageBackground onError={() => setFailed(true)} resizeMode="cover" source={{ uri: item.coverUrl }} style={styles.recordCover} />;
   }
   return <View style={[styles.recordCover, styles.recordCoverFallback]}><Play color={color.cyan} size={15} /></View>;
-}
-
-interface OutlineSample {
-  x: number;
-  y: number;
-  nx: number;
-  ny: number;
-  angle: number;
-  phase: number;
-}
-
-function sampleNoteOutline(count: number): OutlineSample[] {
-  const center = GLOW_CANVAS / 2;
-  const offsetX = (GLOW_CANVAS - NOTE_VIEWBOX_WIDTH) / 2;
-  const offsetY = (GLOW_CANVAS - NOTE_VIEWBOX_HEIGHT) / 2;
-  const fallback = () => Array.from({ length: count }, (_, index) => {
-    const angle = (index / count) * Math.PI * 2;
-    return {
-      x: center + Math.cos(angle) * 104,
-      y: center + Math.sin(angle) * 116,
-      nx: Math.cos(angle),
-      ny: Math.sin(angle),
-      angle,
-      phase: angle,
-    };
-  });
-  if (Platform.OS !== "web" || typeof document === "undefined") return fallback();
-  try {
-    const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    node.setAttribute("d", NOTE_PATH);
-    const total = node.getTotalLength();
-    if (!Number.isFinite(total) || total <= 0) return fallback();
-    const points = Array.from({ length: count }, (_, index) => {
-      const point = node.getPointAtLength((index / count) * total);
-      return { x: point.x + offsetX, y: point.y + offsetY };
-    });
-    const signedArea = points.reduce((area, point, index) => {
-      const next = points[(index + 1) % points.length]!;
-      return area + point.x * next.y - next.x * point.y;
-    }, 0);
-    const normalDirection = signedArea >= 0 ? 1 : -1;
-    return points.map((point, index) => {
-      const previous = points[(index - 1 + points.length) % points.length]!;
-      const next = points[(index + 1) % points.length]!;
-      const tangentX = next.x - previous.x;
-      const tangentY = next.y - previous.y;
-      const tangentLength = Math.hypot(tangentX, tangentY) || 1;
-      return {
-        ...point,
-        nx: normalDirection * tangentY / tangentLength,
-        ny: normalDirection * -tangentX / tangentLength,
-        angle: Math.atan2(point.y - center, point.x - center),
-        phase: (index / count) * Math.PI * 2,
-      };
-    });
-  } catch {
-    return fallback();
-  }
-}
-
-function ringPath(
-  outline: readonly OutlineSample[],
-  time: number,
-  crestAngle: number,
-  offsetX: number,
-  offsetY: number,
-): string {
-  let path = "";
-  outline.forEach((sample, index) => {
-    let gap = Math.abs(sample.angle - crestAngle) % (Math.PI * 2);
-    if (gap > Math.PI) gap = Math.PI * 2 - gap;
-    let distance = RING_GAP + RING_BREATH * Math.sin(time * 1.1);
-    for (const wave of RING_WAVES) {
-      distance += wave.amp * Math.sin(wave.k * sample.phase + wave.speed * time + wave.phase);
-    }
-    distance += RING_CREST_GAIN * Math.exp(-(gap * gap) / (2 * RING_CREST_SPREAD * RING_CREST_SPREAD));
-    distance = Math.max(RING_MIN_GAP, distance);
-    const x = sample.x + sample.nx * distance + offsetX;
-    const y = sample.y + sample.ny * distance + offsetY;
-    path += `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
-  });
-  return `${path}Z`;
-}
-
-function OpeningLogoGlow({ active, reducedMotion }: { active: boolean; reducedMotion: boolean }) {
-  const [beat, setBeat] = useState({ angle: -Math.PI / 2, time: 0 });
-  const hostRef = useRef<View | null>(null);
-  const targetAngle = useRef(-Math.PI / 2);
-  const liveAngle = useRef(-Math.PI / 2);
-  const outline = useMemo(() => sampleNoteOutline(RING_POINTS), []);
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || typeof window === "undefined" || !active || reducedMotion) return undefined;
-    const onPointerMove = (event: PointerEvent) => {
-      const rect = (hostRef.current as unknown as HTMLElement | null)?.getBoundingClientRect();
-      if (!rect) return;
-      targetAngle.current = Math.atan2(
-        event.clientY - (rect.top + rect.height / 2),
-        event.clientX - (rect.left + rect.width / 2),
-      );
-    };
-    const startedAt = performance.now();
-    let frame = requestAnimationFrame(function pulse(now) {
-      let delta = targetAngle.current - liveAngle.current;
-      while (delta > Math.PI) delta -= Math.PI * 2;
-      while (delta < -Math.PI) delta += Math.PI * 2;
-      liveAngle.current += delta * RING_FOLLOW;
-      setBeat({ angle: liveAngle.current, time: (now - startedAt) / 1000 });
-      frame = requestAnimationFrame(pulse);
-    });
-    window.addEventListener("pointermove", onPointerMove);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      cancelAnimationFrame(frame);
-    };
-  }, [active, reducedMotion]);
-
-  const center = GLOW_CANVAS / 2;
-  const cyanRing = ringPath(outline, beat.time, beat.angle, -RING_CHROMA.x, -RING_CHROMA.y);
-  const redRing = ringPath(outline, beat.time, beat.angle, RING_CHROMA.x, RING_CHROMA.y);
-  const coreRing = ringPath(outline, beat.time, beat.angle, 0, 0);
-  const crestX = center + Math.cos(beat.angle) * (RING_CREST_RADIUS * 0.62);
-  const crestY = center + Math.sin(beat.angle) * (RING_CREST_RADIUS * 0.62);
-
-  return (
-    <View
-      accessibilityElementsHidden
-      aria-hidden
-      importantForAccessibility="no-hide-descendants"
-      pointerEvents="none"
-      ref={hostRef}
-      style={styles.logoGlow}
-      testID="opening-logo-glow"
-    >
-      <Svg height={GLOW_CANVAS} pointerEvents="none" width={GLOW_CANVAS}>
-        <Defs>
-          <Filter height="240%" id="opening-ring-bloom" width="240%" x="-70%" y="-70%">
-            <FeGaussianBlur stdDeviation={RING_BLOOM_BLUR} />
-          </Filter>
-          <Filter height="200%" id="opening-ring-core" width="200%" x="-50%" y="-50%">
-            <FeGaussianBlur stdDeviation={RING_CORE_BLUR} />
-          </Filter>
-          <RadialGradient
-            cx={crestX}
-            cy={crestY}
-            gradientUnits="userSpaceOnUse"
-            id="opening-ring-hot"
-            r={RING_CREST_RADIUS}
-          >
-            <Stop offset="0" stopColor="#FFFFFF" stopOpacity="1" />
-            <Stop offset="0.55" stopColor="#FFFFFF" stopOpacity="0.5" />
-            <Stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
-          </RadialGradient>
-          <Mask height={GLOW_CANVAS} id="opening-ring-hot-mask" maskUnits="userSpaceOnUse" width={GLOW_CANVAS} x="0" y="0">
-            <Rect fill="url(#opening-ring-hot)" height={GLOW_CANVAS} width={GLOW_CANVAS} x="0" y="0" />
-          </Mask>
-        </Defs>
-
-        <G filter="url(#opening-ring-bloom)">
-          <Path d={cyanRing} fill="none" opacity={0.5} stroke="#25F4EE" strokeLinejoin="round" strokeWidth={RING_BLOOM_WIDTH} />
-          <Path d={redRing} fill="none" opacity={0.5} stroke="#FE2C55" strokeLinejoin="round" strokeWidth={RING_BLOOM_WIDTH} />
-        </G>
-
-        <G filter="url(#opening-ring-core)">
-          <Path d={cyanRing} fill="none" opacity={0.9} stroke="#25F4EE" strokeLinejoin="round" strokeWidth={RING_EDGE_WIDTH} />
-          <Path d={redRing} fill="none" opacity={0.88} stroke="#FE2C55" strokeLinejoin="round" strokeWidth={RING_EDGE_WIDTH} />
-        </G>
-
-        <G mask="url(#opening-ring-hot-mask)">
-          <Path d={coreRing} fill="none" opacity={0.5} stroke="#FFFFFF" strokeLinejoin="round" strokeWidth={RING_EDGE_WIDTH * 1.6} />
-          <Path d={coreRing} fill="none" opacity={0.95} stroke="#FFFFFF" strokeLinejoin="round" strokeWidth={RING_CORE_WIDTH} />
-        </G>
-      </Svg>
-    </View>
-  );
 }
 
 function OpeningStaggeredMessage({ active, reducedMotion }: { active: boolean; reducedMotion: boolean }) {
@@ -2087,9 +1918,9 @@ const styles = StyleSheet.create({
   openingMessage: { ...ABSOLUTE_FILL, zIndex: 3, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
   openingMessageLine: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
   openingMessageCharShell: { position: "relative" },
-  openingMessageChar: { color: "rgba(255,255,255,0.76)", fontSize: 64, lineHeight: 80, fontWeight: "900", textShadowColor: "rgba(5,5,6,0.72)", textShadowOffset: { width: 0, height: 3 }, textShadowRadius: 14 },
-  openingMessageCharOutlineBlue: { position: "absolute", left: -1, top: 0, color: "transparent", textShadowColor: "rgba(37,244,238,0.9)", textShadowOffset: { width: -1, height: 0 }, textShadowRadius: 2, ...(Platform.OS === "web" ? ({ WebkitTextStroke: "1px rgba(37,244,238,0.82)" } as unknown as TextStyle) : {}) },
-  openingMessageCharOutlineRed: { position: "absolute", left: 1, top: 0, color: "transparent", textShadowColor: "rgba(254,44,85,0.9)", textShadowOffset: { width: 1, height: 0 }, textShadowRadius: 2, ...(Platform.OS === "web" ? ({ WebkitTextStroke: "1px rgba(254,44,85,0.82)" } as unknown as TextStyle) : {}) },
+  openingMessageChar: { color: "rgba(255,255,255,0.72)", fontSize: 110, lineHeight: 112, fontWeight: "900", textShadowColor: "rgba(5,5,6,0.72)", textShadowOffset: { width: 0, height: 3 }, textShadowRadius: 14 },
+  openingMessageCharOutlineBlue: { position: "absolute", left: -2, top: 0, color: "transparent", textShadowColor: "rgba(37,244,238,0.82)", textShadowOffset: { width: -2, height: 0 }, textShadowRadius: 6, ...(Platform.OS === "web" ? ({ WebkitTextStroke: "1px rgba(37,244,238,0.9)", textShadow: "-2px 0 2px rgba(37,244,238,0.92), -4px 0 10px rgba(37,244,238,0.42)" } as unknown as TextStyle) : {}) },
+  openingMessageCharOutlineRed: { position: "absolute", left: 2, top: 0, color: "transparent", textShadowColor: "rgba(254,44,85,0.82)", textShadowOffset: { width: 2, height: 0 }, textShadowRadius: 6, ...(Platform.OS === "web" ? ({ WebkitTextStroke: "1px rgba(254,44,85,0.9)", textShadow: "2px 0 2px rgba(254,44,85,0.92), 4px 0 10px rgba(254,44,85,0.42)" } as unknown as TextStyle) : {}) },
   openingForeground: { ...ABSOLUTE_FILL, zIndex: 5 },
   openingForegroundFill: { ...ABSOLUTE_FILL },
   openingParticleStage: { ...ABSOLUTE_FILL, zIndex: 4, alignItems: "center", justifyContent: "center" },
@@ -2101,11 +1932,10 @@ const styles = StyleSheet.create({
   floatingTitle: { color: color.text, fontWeight: "900", lineHeight: 29 * OPENING_PARTICLE_SCALE },
   floatingCreator: { color: color.accent, fontWeight: "800", lineHeight: 23 * OPENING_PARTICLE_SCALE },
   floatingCount: { color: color.textMuted, fontSize: 10 * OPENING_PARTICLE_SCALE, fontWeight: "900" },
-  logoGlowLayer: { ...ABSOLUTE_FILL, zIndex: 3 },
-  logoGlow: { position: "absolute", zIndex: 3, left: "50%", top: "50%", width: GLOW_CANVAS, height: GLOW_CANVAS, marginLeft: -GLOW_CANVAS / 2, marginTop: -GLOW_CANVAS / 2 },
   logoButton: { zIndex: 10, width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
   logoButtonPressed: { opacity: 0.86, transform: [{ scale: 0.97 }] },
   logoProgress: { width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
+  logoArtwork: { position: "absolute", left: -30, top: -30 },
   chapter: { minHeight: 820, justifyContent: "center", paddingHorizontal: 52, paddingVertical: 92, borderTopWidth: 1, borderTopColor: color.borderSoft, backgroundColor: color.canvas },
   sectionInner: { width: "100%", maxWidth: 1180, alignSelf: "center" },
   sectionHeading: { flexDirection: "row", alignItems: "flex-start", gap: 38, marginBottom: 48 },
