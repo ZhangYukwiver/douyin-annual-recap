@@ -22,6 +22,7 @@ export interface OpeningDestinationOptions {
   height: number;
   step: number;
   stepCount: number;
+  itemGap?: number;
   items: readonly OpeningDestinationItem[];
 }
 
@@ -150,12 +151,62 @@ export function openingVisualRow(revealOrder: number, itemCount: number, rowCoun
   return Math.floor((safeOrder * safeRowCount) / safeItemCount) + 1;
 }
 
+export function truncateOpeningParticleLabel(value: string, maxLength = 8): string {
+  const characters = Array.from(value);
+  const safeMaxLength = Math.max(1, Math.floor(maxLength));
+  if (characters.length <= safeMaxLength) return value;
+  return `${characters.slice(0, safeMaxLength).join("").trimEnd()}…`;
+}
+
+export function fillOpeningRows<T extends { width: number }>(
+  items: readonly T[],
+  availableWidth: number,
+  maxRows: number,
+  minimumGap: number,
+): T[][] {
+  const widthLimit = Math.max(0, availableWidth);
+  const gap = Math.max(0, minimumGap);
+  const validItems = items.filter((item) => (
+    Number.isFinite(item.width) && item.width > 0 && item.width <= widthLimit
+  ));
+  const rowLimit = Math.min(validItems.length, Math.max(0, Math.floor(maxRows)));
+  if (rowLimit === 0) return [];
+
+  const rows: Array<{ items: T[]; width: number }> = [];
+  // 后续词条优先回填放入后余量最小的已有行，避免顺序换行留下可利用的空洞。
+  for (const item of validItems) {
+    let bestRowIndex = -1;
+    let smallestRemainder = Number.POSITIVE_INFINITY;
+    rows.forEach((row, rowIndex) => {
+      const nextWidth = row.width + gap + item.width;
+      if (nextWidth <= widthLimit) {
+        const remainder = widthLimit - nextWidth;
+        if (remainder < smallestRemainder) {
+          bestRowIndex = rowIndex;
+          smallestRemainder = remainder;
+        }
+      }
+    });
+
+    if (bestRowIndex >= 0) {
+      const row = rows[bestRowIndex]!;
+      row.items.push(item);
+      row.width += gap + item.width;
+    } else if (rows.length < rowLimit) {
+      rows.push({ items: [item], width: item.width });
+    }
+  }
+
+  return rows.map((row) => row.items);
+}
+
 export function planOpeningDestinations({
   seed,
   width,
   height,
   step,
   stepCount,
+  itemGap = 0,
   items,
 }: OpeningDestinationOptions): Map<string, OpeningPhysicsPose> {
   if (items.length === 0) return new Map();
@@ -171,10 +222,15 @@ export function planOpeningDestinations({
   const displayWidths = orderedItems.map((item) => Math.max(1, item.displayWidth ?? item.collisionWidth));
   const availableWidth = Math.max(1, width - DESTINATION_MARGIN * 2);
   const totalWidth = displayWidths.reduce((sum, itemWidth) => sum + itemWidth, 0);
-  const widthScale = Math.min(1, availableWidth / totalWidth);
+  const requestedGap = Math.max(0, itemGap);
+  const requestedGapWidth = requestedGap * Math.max(0, orderedItems.length - 1);
+  const widthScale = Math.min(1, Math.max(1, availableWidth - requestedGapWidth) / totalWidth);
   const scaledWidth = totalWidth * widthScale;
-  const gap = orderedItems.length > 1 ? Math.max(0, availableWidth - scaledWidth) / (orderedItems.length - 1) : 0;
-  let cursor = orderedItems.length === 1 ? -scaledWidth / 2 : -width / 2 + DESTINATION_MARGIN;
+  const gap = orderedItems.length > 1
+    ? Math.min(requestedGap, Math.max(0, availableWidth - scaledWidth) / (orderedItems.length - 1))
+    : 0;
+  const rowWidth = scaledWidth + gap * Math.max(0, orderedItems.length - 1);
+  let cursor = -rowWidth / 2;
 
   return new Map(orderedItems.map((item, itemIndex) => {
     const itemWidth = displayWidths[itemIndex]! * widthScale;
