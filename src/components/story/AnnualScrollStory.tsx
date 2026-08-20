@@ -30,6 +30,7 @@ import {
   Users,
   X,
 } from "lucide-react-native";
+import { Mesh, Program, Renderer, Triangle } from "ogl";
 import Svg, {
   ClipPath,
   Defs,
@@ -64,7 +65,11 @@ import {
   type StoryTopic,
 } from "./storyModel";
 import { OpeningReelGallery } from "./OpeningReelGallery";
-import { openingVisualRow, planOpeningDestinations } from "./openingParticlePhysics";
+import {
+  fillOpeningRows,
+  planOpeningDestinations,
+  truncateOpeningParticleLabel,
+} from "./openingParticlePhysics";
 
 const MIN_STORY_WIDTH = 1024;
 const CHAPTER_COUNT = 6;
@@ -74,6 +79,16 @@ const OPENING_TITLE_LIMIT = 168;
 const OPENING_CREATOR_LIMIT = 72;
 const OPENING_PARTICLE_SCALE = 1.12;
 const OPENING_VISUAL_ROW_HEIGHT = 30;
+const OPENING_LABEL_MAX_LENGTH = 8;
+const OPENING_ROW_GAP = 12;
+const OPENING_BUBBLE_PALETTE = ["#F3EFE3", "#76C8F2", "#9BDDB5", "#F3A4BD", "#F5B36A"] as const;
+const OPENING_TEXT_PALETTE_BY_BUBBLE = [
+  ["#07869B", "#D62F68", "#4D61C8", "#079B60", "#2F4FA3"],
+  ["#D62F68", "#C97808", "#079B60", "#8A45C2", "#2F4FA3"],
+  ["#D62F68", "#C97808", "#4D61C8", "#8A45C2", "#2F4FA3"],
+  ["#07869B", "#079B60", "#4D61C8", "#C97808", "#2F4FA3"],
+  ["#07869B", "#D62F68", "#079B60", "#4D61C8", "#8A45C2"],
+] as const;
 // Logo 液面和词条幕布共用这段进度。
 const OPENING_TOTAL_DURATION = 6_500;
 const OPENING_FADE_DELAY = 500;
@@ -98,11 +113,61 @@ const LOGO_ENTRANCE_FRAGMENTS = [
   { key: "base", top: 168, height: 84, revealAt: 0.17, arriveAt: 0.55, fromX: 76, fromY: -14, fromRotation: 7, overshootX: -9, color: "#FE2C55" },
 ] as const;
 const NOTE_WORD_MASK_URI = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${NOTE_VIEWBOX_WIDTH} ${NOTE_VIEWBOX_HEIGHT}"><path fill="white" d="${NOTE_PATH}"/></svg>`)}")`;
-const OPENING_SPOTLIGHT_GRADIENT = "radial-gradient(circle 56px at var(--opening-spotlight-x, -999px) var(--opening-spotlight-y, -999px), transparent 0 40px, rgba(0,0,0,0.18) 46px, rgba(0,0,0,0.56) 51px, black 56px)";
-const OPENING_SPOTLIGHT_MASK = Platform.OS === "web" ? ({
-  WebkitMaskImage: OPENING_SPOTLIGHT_GRADIENT,
-  maskImage: OPENING_SPOTLIGHT_GRADIENT,
-} as unknown as ViewStyle) : null;
+// ReactBits GradientBlinds 的光斑核心；移除底色和百叶，只保留中性光与黑幕揭示。
+const OPENING_SPOTLIGHT_VERTEX = `
+attribute vec2 position;
+attribute vec2 uv;
+varying vec2 vUv;
+
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position, 0.0, 1.0);
+}
+`;
+const OPENING_SPOTLIGHT_FRAGMENT = `
+precision highp float;
+
+uniform vec3 iResolution;
+uniform vec2 iMouse;
+uniform float iTime;
+uniform float uNoise;
+uniform float uSpotlightRadius;
+uniform float uSpotlightSoftness;
+uniform float uSpotlightOpacity;
+varying vec2 vUv;
+
+float rand(vec2 co) {
+  return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv0 = fragCoord.xy / iResolution.xy;
+  vec2 offset = vec2(iMouse.x / iResolution.x, iMouse.y / iResolution.y);
+  vec2 spotlightDelta = uv0 - offset;
+  float aspectCorrection = mix(1.0, iResolution.x / max(iResolution.y, 1.0), 0.24);
+  spotlightDelta.x *= aspectCorrection;
+  float d = length(spotlightDelta);
+  float r = max(uSpotlightRadius, 1e-4);
+  float dn = d / r;
+  float spotlight = (1.0 - 2.0 * pow(dn, uSpotlightSoftness)) * uSpotlightOpacity;
+  float grain = (rand(gl_FragCoord.xy + iTime) - 0.5) * uNoise;
+  float reveal = clamp(spotlight + grain * 0.22, 0.0, 1.0);
+  float light = clamp(
+    pow(clamp(spotlight, 0.0, 1.0), 1.6) * 0.38 + grain * 0.08,
+    0.0,
+    reveal
+  );
+
+  float curtain = 1.0 - reveal;
+  float layerAlpha = clamp(curtain + light, 0.0, 1.0);
+  float lightMix = layerAlpha > 1e-4 ? light / layerAlpha : 0.0;
+  fragColor = vec4(vec3(lightMix), layerAlpha);
+}
+
+void main() {
+  mainImage(gl_FragColor, gl_FragCoord.xy);
+}
+`;
 const OPENING_MESSAGE_LINES = ["你的内容世界", "已经有了形状"] as const;
 type SvgGroupProps = React.ComponentProps<typeof G> & { collapsable?: boolean };
 const SvgGroup = React.forwardRef<React.ComponentRef<typeof G>, SvgGroupProps>(function SvgGroup(
@@ -122,6 +187,10 @@ const SvgPath = React.forwardRef<React.ComponentRef<typeof Path>, SvgPathProps>(
 const AnimatedSvgPath = Animated.createAnimatedComponent(SvgPath);
 const ABSOLUTE_FILL: ViewStyle = { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 };
 const WEB_POINTER = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
+const WEB_NO_WRAP = Platform.OS === "web" ? ({ whiteSpace: "nowrap" } as unknown as TextStyle) : null;
+const OPENING_BUBBLE_VIVID = Platform.OS === "web"
+  ? ({ filter: "brightness(1.16) saturate(1.1)" } as unknown as ViewStyle)
+  : null;
 const LIST_LABELS: Record<PersonalRecordType, string> = {
   watch_history: "观看历史",
   liked_videos: "喜欢列表",
@@ -202,6 +271,117 @@ const highlightDefinitions: Array<{
   { key: "mostEngaged", label: "互动快照最高", rule: "按平台互动统计快照合计", accent: color.cyan },
 ];
 
+interface OpeningWebglRevealProps {
+  disabledRef: { readonly current: boolean };
+  height: number;
+  reducedMotion: boolean;
+}
+
+function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebglRevealProps) {
+  const containerRef = useRef<View | null>(null);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return undefined;
+    const container = containerRef.current as unknown as HTMLElement | null;
+    if (!container) return undefined;
+
+    const renderer = new Renderer({
+      dpr: window.devicePixelRatio || 1,
+      alpha: true,
+      antialias: true,
+    });
+    const gl = renderer.gl;
+    const canvas = gl.canvas;
+    gl.clearColor(0, 0, 0, 0);
+    Object.assign(canvas.style, {
+      display: "block",
+      height: "100%",
+      left: "0",
+      position: "absolute",
+      top: "0",
+      width: "100%",
+    });
+    container.appendChild(canvas);
+
+    const geometry = new Triangle(gl);
+    const uniforms = {
+      iResolution: { value: [1, 1, 1] },
+      iMouse: { value: [-10_000, -10_000] },
+      iTime: { value: 0 },
+      uNoise: { value: 0.5 },
+      uSpotlightRadius: { value: 0.38 },
+      uSpotlightSoftness: { value: 1.35 },
+      uSpotlightOpacity: { value: 1 },
+    };
+    const program = new Program(gl, {
+      vertex: OPENING_SPOTLIGHT_VERTEX,
+      fragment: OPENING_SPOTLIGHT_FRAGMENT,
+      uniforms,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const mesh = new Mesh(gl, { geometry, program });
+
+    const hideReveal = () => {
+      uniforms.iMouse.value = [-10_000, -10_000];
+    };
+    const resize = () => {
+      const rect = container.getBoundingClientRect();
+      renderer.setSize(Math.max(1, rect.width), Math.max(1, rect.height));
+      uniforms.iResolution.value = [canvas.width, canvas.height, canvas.width / canvas.height];
+    };
+    const followPointer = (event: PointerEvent) => {
+      if (disabledRef.current) {
+        hideReveal();
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const scale = renderer.dpr || 1;
+      const x = (event.clientX - rect.left) * scale;
+      const y = (rect.height - (event.clientY - rect.top)) * scale;
+      uniforms.iMouse.value = [x, y];
+    };
+
+    resize();
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(container);
+    canvas.addEventListener("pointermove", followPointer, { passive: true });
+    canvas.addEventListener("pointerleave", hideReveal);
+
+    let frame = 0;
+    const render = (time: number) => {
+      if (disabledRef.current) hideReveal();
+      uniforms.iTime.value = reducedMotion ? 0 : time * 0.001;
+      renderer.render({ scene: mesh });
+      frame = requestAnimationFrame(render);
+    };
+    frame = requestAnimationFrame(render);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      canvas.removeEventListener("pointermove", followPointer);
+      canvas.removeEventListener("pointerleave", hideReveal);
+      geometry.remove();
+      program.remove();
+      canvas.remove();
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+    };
+  }, [disabledRef, reducedMotion]);
+
+  return (
+    <View
+      accessibilityElementsHidden
+      aria-hidden
+      importantForAccessibility="no-hide-descendants"
+      ref={containerRef}
+      style={[styles.openingWebglReveal, { height }]}
+      testID="opening-webgl-reveal"
+    />
+  );
+}
+
 export function AnnualScrollStory({
   report,
   records,
@@ -257,8 +437,6 @@ export function AnnualScrollStory({
   const hourRotation = useRef(new Animated.Value(selectedHour)).current;
   const rootRef = useRef<View | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
-  const openingParticleStageRef = useRef<View | null>(null);
-  const openingWordCurtainRef = useRef<View | null>(null);
   const sectionOffsets = useRef<number[]>([]);
 
   const selectedHourData = model.hours[selectedHour] ?? model.hours[0]!;
@@ -383,35 +561,6 @@ export function AnnualScrollStory({
     });
     return () => openingReveal.removeListener(listener);
   }, [openingReveal]);
-
-  useEffect(() => {
-    if (Platform.OS !== "web") return undefined;
-    const stage = openingParticleStageRef.current as unknown as HTMLElement | null;
-    const curtain = openingWordCurtainRef.current as unknown as HTMLElement | null;
-    if (!stage?.addEventListener || !curtain?.style) return undefined;
-
-    const hideSpotlight = () => {
-      curtain.style.setProperty("--opening-spotlight-x", "-999px");
-      curtain.style.setProperty("--opening-spotlight-y", "-999px");
-    };
-    const followPointer = (event: PointerEvent) => {
-      if (openingSequenceStarted.current) {
-        hideSpotlight();
-        return;
-      }
-      const bounds = curtain.getBoundingClientRect();
-      curtain.style.setProperty("--opening-spotlight-x", `${event.clientX - bounds.left}px`);
-      curtain.style.setProperty("--opening-spotlight-y", `${event.clientY - bounds.top}px`);
-    };
-
-    hideSpotlight();
-    stage.addEventListener("pointermove", followPointer, { passive: true });
-    stage.addEventListener("pointerleave", hideSpotlight);
-    return () => {
-      stage.removeEventListener("pointermove", followPointer);
-      stage.removeEventListener("pointerleave", hideSpotlight);
-    };
-  }, [report?.status]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
@@ -564,9 +713,6 @@ export function AnnualScrollStory({
   const startOpeningSequence = useCallback(() => {
     if (openingSequenceStarted.current || openingStepRef.current > 0) return;
     openingSequenceStarted.current = true;
-    const curtain = openingWordCurtainRef.current as unknown as HTMLElement | null;
-    curtain?.style.setProperty("--opening-spotlight-x", "-999px");
-    curtain?.style.setProperty("--opening-spotlight-y", "-999px");
     logoEntrance.stopAnimation();
     logoEntrance.setValue(1);
     stopOpeningSequence();
@@ -827,12 +973,17 @@ export function AnnualScrollStory({
               <View
                 accessible
                 accessibilityLabel={`年度内容已展开 ${openingProgress}%`}
-                ref={openingParticleStageRef}
                 style={styles.openingParticleStage}
               >
                 <View pointerEvents="none" style={[styles.openingWordLayer, openingWordLayerMask]} testID="opening-word-layer">
                   {openingParticles.map((item, index) => {
-                    const layout = particleLayouts[index]!;
+                    const layout = particleLayouts[index];
+                    if (!layout) return null;
+                    const displayLabel = truncateOpeningParticleLabel(item.label, OPENING_LABEL_MAX_LENGTH);
+                    const bubbleIndex = hashString(item.key) % OPENING_BUBBLE_PALETTE.length;
+                    const bubbleColor = OPENING_BUBBLE_PALETTE[bubbleIndex]!;
+                    const textPalette = OPENING_TEXT_PALETTE_BY_BUBBLE[bubbleIndex]!;
+                    const textColor = textPalette[hashString(`${item.key}:text`) % textPalette.length]!;
                     const hidden = item.revealStep > openingStep;
                     const itemHeight = openingParticleHeight(layout.fontSize);
                     const bubbleFrom = Math.min(0.96, Math.max(
@@ -873,7 +1024,9 @@ export function AnnualScrollStory({
                         <Animated.View
                           style={[
                             styles.openingBubble,
+                            OPENING_BUBBLE_VIVID,
                             {
+                              backgroundColor: bubbleColor,
                               left: bubbleInset,
                               right: bubbleInset,
                               transform: [{ scale: bubbleScale }],
@@ -881,21 +1034,23 @@ export function AnnualScrollStory({
                           ]}
                         />
                         <Text
-                          ellipsizeMode="tail"
-                          numberOfLines={1}
+                          numberOfLines={Platform.OS === "web" ? undefined : 1}
                           style={[
                             item.kind === "tag" ? styles.floatingTag : item.kind === "title" ? styles.floatingTitle : styles.floatingCreator,
+                            WEB_NO_WRAP,
                             {
                               alignSelf: "stretch",
+                              color: textColor,
                               marginHorizontal: bubbleInset + 6,
                               fontSize: layout.fontSize,
                               lineHeight: itemHeight,
                               textAlign: "center",
                             },
                           ]}
+                          testID="opening-particle-text"
                         >
-                          {item.label}
-                          {item.count === undefined ? null : <Text style={styles.floatingCount}> {formatNumber(item.count)}</Text>}
+                          {displayLabel}
+                          {item.count === undefined ? null : <Text style={[styles.floatingCount, { color: textColor }]}> {formatNumber(item.count)}</Text>}
                         </Text>
                       </View>
                     );
@@ -906,12 +1061,11 @@ export function AnnualScrollStory({
                   aria-hidden
                   importantForAccessibility="no-hide-descendants"
                   pointerEvents="none"
-                  ref={openingWordCurtainRef}
                   style={[
                     styles.openingWordCurtain,
-                    openingStep === 0 && OPENING_SPOTLIGHT_MASK,
                     {
                       height: openingSceneHeight + 40,
+                      opacity: Platform.OS === "web" && openingStep === 0 ? 0 : 1,
                       transform: [{
                         translateY: openingReveal.interpolate({
                           inputRange: [0, 1],
@@ -939,6 +1093,13 @@ export function AnnualScrollStory({
                     <AnimatedSvgPath d={curtainWavePath} fill={color.black} />
                   </Svg>
                 </Animated.View>
+                {Platform.OS === "web" && openingStep === 0 ? (
+                  <OpeningWebglReveal
+                    disabledRef={openingSequenceStarted}
+                    height={openingSceneHeight + 40}
+                    reducedMotion={reducedMotion}
+                  />
+                ) : null}
                 <Pressable
                   accessibilityHint="点击一次后自动展开全部真实标签、视频标题和创作者"
                   accessibilityLabel={openingStep >= OPENING_STEP_COUNT
@@ -1706,13 +1867,13 @@ function buildOpeningParticles(
   const addTitle = (item: StoryContentItem) => {
     const title = item.record.title.trim();
     const titleKey = title.toLocaleLowerCase("zh-Hans");
-    if (!title || seenTitles.has(titleKey) || titles.length >= OPENING_TITLE_LIMIT) return;
+    const meaningfulLength = Array.from(title).filter((character) => /[\p{L}\p{N}]/u.test(character)).length;
+    if (meaningfulLength <= 4 || seenTitles.has(titleKey) || titles.length >= OPENING_TITLE_LIMIT) return;
     titles.push({ key: item.key, label: title });
     seenTitles.add(titleKey);
   };
 
-  // 真实档案里的短标题优先入堆，其余标题仍按原始内容顺序补足。
-  content.filter((item) => [...item.record.title.trim()].length <= 4).forEach(addTitle);
+  // 超短标题缺少可辨识信息，开场只保留更完整的真实标题。
   content.forEach(addTitle);
 
   for (const item of content) {
@@ -1762,14 +1923,16 @@ function openingParticleHeight(fontSize: number): number {
   return fontSize * 1.18;
 }
 
-function estimateOpeningParticleWidth(item: OpeningParticle, fontSize: number, maxWidth: number): number {
-  const text = item.count === undefined ? item.label : `${item.label} ${formatNumber(item.count)}`;
+function estimateOpeningParticleWidth(item: OpeningParticle, fontSize: number): number {
+  const label = truncateOpeningParticleLabel(item.label, OPENING_LABEL_MAX_LENGTH);
+  const text = item.count === undefined ? label : `${label} ${formatNumber(item.count)}`;
   const glyphUnits = Array.from(text).reduce((total, character) => {
     if (/\s/u.test(character)) return total + 0.32;
     if (/[\u0021-\u007e]/u.test(character)) return total + 0.58;
     return total + 1;
   }, 0);
-  return Math.min(maxWidth, Math.max(fontSize * 1.6, glyphUnits * fontSize + fontSize * 0.4));
+  const textWidth = glyphUnits * fontSize * 1.08;
+  return Math.max(fontSize * 1.6, (textWidth + 16) / 0.92);
 }
 
 function privateHourStory(hour: StoryHour): string {
@@ -1797,16 +1960,13 @@ function storyParticleLayouts(
   items: readonly OpeningParticle[],
   width: number,
   height: number,
-): OpeningParticleLayout[] {
+): Array<OpeningParticleLayout | null> {
   const narrow = width < 1180;
   const layouts = new Map<string, OpeningParticleLayout>();
-  const rowCount = Math.min(items.length, Math.max(OPENING_STEP_COUNT, Math.round(height / OPENING_VISUAL_ROW_HEIGHT)));
-  const itemCount = Math.max(1, items.length);
-
-  for (let row = 1; row <= rowCount; row += 1) {
-    const rowItems = items.filter((item) => openingVisualRow(item.revealOrder, itemCount, rowCount) === row);
-    if (rowItems.length === 0) continue;
-    const measured = rowItems.map((item) => {
+  const maxRows = Math.min(items.length, Math.max(OPENING_STEP_COUNT, Math.round(height / OPENING_VISUAL_ROW_HEIGHT)));
+  const measured = [...items]
+    .sort((left, right) => left.revealOrder - right.revealOrder)
+    .map((item) => {
       const hash = hashString(item.key);
       const fontSize = item.kind === "title"
         ? (narrow ? 12 + (hash % 5) : 14 + (hash % 7))
@@ -1817,21 +1977,24 @@ function storyParticleLayouts(
       return {
         item,
         fontSize: scaledFontSize,
-        naturalWidth: estimateOpeningParticleWidth(item, scaledFontSize, width * 0.38),
+        width: estimateOpeningParticleWidth(item, scaledFontSize),
       };
     });
-    const totalNaturalWidth = measured.reduce((sum, item) => sum + item.naturalWidth, 0);
-    const rowScale = Math.min(1, Math.max(1, width - 48) / totalNaturalWidth);
-    const arranged = measured.map((item) => ({
-      ...item,
-      width: item.naturalWidth * rowScale,
-    }));
+  const rows = fillOpeningRows(
+    measured,
+    Math.max(1, width - 48),
+    maxRows,
+    OPENING_ROW_GAP,
+  );
+
+  rows.forEach((arranged, rowIndex) => {
     const destinations = planOpeningDestinations({
-      seed: hashString(`opening-row:${row}`),
+      seed: hashString(`opening-row:${rowIndex + 1}`),
       width,
       height,
-      step: row,
-      stepCount: rowCount,
+      step: rowIndex + 1,
+      stepCount: rows.length,
+      itemGap: OPENING_ROW_GAP,
       items: arranged.map((item) => ({
         key: item.item.key,
         collisionWidth: item.width * 0.94,
@@ -1849,9 +2012,9 @@ function storyParticleLayouts(
         fontSize,
       });
     });
-  }
+  });
 
-  return items.map((item) => layouts.get(item.key)!);
+  return items.map((item) => layouts.get(item.key) ?? null);
 }
 
 function padHour(hour: number): string {
@@ -1945,6 +2108,7 @@ const styles = StyleSheet.create({
   openingParticleStage: { ...ABSOLUTE_FILL, zIndex: 4, alignItems: "center", justifyContent: "center" },
   openingWordLayer: { ...ABSOLUTE_FILL },
   openingWordCurtain: { position: "absolute", zIndex: 6, top: 0, left: 0, width: "100%" },
+  openingWebglReveal: { position: "absolute", zIndex: 7, top: 10, left: 0, width: "100%", overflow: "hidden" },
   chapterNo: { color: color.cyan, fontSize: 10, fontWeight: "900" },
   lead: { maxWidth: 640, color: color.textSecondary, fontSize: 16, lineHeight: 26, marginTop: 18 },
   floatingItem: { position: "absolute", zIndex: 4, left: "50%", top: "50%", justifyContent: "center" },

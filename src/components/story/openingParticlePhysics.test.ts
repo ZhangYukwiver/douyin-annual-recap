@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   consumeFixedSteps,
   FIXED_STEP_MS,
+  fillOpeningRows,
   insetCollisionBox,
   openingLogoRevealScale,
   openingPileDestinationStep,
@@ -11,6 +12,7 @@ import {
   OpeningParticlePhysics,
   planOpeningParticleExit,
   planOpeningDestinations,
+  truncateOpeningParticleLabel,
 } from "./openingParticlePhysics";
 
 describe("opening particle physics", () => {
@@ -57,6 +59,27 @@ describe("opening particle physics", () => {
 
     expect(enlarged.width).toBeCloseTo(base.width * scale);
     expect(enlarged.height).toBeCloseTo(base.height * scale);
+  });
+
+  it("only shortens labels after eight characters", () => {
+    expect(truncateOpeningParticleLabel("八个字符刚好够了")).toBe("八个字符刚好够了");
+    expect(truncateOpeningParticleLabel("超过八个字符才需要省略")).toBe("超过八个字符才需…");
+    expect(truncateOpeningParticleLabel("一碗热汤的做法 #家常菜")).toBe("一碗热汤的做法…");
+  });
+
+  it("fills earlier row gaps with later labels and keeps variable item counts", () => {
+    const first = { key: "first", width: 70 };
+    const second = { key: "second", width: 70 };
+    const third = { key: "third", width: 40 };
+    const fourth = { key: "fourth", width: 20 };
+    const fifth = { key: "fifth", width: 20 };
+    const sixth = { key: "sixth", width: 20 };
+
+    const rows = fillOpeningRows([first, second, third, fourth, fifth, sixth], 130, 3, 10);
+
+    expect(rows).toEqual([[first, third], [second, fourth, fifth], [sixth]]);
+    expect(rows.map((row) => row.length)).toEqual([2, 3, 1]);
+    expect(new Set(rows.flat())).toEqual(new Set([first, second, third, fourth, fifth, sixth]));
   });
 
   it("scales the logo aperture far enough to cover every viewport corner", () => {
@@ -279,11 +302,12 @@ describe("opening particle physics", () => {
     physics.dispose();
   });
 
-  it("spreads one wave across the full width instead of clumping", () => {
-    const items = Array.from({ length: 12 }, (_, index) => ({
+  it("keeps a sparse wave centered with a compact fixed gap", () => {
+    const items = Array.from({ length: 3 }, (_, index) => ({
       key: `word-${index}`,
       collisionWidth: 120,
       collisionHeight: 28,
+      displayWidth: 120,
     }));
     const destinations = planOpeningDestinations({
       seed: 123_456,
@@ -291,17 +315,17 @@ describe("opening particle physics", () => {
       height: 720,
       step: 2,
       stepCount: 5,
+      itemGap: 12,
       items,
     });
     const xs = [...destinations.values()].map(({ x }) => x).sort((left, right) => left - right);
-    const gaps = xs.slice(1).map((x, index) => x - xs[index]!);
+    const gaps = xs.slice(1).map((x, index) => x - xs[index]! - 120);
 
-    expect(xs[0]).toBeLessThan(-1_280 / 4);
-    expect(xs.at(-1)).toBeGreaterThan(1_280 / 4);
-    expect(Math.max(...gaps)).toBeLessThan((1_280 / items.length) * 2.2);
+    expect(xs).toEqual([-132, 0, 132]);
+    gaps.forEach((gap) => expect(gap).toBe(12));
   });
 
-  it("lays one wave out as a straight edge-to-edge mosaic row", () => {
+  it("lays one wave out as a compact mosaic row", () => {
     const items = [420, 120, 320, 300].map((displayWidth, index) => ({
       key: `tile-${index}`,
       collisionWidth: displayWidth * 0.94,
@@ -314,6 +338,7 @@ describe("opening particle physics", () => {
       height: 720,
       step: 2,
       stepCount: 5,
+      itemGap: 12,
       items,
     });
     const row = items
@@ -325,9 +350,9 @@ describe("opening particle physics", () => {
     ));
 
     expect(new Set(row.map((item) => item.y)).size).toBe(1);
-    expect(row[0]!.x - row[0]!.item.displayWidth / 2).toBeCloseTo(-616);
-    expect(row.at(-1)!.x + row.at(-1)!.item.displayWidth / 2).toBeCloseTo(616);
-    gaps.forEach((gap) => expect(gap).toBeCloseTo(24));
+    expect(row[0]!.x - row[0]!.item.displayWidth / 2).toBeCloseTo(-598);
+    expect(row.at(-1)!.x + row.at(-1)!.item.displayWidth / 2).toBeCloseTo(598);
+    gaps.forEach((gap) => expect(gap).toBeCloseTo(12));
   });
 
   it("stacks each wave above the previous one, bottom of the stage first", () => {
