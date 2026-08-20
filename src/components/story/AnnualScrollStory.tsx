@@ -63,67 +63,64 @@ import {
   type StoryStream as StoryStreamData,
   type StoryTopic,
 } from "./storyModel";
-import {
-  consumeFixedSteps,
-  FIXED_STEP_MS,
-  insetCollisionBox,
-  openingPileDestinationStep,
-  OpeningParticlePhysics,
-  planOpeningDestinations,
-} from "./openingParticlePhysics";
+import { OpeningReelGallery } from "./OpeningReelGallery";
+import { openingVisualRow, planOpeningDestinations } from "./openingParticlePhysics";
 
 const MIN_STORY_WIDTH = 1024;
 const CHAPTER_COUNT = 6;
 const OPENING_STEP_COUNT = 12;
 const OPENING_TAG_LIMIT = 24;
-const OPENING_TITLE_LIMIT = 120;
-const OPENING_CREATOR_LIMIT = 48;
+const OPENING_TITLE_LIMIT = 168;
+const OPENING_CREATOR_LIMIT = 72;
 const OPENING_PARTICLE_SCALE = 1.12;
-const OPENING_COLLISION_SETTLE_FRAMES = 42;
-// 词条逐个从底边进入，整堆共享同一段连续上推动画。
-const OPENING_TOTAL_DURATION = 4_300;
-const OPENING_WORD_FADE_SLOTS = 3;
-const OPENING_SETTLE_FORCE = 0.000_16;
-const OPENING_GRAVITY = 0.7;
-const OPENING_TRAVEL_FRICTION = 0.055;
-const OPENING_DECELERATION_FRICTION = 0.22;
-const OPENING_SETTLE_TIMEOUT = 900;
-const OPENING_REST_EPSILON = 0.06;
-const OPENING_DRIFT_DURATION = 16_000;
+const OPENING_VISUAL_ROW_HEIGHT = 30;
+// Logo 液面和词条幕布共用这段进度。
+const OPENING_TOTAL_DURATION = 6_500;
 const OPENING_FADE_DELAY = 500;
 const OPENING_FADE_DURATION = 900;
+const OPENING_REEL_COVER_LIMIT = 24;
 const NOTE_WIDTH = 220;
 const NOTE_HEIGHT = 240;
 const NOTE_VIEWBOX_WIDTH = 220;
 const NOTE_VIEWBOX_HEIGHT = 240;
 const NOTE_PATH = "M121 18H158C159 43 177 64 204 70V105C187 103 171 98 158 89V170C158 203 131 228 98 228C65 228 38 204 38 173C38 142 63 117 95 117C104 117 113 119 121 123V160C114 155 106 152 98 152C84 152 73 162 73 175C73 188 84 198 98 198C112 198 124 188 124 174L121 18Z";
-const LIQUID_PATH = "M-120 10C-100 -2 -80 -2 -60 10S-20 22 0 10S40 -2 60 10S100 22 120 10S160 -2 180 10S220 22 240 10S280 -2 300 10S340 22 360 10L360 260L-120 260Z";
+const LIQUID_WAVE_PATH = "M-120 -2C-110 -2 -100 22 -90 22S-70 4 -60 4S-40 16 -30 16S-10 -2 0 -2S20 22 30 22S50 4 60 4S80 16 90 16S110 -2 120 -2S140 22 150 22S170 4 180 4S200 16 210 16S230 -2 240 -2S260 22 270 22S290 4 300 4S320 16 330 16S350 -2 360 -2";
+const LIQUID_PATH = `${LIQUID_WAVE_PATH}L360 260L-120 260Z`;
+const CURTAIN_WAVE_PATHS = [
+  "M-120 18C-107 18 -95 -2 -82 -2C-57 -2 -33 24 -8 24C6 24 20 8 34 8C49 8 63 17 78 17C93 17 107 6 122 6C140 6 158 22 176 22C201 22 225 -1 250 -1C287 -1 323 18 360 18L360 -80L-120 -80Z",
+  "M-120 16C-111 16 -103 7 -94 7C-77 7 -59 22 -42 22C-12 22 18 -2 48 -2C69 -2 91 20 112 20C128 20 144 8 160 8C177 8 193 28 210 28C236 28 262 3 288 3C312 3 336 16 360 16L360 -80L-120 -80Z",
+  "M-120 20C-101 20 -81 2 -62 2C-35 2 -9 16 18 16C35 16 53 9 70 9C86 9 102 30 118 30C138 30 158 -2 178 -2C198 -2 218 21 238 21C261 21 285 6 308 6C325 6 343 20 360 20L360 -80L-120 -80Z",
+] as const;
+const LOGO_ENTRANCE_FRAGMENTS = [
+  { key: "cap", top: -12, height: 72, revealAt: 0.02, arriveAt: 0.42, fromX: -72, fromY: 16, fromRotation: -7, overshootX: 8, color: "#25F4EE" },
+  { key: "shoulder", top: 48, height: 70, revealAt: 0.07, arriveAt: 0.47, fromX: 64, fromY: -12, fromRotation: 6, overshootX: -7, color: "#FE2C55" },
+  { key: "joint", top: 106, height: 74, revealAt: 0.12, arriveAt: 0.51, fromX: -56, fromY: 10, fromRotation: -5, overshootX: 6, color: "#25F4EE" },
+  { key: "base", top: 168, height: 84, revealAt: 0.17, arriveAt: 0.55, fromX: 76, fromY: -14, fromRotation: 7, overshootX: -9, color: "#FE2C55" },
+] as const;
 const NOTE_WORD_MASK_URI = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${NOTE_VIEWBOX_WIDTH} ${NOTE_VIEWBOX_HEIGHT}"><path fill="white" d="${NOTE_PATH}"/></svg>`)}")`;
+const OPENING_SPOTLIGHT_GRADIENT = "radial-gradient(circle 56px at var(--opening-spotlight-x, -999px) var(--opening-spotlight-y, -999px), transparent 0 40px, rgba(0,0,0,0.18) 46px, rgba(0,0,0,0.56) 51px, black 56px)";
+const OPENING_SPOTLIGHT_MASK = Platform.OS === "web" ? ({
+  WebkitMaskImage: OPENING_SPOTLIGHT_GRADIENT,
+  maskImage: OPENING_SPOTLIGHT_GRADIENT,
+} as unknown as ViewStyle) : null;
 const OPENING_MESSAGE_LINES = ["你的内容世界", "已经有了形状"] as const;
-const AnimatedSvgGroup = Animated.createAnimatedComponent(G);
+type SvgGroupProps = React.ComponentProps<typeof G> & { collapsable?: boolean };
+const SvgGroup = React.forwardRef<React.ComponentRef<typeof G>, SvgGroupProps>(function SvgGroup(
+  { collapsable: _collapsable, ...props },
+  ref,
+) {
+  return <G ref={ref} {...props} />;
+});
+const AnimatedSvgGroup = Animated.createAnimatedComponent(SvgGroup);
+type SvgPathProps = React.ComponentProps<typeof Path> & { collapsable?: boolean };
+const SvgPath = React.forwardRef<React.ComponentRef<typeof Path>, SvgPathProps>(function SvgPath(
+  { collapsable: _collapsable, ...props },
+  ref,
+) {
+  return <Path ref={ref} {...props} />;
+});
+const AnimatedSvgPath = Animated.createAnimatedComponent(SvgPath);
 const ABSOLUTE_FILL: ViewStyle = { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 };
-const OPENING_COVER_LAYOUTS: readonly ViewStyle[] = [
-  { left: "-6%", top: "-10%", width: "28%", height: "38%", transform: [{ rotate: "-5deg" }] },
-  { left: "17%", top: "-8%", width: "25%", height: "34%", transform: [{ rotate: "3deg" }] },
-  { left: "38%", top: "-13%", width: "30%", height: "41%", transform: [{ rotate: "-2deg" }] },
-  { left: "65%", top: "-7%", width: "20%", height: "33%", transform: [{ rotate: "5deg" }] },
-  { left: "81%", top: "-11%", width: "25%", height: "40%", transform: [{ rotate: "-4deg" }] },
-  { left: "-8%", top: "21%", width: "29%", height: "39%", transform: [{ rotate: "4deg" }] },
-  { left: "17%", top: "24%", width: "21%", height: "34%", transform: [{ rotate: "-3deg" }] },
-  { left: "34%", top: "20%", width: "29%", height: "43%", transform: [{ rotate: "5deg" }] },
-  { left: "59%", top: "23%", width: "25%", height: "36%", transform: [{ rotate: "-5deg" }] },
-  { left: "80%", top: "21%", width: "27%", height: "42%", transform: [{ rotate: "3deg" }] },
-  { left: "-5%", top: "51%", width: "22%", height: "39%", transform: [{ rotate: "-4deg" }] },
-  { left: "12%", top: "49%", width: "30%", height: "40%", transform: [{ rotate: "5deg" }] },
-  { left: "39%", top: "53%", width: "21%", height: "39%", transform: [{ rotate: "-3deg" }] },
-  { left: "56%", top: "50%", width: "29%", height: "38%", transform: [{ rotate: "4deg" }] },
-  { left: "80%", top: "51%", width: "25%", height: "40%", transform: [{ rotate: "-5deg" }] },
-  { left: "-6%", top: "80%", width: "29%", height: "32%", transform: [{ rotate: "3deg" }] },
-  { left: "19%", top: "78%", width: "25%", height: "34%", transform: [{ rotate: "-4deg" }] },
-  { left: "41%", top: "81%", width: "30%", height: "32%", transform: [{ rotate: "5deg" }] },
-  { left: "68%", top: "78%", width: "21%", height: "35%", transform: [{ rotate: "-3deg" }] },
-  { left: "85%", top: "80%", width: "22%", height: "34%", transform: [{ rotate: "4deg" }] },
-];
 const WEB_POINTER = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
 const LIST_LABELS: Record<PersonalRecordType, string> = {
   watch_history: "观看历史",
@@ -166,13 +163,10 @@ interface OpeningParticle {
   kind: "tag" | "title" | "creator";
   label: string;
   count?: number;
-  /** 水位层（自下而上 1..OPENING_STEP_COUNT），决定落点所在的那一层。 */
+  /** 进度层（自下而上 1..OPENING_STEP_COUNT），决定词条的出现顺序。 */
   revealStep: number;
-  /** 全局释放次序，词条逐个入场而不是整层一起出现。 */
+  /** 全局出现次序，用于把词条预排到自下而上的固定行。 */
   revealOrder: number;
-  /** 淡入窗口，与 openingReveal（0..1）同一把尺子。 */
-  revealFrom: number;
-  revealTo: number;
 }
 
 interface OpeningParticleLayout {
@@ -180,13 +174,6 @@ interface OpeningParticleLayout {
   y: number;
   width: number;
   fontSize: number;
-  rotation: number;
-  textAlign: "left" | "center" | "right";
-}
-
-interface OpeningParticleMotion {
-  x: Animated.Value;
-  y: Animated.Value;
 }
 
 const localCopyProvider: NarrativeCopyProvider = {
@@ -225,11 +212,15 @@ export function AnnualScrollStory({
 }: AnnualScrollStoryProps) {
   const { width, height } = useWindowDimensions();
   const compact = width < 1180;
+  const openingSceneHeight = Math.max(1, height - 68);
   const sceneHeight = Math.max(650, height - 68);
   const model = useMemo(() => buildStoryModel(records), [records]);
   const storyContent = useMemo(() => collectStoryContent(model), [model]);
   const openingContent = useMemo(() => collectOpeningContent(model), [model]);
-  const openingCovers = useMemo(() => buildOpeningCovers(openingContent), [openingContent]);
+  const openingCovers = useMemo(
+    () => buildOpeningCovers(openingContent, OPENING_REEL_COVER_LIMIT),
+    [openingContent],
+  );
   const openingParticles = useMemo(
     () => buildOpeningParticles(model, openingContent, privacy),
     [model, openingContent, privacy],
@@ -256,19 +247,18 @@ export function AnnualScrollStory({
   ));
   const openingStepRef = useRef(0);
   const openingSequenceStarted = useRef(false);
-  const openingParticlePoses = useRef(new Map<string, { x: number; y: number }>());
-  const openingPhysics = useRef<OpeningParticlePhysics | null>(null);
-  const openingSequenceFrame = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   const openingForegroundFade = useRef<Animated.CompositeAnimation | null>(null);
   const openingReveal = useRef(new Animated.Value(0)).current;
   const openingForegroundOpacity = useRef(new Animated.Value(1)).current;
-  const openingDrift = useRef(new Animated.Value(0)).current;
+  const logoEntrance = useRef(new Animated.Value(0)).current;
   const logoNeon = useRef(new Animated.Value(1)).current;
   const storyProgress = useRef(new Animated.Value(0)).current;
   const liquidWave = useRef(new Animated.Value(0)).current;
   const hourRotation = useRef(new Animated.Value(selectedHour)).current;
   const rootRef = useRef<View | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
+  const openingParticleStageRef = useRef<View | null>(null);
+  const openingWordCurtainRef = useRef<View | null>(null);
   const sectionOffsets = useRef<number[]>([]);
 
   const selectedHourData = model.hours[selectedHour] ?? model.hours[0]!;
@@ -279,15 +269,8 @@ export function AnnualScrollStory({
     ? ({ position: "sticky", top: 0 } as unknown as ViewStyle)
     : null;
   const particleLayouts = useMemo(
-    () => storyParticleLayouts(openingParticles, width, sceneHeight),
-    [openingParticles, sceneHeight, width],
-  );
-  const particleMotions = useMemo(
-    () => new Map<string, OpeningParticleMotion>(openingParticles.map((item) => [item.key, {
-      x: new Animated.Value(0),
-      y: new Animated.Value(0),
-    }])),
-    [openingParticles],
+    () => storyParticleLayouts(openingParticles, width, openingSceneHeight),
+    [openingParticles, openingSceneHeight, width],
   );
   const openingProgress = Math.round((openingStep / OPENING_STEP_COUNT) * 100);
   const progressWidth = storyProgress.interpolate({
@@ -295,7 +278,7 @@ export function AnnualScrollStory({
     outputRange: ["0%", "100%"],
     extrapolate: "clamp",
   });
-  // Logo 液面和整堆词条共用 openingReveal（0..1），两边没有第二套计时器。
+  // Logo 液面和词条幕布共用 openingReveal（0..1），两边没有第二套计时器。
   const liquidTransform = openingReveal.interpolate({
     inputRange: [0, 1],
     outputRange: [`translate(0 ${NOTE_VIEWBOX_HEIGHT})`, "translate(0 -12)"],
@@ -305,8 +288,13 @@ export function AnnualScrollStory({
     inputRange: [0, 1],
     outputRange: ["translate(0 0)", "translate(-120 0)"],
   });
+  const curtainWavePath = liquidWave.interpolate({
+    inputRange: [0, 0.34, 0.68, 1],
+    easing: Easing.inOut(Easing.sin),
+    outputRange: [CURTAIN_WAVE_PATHS[0], CURTAIN_WAVE_PATHS[1], CURTAIN_WAVE_PATHS[2], CURTAIN_WAVE_PATHS[0]],
+  });
   const noteLeft = width / 2 - NOTE_WIDTH / 2;
-  const noteTop = sceneHeight / 2 - NOTE_HEIGHT / 2;
+  const noteTop = openingSceneHeight / 2 - NOTE_HEIGHT / 2;
   const openingWordLayerMask = Platform.OS === "web"
     ? ({
         WebkitMaskComposite: "xor",
@@ -321,33 +309,109 @@ export function AnnualScrollStory({
         maskSize: `100% 100%, ${NOTE_WIDTH}px ${NOTE_HEIGHT}px`,
       } as unknown as ViewStyle)
     : null;
-  const collageTransform = [
-    { scale: openingDrift.interpolate({ inputRange: [0, 1], outputRange: [1.04, 1.1] }) },
-    { translateY: openingDrift.interpolate({ inputRange: [0, 1], outputRange: [12, -12] }) },
-  ];
+  const logoBodyOpacity = logoEntrance.interpolate({
+    inputRange: [0, 0.36, 0.56, 0.8, 1],
+    outputRange: [0, 0, 0.54, 1, 1],
+    extrapolate: "clamp",
+  });
+  const logoBodyScale = logoEntrance.interpolate({
+    inputRange: [0, 0.36, 0.56, 0.74, 0.9, 1],
+    outputRange: [0.78, 0.78, 1.08, 0.96, 1.025, 1],
+    extrapolate: "clamp",
+  });
+  const logoBodyTranslateY = logoEntrance.interpolate({
+    inputRange: [0, 0.36, 0.56, 0.74, 0.9, 1],
+    outputRange: [14, 14, -5, 3, -1, 0],
+    extrapolate: "clamp",
+  });
+  const logoBodyRotation = logoEntrance.interpolate({
+    inputRange: [0, 0.36, 0.56, 0.74, 0.9, 1],
+    outputRange: ["-4deg", "-4deg", "1.4deg", "-0.8deg", "0.25deg", "0deg"],
+    extrapolate: "clamp",
+  });
+  const logoLockFlash = logoEntrance.interpolate({
+    inputRange: [0, 0.5, 0.58, 0.76, 1],
+    outputRange: [0, 0, 0.92, 0, 0],
+    extrapolate: "clamp",
+  });
+  const logoFragmentMotions = LOGO_ENTRANCE_FRAGMENTS.map((fragment) => ({
+    opacity: logoEntrance.interpolate({
+      inputRange: [0, fragment.revealAt, fragment.arriveAt, 0.8, 1],
+      outputRange: [0, 0, 1, 0.18, 0],
+      extrapolate: "clamp",
+    }),
+    translateX: logoEntrance.interpolate({
+      inputRange: [0, fragment.arriveAt, 0.8, 1],
+      outputRange: [fragment.fromX, fragment.overshootX, 0, 0],
+      extrapolate: "clamp",
+    }),
+    translateY: logoEntrance.interpolate({
+      inputRange: [0, fragment.arriveAt, 0.8, 1],
+      outputRange: [fragment.fromY, -fragment.fromY * 0.18, 0, 0],
+      extrapolate: "clamp",
+    }),
+    rotation: logoEntrance.interpolate({
+      inputRange: [0, fragment.arriveAt, 0.8, 1],
+      outputRange: [`${fragment.fromRotation}deg`, `${-fragment.fromRotation * 0.18}deg`, "0deg", "0deg"],
+      extrapolate: "clamp",
+    }),
+    scale: logoEntrance.interpolate({
+      inputRange: [0, fragment.arriveAt, 0.8, 1],
+      outputRange: [0.86, 1.06, 1, 1],
+      extrapolate: "clamp",
+    }),
+  }));
 
   const stopOpeningSequence = useCallback(() => {
-    if (openingSequenceFrame.current !== null) cancelAnimationFrame(openingSequenceFrame.current);
-    openingSequenceFrame.current = null;
+    openingReveal.stopAnimation();
     openingForegroundFade.current?.stop();
     openingForegroundFade.current = null;
-    openingPhysics.current?.dispose();
-    openingPhysics.current = null;
-  }, []);
+  }, [openingReveal]);
 
   useEffect(() => {
-    stopOpeningSequence();
-    openingParticlePoses.current.clear();
-    openingParticles.forEach((item, index) => {
-      const motion = particleMotions.get(item.key);
-      const layout = particleLayouts[index];
-      if (!motion || !layout) return;
-      motion.x.setValue(layout.x);
-      motion.y.setValue(layout.y);
-      openingParticlePoses.current.set(item.key, { x: layout.x, y: layout.y });
-    });
     return stopOpeningSequence;
-  }, [openingParticles, particleLayouts, particleMotions, stopOpeningSequence]);
+  }, [stopOpeningSequence]);
+
+  useEffect(() => {
+    const listener = openingReveal.addListener(({ value }) => {
+      const row = value <= 0
+        ? 0
+        : Math.min(OPENING_STEP_COUNT, Math.ceil(value * OPENING_STEP_COUNT));
+      if (row === openingStepRef.current) return;
+      openingStepRef.current = row;
+      setOpeningStep(row);
+    });
+    return () => openingReveal.removeListener(listener);
+  }, [openingReveal]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return undefined;
+    const stage = openingParticleStageRef.current as unknown as HTMLElement | null;
+    const curtain = openingWordCurtainRef.current as unknown as HTMLElement | null;
+    if (!stage?.addEventListener || !curtain?.style) return undefined;
+
+    const hideSpotlight = () => {
+      curtain.style.setProperty("--opening-spotlight-x", "-999px");
+      curtain.style.setProperty("--opening-spotlight-y", "-999px");
+    };
+    const followPointer = (event: PointerEvent) => {
+      if (openingSequenceStarted.current) {
+        hideSpotlight();
+        return;
+      }
+      const bounds = curtain.getBoundingClientRect();
+      curtain.style.setProperty("--opening-spotlight-x", `${event.clientX - bounds.left}px`);
+      curtain.style.setProperty("--opening-spotlight-y", `${event.clientY - bounds.top}px`);
+    };
+
+    hideSpotlight();
+    stage.addEventListener("pointermove", followPointer, { passive: true });
+    stage.addEventListener("pointerleave", hideSpotlight);
+    return () => {
+      stage.removeEventListener("pointermove", followPointer);
+      stage.removeEventListener("pointerleave", hideSpotlight);
+    };
+  }, [report?.status]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
@@ -371,21 +435,43 @@ export function AnnualScrollStory({
   }, [openingForegroundOpacity, openingReveal, reducedMotion, stopOpeningSequence]);
 
   useEffect(() => {
-    openingDrift.stopAnimation();
-    if (reducedMotion || activeChapter !== 1) {
-      openingDrift.setValue(0);
+    logoEntrance.stopAnimation();
+    if (reducedMotion) {
+      logoEntrance.setValue(1);
       return undefined;
     }
-    const leg = (toValue: number) => Animated.timing(openingDrift, {
-      toValue,
-      duration: OPENING_DRIFT_DURATION,
-      easing: Easing.inOut(Easing.sin),
-      useNativeDriver: Platform.OS !== "web",
-    });
-    const animation = Animated.loop(Animated.sequence([leg(1), leg(0)]));
+    logoEntrance.setValue(0);
+    const animation = Animated.sequence([
+      Animated.delay(40),
+      Animated.timing(logoEntrance, {
+        toValue: 0.5,
+        duration: 560,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: Platform.OS !== "web",
+      }),
+      Animated.timing(logoEntrance, {
+        toValue: 0.68,
+        duration: 230,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: Platform.OS !== "web",
+      }),
+      Animated.delay(80),
+      Animated.timing(logoEntrance, {
+        toValue: 0.86,
+        duration: 460,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: Platform.OS !== "web",
+      }),
+      Animated.timing(logoEntrance, {
+        toValue: 1,
+        duration: 420,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: Platform.OS !== "web",
+      }),
+    ]);
     animation.start();
     return () => animation.stop();
-  }, [activeChapter, openingDrift, reducedMotion]);
+  }, [logoEntrance, reducedMotion]);
 
   useEffect(() => {
     logoNeon.stopAnimation();
@@ -400,7 +486,7 @@ export function AnnualScrollStory({
       useNativeDriver: Platform.OS !== "web",
     });
     const animation = Animated.loop(Animated.sequence([
-      Animated.delay(1_500),
+      Animated.delay(2_400),
       flash(0.48, 55), flash(1, 85), flash(0.72, 45), flash(1, 95),
       Animated.delay(2_300),
       flash(0.62, 60), flash(1, 110),
@@ -478,107 +564,16 @@ export function AnnualScrollStory({
   const startOpeningSequence = useCallback(() => {
     if (openingSequenceStarted.current || openingStepRef.current > 0) return;
     openingSequenceStarted.current = true;
+    const curtain = openingWordCurtainRef.current as unknown as HTMLElement | null;
+    curtain?.style.setProperty("--opening-spotlight-x", "-999px");
+    curtain?.style.setProperty("--opening-spotlight-y", "-999px");
+    logoEntrance.stopAnimation();
+    logoEntrance.setValue(1);
     stopOpeningSequence();
     setOpeningForegroundHidden(false);
     openingForegroundOpacity.setValue(1);
     openingReveal.stopAnimation();
     openingReveal.setValue(0);
-
-    const seed = Math.floor(Math.random() * 4_294_967_296);
-    const entries = openingParticles.flatMap((item, index) => {
-      const layout = particleLayouts[index];
-      if (!layout) return [];
-      return [{
-        item,
-        layout,
-        collision: insetCollisionBox(layout.width, layout.fontSize),
-      }];
-    });
-
-    // 最早出现的词条最终位于最上方，后续词条从下面持续把整堆顶高。
-    const destinations = new Map<string, { x: number; y: number }>();
-    for (let row = 1; row <= OPENING_STEP_COUNT; row += 1) {
-      const rowEntries = entries.filter((entry) => entry.item.revealStep === row);
-      if (rowEntries.length === 0) continue;
-      planOpeningDestinations({
-        seed,
-        width,
-        height: sceneHeight,
-        step: openingPileDestinationStep(row, OPENING_STEP_COUNT),
-        stepCount: OPENING_STEP_COUNT,
-        items: rowEntries.map((entry) => ({
-          key: entry.item.key,
-          collisionWidth: entry.collision.width,
-          collisionHeight: entry.collision.height,
-        })),
-      }).forEach((pose, key) => destinations.set(key, pose));
-    }
-
-    const physics = new OpeningParticlePhysics(width, sceneHeight, {
-      gravityY: OPENING_GRAVITY,
-      fallWhenUnsupported: true,
-    });
-
-    const targetFor = (entry: typeof entries[number], progress: number) => {
-      const destination = destinations.get(entry.item.key) ?? { x: entry.layout.x, y: entry.layout.y };
-      const finalY = sceneHeight / 2 + destination.y;
-      const bottomLimit = sceneHeight - entry.collision.height / 2 - 4;
-      return {
-        x: width / 2 + destination.x,
-        y: Math.min(bottomLimit, finalY + (1 - progress) * sceneHeight),
-        finalY,
-      };
-    };
-
-    const releaseWord = (entry: typeof entries[number], settled: boolean, progress: number) => {
-      const target = targetFor(entry, settled ? 1 : progress);
-      const remainingFrames = Math.max(1, ((1 - progress) * OPENING_TOTAL_DURATION) / FIXED_STEP_MS);
-      physics.add({
-        key: entry.item.key,
-        targetX: target.x,
-        targetY: settled ? target.finalY : target.y,
-        collisionWidth: entry.collision.width,
-        collisionHeight: entry.collision.height,
-        angle: entry.layout.rotation * Math.PI / 180,
-        spawnX: target.x,
-        spawnY: settled ? target.finalY : target.y,
-        velocityX: 0,
-        velocityY: settled ? 0 : (target.finalY - target.y) / remainingFrames,
-        frictionAir: settled ? OPENING_DECELERATION_FRICTION : OPENING_TRAVEL_FRICTION,
-        restitution: 0.12,
-        targetForce: OPENING_SETTLE_FORCE,
-      });
-      const pose = { x: target.x - width / 2, y: (settled ? target.finalY : target.y) - sceneHeight / 2 };
-      const motion = particleMotions.get(entry.item.key);
-      motion?.x.setValue(pose.x);
-      motion?.y.setValue(pose.y);
-      openingParticlePoses.current.set(entry.item.key, pose);
-    };
-
-    const commitPoses = (poses: ReturnType<typeof physics.poses>): number => {
-      let movedCount = 0;
-      poses.forEach((pose, key) => {
-        const motion = particleMotions.get(key);
-        if (!motion) return;
-        const previous = openingParticlePoses.current.get(key);
-        const relativePose = { x: pose.x - width / 2, y: pose.y - sceneHeight / 2 };
-        // ponytail: skip sub-pixel writes so settled words stop churning styles every frame.
-        if (previous
-          && Math.abs(previous.x - relativePose.x) < OPENING_REST_EPSILON
-          && Math.abs(previous.y - relativePose.y) < OPENING_REST_EPSILON) return;
-        movedCount += 1;
-        motion.x.setValue(relativePose.x);
-        motion.y.setValue(relativePose.y);
-        openingParticlePoses.current.set(key, relativePose);
-      });
-      return movedCount;
-    };
-
-    const finish = () => {
-      openingStepRef.current = OPENING_STEP_COUNT;
-      setOpeningStep(OPENING_STEP_COUNT);
-      openingReveal.setValue(1);
-    };
 
     const fadeForeground = () => {
       const fade = Animated.sequence([
@@ -598,86 +593,32 @@ export function AnnualScrollStory({
     };
 
     if (reducedMotion) {
-      entries.forEach((entry) => releaseWord(entry, true, 1));
-      for (let frame = 0; frame < OPENING_COLLISION_SETTLE_FRAMES; frame += 1) physics.advance(FIXED_STEP_MS);
-      commitPoses(physics.poses());
-      physics.dispose();
-      finish();
+      openingStepRef.current = OPENING_STEP_COUNT;
+      setOpeningStep(OPENING_STEP_COUNT);
+      openingReveal.setValue(1);
       openingForegroundOpacity.setValue(0);
       setOpeningForegroundHidden(true);
       return;
     }
 
-    const schedule = [...entries]
-      .sort((left, right) => left.item.revealOrder - right.item.revealOrder)
-      .map((entry) => ({ entry, releaseAt: entry.item.revealFrom * OPENING_TOTAL_DURATION }));
-
-    openingPhysics.current = physics;
-    const wordKeys = schedule.map(({ entry }) => entry.item.key);
-    let lastFrameTime = 0;
-    let stepRemainder = 0;
-    // ponytail: hidden tabs pause rAF. Logo、词堆目标位和物理步进共用 simulated，恢复后不会错位。
-    let simulated = 0;
-    let releasedCount = 0;
-    let settleTail = 0;
-    const animateFlood = (frameTime: number) => {
-      if (openingPhysics.current !== physics) return;
-      if (lastFrameTime === 0) lastFrameTime = frameTime;
-      const drained = consumeFixedSteps(stepRemainder, frameTime - lastFrameTime);
-      lastFrameTime = frameTime;
-      stepRemainder = drained.remainder;
-      let movedCount = 0;
-      for (let step = 0; step < drained.steps; step += 1) {
-        simulated += FIXED_STEP_MS;
-        const stepProgress = Math.min(1, simulated / OPENING_TOTAL_DURATION);
-        while (releasedCount < schedule.length && schedule[releasedCount]!.releaseAt <= simulated) {
-          releaseWord(schedule[releasedCount]!.entry, false, stepProgress);
-          releasedCount += 1;
-        }
-        for (let index = 0; index < releasedCount; index += 1) {
-          const entry = schedule[index]!.entry;
-          const target = targetFor(entry, stepProgress);
-          physics.setTarget(entry.item.key, target.x, stepProgress >= 1 ? target.finalY : target.y);
-        }
-        movedCount += commitPoses(physics.advance(FIXED_STEP_MS));
-      }
-
-      const progress = Math.min(1, simulated / OPENING_TOTAL_DURATION);
-      openingReveal.setValue(progress);
-      const row = Math.min(OPENING_STEP_COUNT, Math.floor(progress * OPENING_STEP_COUNT) + 1);
-      if (row !== openingStepRef.current) {
-        openingStepRef.current = row;
-        setOpeningStep(row);
-      }
-
-      const allReleased = releasedCount >= schedule.length && progress >= 1;
-      if (allReleased) {
-        if (settleTail === 0) physics.setFrictionAir(wordKeys, OPENING_DECELERATION_FRICTION);
-        settleTail += drained.steps * FIXED_STEP_MS;
-      }
-      const atRest = allReleased && settleTail >= 200 && movedCount === 0;
-      if (!allReleased || (!atRest && settleTail < OPENING_SETTLE_TIMEOUT)) {
-        openingSequenceFrame.current = requestAnimationFrame(animateFlood);
-        return;
-      }
-
-      openingSequenceFrame.current = null;
-      physics.dispose();
-      if (openingPhysics.current === physics) openingPhysics.current = null;
-      finish();
+    Animated.timing(openingReveal, {
+      toValue: 1,
+      duration: OPENING_TOTAL_DURATION,
+      easing: Easing.inOut(Easing.quad),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      openingStepRef.current = OPENING_STEP_COUNT;
+      setOpeningStep(OPENING_STEP_COUNT);
+      openingReveal.setValue(1);
       fadeForeground();
-    };
-    openingSequenceFrame.current = requestAnimationFrame(animateFlood);
+    });
   }, [
-    openingParticles,
     openingForegroundOpacity,
     openingReveal,
-    particleLayouts,
-    particleMotions,
+    logoEntrance,
     reducedMotion,
-    sceneHeight,
     stopOpeningSequence,
-    width,
   ]);
 
   const registerChapter = useCallback((index: number) => (event: LayoutChangeEvent) => {
@@ -714,7 +655,7 @@ export function AnnualScrollStory({
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest("button, a, input, textarea, [role='button']")) return;
+      if (target?.closest("button, a, input, textarea, [role='button'], [data-testid='opening-reel-gallery']")) return;
       dragging = true;
       startY = event.clientY;
       startScrollTop = scroller.scrollTop;
@@ -821,20 +762,17 @@ export function AnnualScrollStory({
         style={styles.storyScroller}
         testID="story-scroll-view"
       >
-        <View onLayout={registerChapter(1)} style={[styles.stickyChapter, { minHeight: sceneHeight + 460 }]}>
-          <View style={[styles.scene, { minHeight: sceneHeight }, stickyStyle]}>
+        <View onLayout={registerChapter(1)} style={[styles.stickyChapter, { minHeight: openingSceneHeight + 460 }]}>
+          <View style={[styles.scene, { minHeight: openingSceneHeight }, stickyStyle]}>
             <View style={styles.openingBackdrop} testID="opening-cover-collage">
-              <Animated.View pointerEvents="none" style={[styles.openingCollageLayer, { transform: collageTransform }]}>
-                {openingCovers.map((item, index) => (
-                  <OpeningCoverTile
-                    item={item.record}
-                    key={`${item.key}:${index}`}
-                    layout={OPENING_COVER_LAYOUTS[index]!}
-                    privacy={privacy}
-                  />
-                ))}
-              </Animated.View>
-              <View pointerEvents="none" style={styles.openingBackdropShade} />
+              <OpeningReelGallery
+                active={activeChapter === 1}
+                height={openingSceneHeight}
+                items={openingCovers}
+                privacy={privacy}
+                reducedMotion={reducedMotion}
+                width={width}
+              />
               <OpeningStaggeredMessage active={openingForegroundHidden} reducedMotion={reducedMotion} />
             </View>
 
@@ -851,7 +789,7 @@ export function AnnualScrollStory({
                 pointerEvents="none"
                 preserveAspectRatio="none"
                 style={styles.openingForegroundFill}
-                viewBox={`0 0 ${width} ${sceneHeight}`}
+                viewBox={`0 0 ${width} ${openingSceneHeight}`}
                 width="100%"
               >
                 <Defs>
@@ -859,14 +797,14 @@ export function AnnualScrollStory({
                     <Path d={NOTE_PATH} />
                   </ClipPath>
                   <Mask
-                    height={sceneHeight}
+                    height={openingSceneHeight}
                     id="opening-foreground-cutout-mask"
                     maskUnits="userSpaceOnUse"
                     width={width}
                     x="0"
                     y="0"
                   >
-                    <Rect fill="white" height={sceneHeight} width={width} />
+                    <Rect fill="white" height={openingSceneHeight} width={width} />
                     <G
                       clipPath="url(#opening-foreground-note-clip)"
                       transform={`translate(${noteLeft} ${noteTop})`}
@@ -881,7 +819,7 @@ export function AnnualScrollStory({
                 </Defs>
                 <Rect
                   fill={color.black}
-                  height={sceneHeight}
+                  height={openingSceneHeight}
                   mask="url(#opening-foreground-cutout-mask)"
                   width={width}
                 />
@@ -889,17 +827,28 @@ export function AnnualScrollStory({
               <View
                 accessible
                 accessibilityLabel={`年度内容已展开 ${openingProgress}%`}
+                ref={openingParticleStageRef}
                 style={styles.openingParticleStage}
               >
                 <View pointerEvents="none" style={[styles.openingWordLayer, openingWordLayerMask]} testID="opening-word-layer">
                   {openingParticles.map((item, index) => {
                     const layout = particleLayouts[index]!;
-                    const motion = particleMotions.get(item.key);
-                    if (!motion) return null;
                     const hidden = item.revealStep > openingStep;
                     const itemHeight = openingParticleHeight(layout.fontSize);
+                    const bubbleFrom = Math.min(0.96, Math.max(
+                      0.02,
+                      (openingSceneHeight / 2 + 24 - layout.y) / (openingSceneHeight + 50),
+                    ));
+                    const bubbleTo = Math.min(0.995, bubbleFrom + 0.085);
+                    const bubbleInset = Math.max(3, layout.width * 0.04);
+                    const bubbleScale = reducedMotion ? 1 : openingReveal.interpolate({
+                      inputRange: [0, bubbleFrom, bubbleTo, 1],
+                      outputRange: [0, 0, 1, 1],
+                      easing: Easing.out(Easing.back(1.5)),
+                      extrapolate: "clamp",
+                    });
                     return (
-                      <Animated.View
+                      <View
                         accessible
                         accessibilityLabel={openingParticleAccessibilityLabel(item)}
                         accessibilityElementsHidden={hidden}
@@ -911,37 +860,85 @@ export function AnnualScrollStory({
                           styles.floatingItem,
                           {
                             width: layout.width,
-                            height: itemHeight,
+                            height: itemHeight + 2,
                             marginLeft: -layout.width / 2,
-                            marginTop: -itemHeight / 2,
-                            opacity: openingReveal.interpolate({
-                              inputRange: [item.revealFrom, item.revealTo],
-                              outputRange: [0, 1],
-                              extrapolate: "clamp",
-                            }),
+                            marginTop: -(itemHeight + 2) / 2,
                             transform: [
-                              { translateX: motion.x },
-                              { translateY: motion.y },
-                              { rotate: `${layout.rotation}deg` },
-                              { scale: openingReveal.interpolate({ inputRange: [item.revealFrom, item.revealTo], outputRange: [0.72, 1], extrapolate: "clamp" }) },
+                              { translateX: layout.x },
+                              { translateY: layout.y },
                             ],
                           },
                         ]}
                       >
+                        <Animated.View
+                          style={[
+                            styles.openingBubble,
+                            {
+                              left: bubbleInset,
+                              right: bubbleInset,
+                              transform: [{ scale: bubbleScale }],
+                            },
+                          ]}
+                        />
                         <Text
+                          ellipsizeMode="tail"
                           numberOfLines={1}
                           style={[
                             item.kind === "tag" ? styles.floatingTag : item.kind === "title" ? styles.floatingTitle : styles.floatingCreator,
-                            { fontSize: layout.fontSize, lineHeight: itemHeight, textAlign: layout.textAlign },
+                            {
+                              alignSelf: "stretch",
+                              marginHorizontal: bubbleInset + 6,
+                              fontSize: layout.fontSize,
+                              lineHeight: itemHeight,
+                              textAlign: "center",
+                            },
                           ]}
                         >
                           {item.label}
                           {item.count === undefined ? null : <Text style={styles.floatingCount}> {formatNumber(item.count)}</Text>}
                         </Text>
-                      </Animated.View>
+                      </View>
                     );
                   })}
                 </View>
+                <Animated.View
+                  accessibilityElementsHidden
+                  aria-hidden
+                  importantForAccessibility="no-hide-descendants"
+                  pointerEvents="none"
+                  ref={openingWordCurtainRef}
+                  style={[
+                    styles.openingWordCurtain,
+                    openingStep === 0 && OPENING_SPOTLIGHT_MASK,
+                    {
+                      height: openingSceneHeight + 40,
+                      transform: [{
+                        translateY: openingReveal.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [10, -(openingSceneHeight + 40)],
+                          extrapolate: "clamp",
+                        }),
+                      }],
+                    },
+                  ]}
+                  testID="opening-word-curtain"
+                >
+                  <Svg
+                    height="100%"
+                    preserveAspectRatio="none"
+                    viewBox={`-120 ${-openingSceneHeight} 480 ${openingSceneHeight + 40}`}
+                    width="100%"
+                  >
+                    <Rect
+                      fill={color.black}
+                      height={Math.max(0, openingSceneHeight - 36)}
+                      width="480"
+                      x="-120"
+                      y={-openingSceneHeight}
+                    />
+                    <AnimatedSvgPath d={curtainWavePath} fill={color.black} />
+                  </Svg>
+                </Animated.View>
                 <Pressable
                   accessibilityHint="点击一次后自动展开全部真实标签、视频标题和创作者"
                   accessibilityLabel={openingStep >= OPENING_STEP_COUNT
@@ -964,54 +961,116 @@ export function AnnualScrollStory({
                     accessibilityValue={{ min: 0, max: 100, now: openingProgress }}
                     style={styles.logoProgress}
                   >
-                    <Svg
-                      accessibilityLabel="抖音音符标志"
-                      height={300}
-                      pointerEvents="none"
-                      style={styles.logoArtwork}
-                      viewBox="-30 -30 280 300"
-                      width={280}
-                    >
-                      <Defs>
-                        <Mask
-                          height={NOTE_VIEWBOX_HEIGHT}
-                          id="opening-logo-fill-mask"
-                          maskUnits="userSpaceOnUse"
-                          width={NOTE_VIEWBOX_WIDTH}
-                          x="0"
-                          y="0"
+                    {LOGO_ENTRANCE_FRAGMENTS.map((fragment, index) => {
+                      const motion = logoFragmentMotions[index]!;
+                      const glowId = `opening-logo-fragment-bloom-${fragment.key}`;
+                      return (
+                        <Animated.View
+                          accessibilityElementsHidden
+                          importantForAccessibility="no-hide-descendants"
+                          key={fragment.key}
+                          pointerEvents="none"
+                          style={[
+                            styles.logoFragment,
+                            {
+                              top: fragment.top,
+                              height: fragment.height,
+                              opacity: motion.opacity,
+                              transform: [
+                                { translateX: motion.translateX },
+                                { translateY: motion.translateY },
+                                { rotate: motion.rotation },
+                                { scale: motion.scale },
+                              ],
+                            },
+                          ]}
+                          testID={`opening-logo-fragment-${fragment.key}`}
                         >
-                          <Path d={NOTE_PATH} fill="white" />
-                          <AnimatedSvgGroup transform={liquidTransform}>
-                            <AnimatedSvgGroup transform={waveTransform}>
-                              <Path d={LIQUID_PATH} fill="black" />
+                          <Svg
+                            height={300}
+                            pointerEvents="none"
+                            style={[styles.logoFragmentArtwork, { top: -30 - fragment.top }]}
+                            viewBox="-30 -30 280 300"
+                            width={280}
+                          >
+                            <Defs>
+                              <Filter height="180%" id={glowId} width="180%" x="-40%" y="-40%">
+                                <FeGaussianBlur stdDeviation={6} />
+                              </Filter>
+                            </Defs>
+                            <Path d={NOTE_PATH} fill="#080B10" opacity={0.9} stroke={fragment.color} strokeLinejoin="round" strokeWidth={18} />
+                            <Path d={NOTE_PATH} fill="none" filter={`url(#${glowId})`} opacity={0.42} stroke={fragment.color} strokeLinejoin="round" strokeWidth={24} />
+                            <Path d={NOTE_PATH} fill="none" opacity={0.82} stroke="#F4F6FA" strokeLinejoin="round" strokeWidth={4} />
+                          </Svg>
+                        </Animated.View>
+                      );
+                    })}
+                    <Animated.View
+                      style={[
+                        styles.logoEntryBody,
+                        {
+                          opacity: logoBodyOpacity,
+                          transform: [
+                            { translateY: logoBodyTranslateY },
+                            { rotate: logoBodyRotation },
+                            { scale: logoBodyScale },
+                          ],
+                        },
+                      ]}
+                    >
+                      <Svg
+                        accessibilityLabel="抖音音符标志"
+                        height={300}
+                        pointerEvents="none"
+                        style={styles.logoArtwork}
+                        viewBox="-30 -30 280 300"
+                        width={280}
+                      >
+                        <Defs>
+                          <Mask
+                            height={NOTE_VIEWBOX_HEIGHT}
+                            id="opening-logo-fill-mask"
+                            maskUnits="userSpaceOnUse"
+                            width={NOTE_VIEWBOX_WIDTH}
+                            x="0"
+                            y="0"
+                          >
+                            <Path d={NOTE_PATH} fill="white" />
+                            <AnimatedSvgGroup transform={liquidTransform}>
+                              <AnimatedSvgGroup transform={waveTransform}>
+                                <Path d={LIQUID_PATH} fill="black" />
+                              </AnimatedSvgGroup>
                             </AnimatedSvgGroup>
+                          </Mask>
+                          <Mask height={300} id="opening-logo-outer-mask" maskUnits="userSpaceOnUse" width={280} x={-30} y={-30}>
+                            <Rect fill="white" height={300} width={280} x={-30} y={-30} />
+                            <Path d={NOTE_PATH} fill="black" />
+                          </Mask>
+                          <Filter height="180%" id="opening-logo-edge-bloom" width="180%" x="-40%" y="-40%">
+                            <FeGaussianBlur stdDeviation={7} />
+                          </Filter>
+                        </Defs>
+                        <G mask="url(#opening-logo-outer-mask)">
+                          <Path d={NOTE_PATH} fill="#0A0D12" opacity={0.96} stroke="#030406" strokeLinejoin="round" strokeWidth={8} transform="translate(10 12)" />
+                          <Path d={NOTE_PATH} fill="none" opacity={0.72} stroke="#53616B" strokeLinejoin="round" strokeWidth={4} transform="translate(7 8)" />
+                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(-7 5)" />
+                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(7 -4)" />
+                          <AnimatedSvgGroup opacity={logoNeon}>
+                            <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.46} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(-7 5)" />
+                            <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.46} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(7 -4)" />
+                            <Path d={NOTE_PATH} fill="none" opacity={0.94} stroke="#D2FEFF" strokeLinejoin="round" strokeWidth={18} transform="translate(-7 5)" />
+                            <Path d={NOTE_PATH} fill="none" opacity={0.94} stroke="#D2FEFF" strokeLinejoin="round" strokeWidth={18} transform="translate(7 -4)" />
                           </AnimatedSvgGroup>
-                        </Mask>
-                        <Mask height={300} id="opening-logo-outer-mask" maskUnits="userSpaceOnUse" width={280} x={-30} y={-30}>
-                          <Rect fill="white" height={300} width={280} x={-30} y={-30} />
-                          <Path d={NOTE_PATH} fill="black" />
-                        </Mask>
-                        <Filter height="180%" id="opening-logo-edge-bloom" width="180%" x="-40%" y="-40%">
-                          <FeGaussianBlur stdDeviation={7} />
-                        </Filter>
-                      </Defs>
-                      <G mask="url(#opening-logo-outer-mask)">
-                        <Path d={NOTE_PATH} fill="#0A0D12" opacity={0.96} stroke="#030406" strokeLinejoin="round" strokeWidth={8} transform="translate(10 12)" />
-                        <Path d={NOTE_PATH} fill="none" opacity={0.72} stroke="#53616B" strokeLinejoin="round" strokeWidth={4} transform="translate(7 8)" />
-                        <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(-7 5)" />
-                        <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(7 -4)" />
-                        <AnimatedSvgGroup opacity={logoNeon}>
-                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.46} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(-7 5)" />
-                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.46} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(7 -4)" />
-                          <Path d={NOTE_PATH} fill="none" opacity={0.94} stroke="#D2FEFF" strokeLinejoin="round" strokeWidth={18} transform="translate(-7 5)" />
-                          <Path d={NOTE_PATH} fill="none" opacity={0.94} stroke="#D2FEFF" strokeLinejoin="round" strokeWidth={18} transform="translate(7 -4)" />
+                        </G>
+                        <Path d={NOTE_PATH} fill="none" stroke="#25F4EE" strokeLinejoin="round" strokeWidth={14} transform="translate(-7 5)" />
+                        <Path d={NOTE_PATH} fill="none" stroke="#FE2C55" strokeLinejoin="round" strokeWidth={14} transform="translate(7 -4)" />
+                        <Rect fill="#F4F6FA" height={NOTE_VIEWBOX_HEIGHT} mask="url(#opening-logo-fill-mask)" width={NOTE_VIEWBOX_WIDTH} />
+                        <AnimatedSvgGroup opacity={logoLockFlash}>
+                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" stroke="#F4F6FA" strokeLinejoin="round" strokeWidth={28} />
+                          <Path d={NOTE_PATH} fill="none" stroke="#FFFFFF" strokeLinejoin="round" strokeWidth={4} />
                         </AnimatedSvgGroup>
-                      </G>
-                      <Path d={NOTE_PATH} fill="none" stroke="#25F4EE" strokeLinejoin="round" strokeWidth={14} transform="translate(-7 5)" />
-                      <Path d={NOTE_PATH} fill="none" stroke="#FE2C55" strokeLinejoin="round" strokeWidth={14} transform="translate(7 -4)" />
-                      <Rect fill="#F4F6FA" height={NOTE_VIEWBOX_HEIGHT} mask="url(#opening-logo-fill-mask)" width={NOTE_VIEWBOX_WIDTH} />
-                    </Svg>
+                      </Svg>
+                    </Animated.View>
                   </View>
                 </Pressable>
               </View>
@@ -1363,43 +1422,6 @@ function OpeningStaggeredMessage({ active, reducedMotion }: { active: boolean; r
   );
 }
 
-function OpeningCoverTile({
-  item,
-  layout,
-  privacy,
-}: {
-  item: StoryContentItem["record"];
-  layout: ViewStyle;
-  privacy: boolean;
-}) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [item.coverUrl]);
-
-  return (
-    <View accessibilityElementsHidden aria-hidden importantForAccessibility="no-hide-descendants" pointerEvents="none" style={[styles.openingCoverTile, layout]}>
-      {item.coverUrl && !privacy && !failed ? (
-        <ImageBackground
-          onError={() => setFailed(true)}
-          resizeMode="cover"
-          source={{ uri: item.coverUrl }}
-          style={styles.openingCoverImage}
-        >
-          <View style={styles.openingCoverImageShade} />
-        </ImageBackground>
-      ) : (
-        <View style={[styles.openingCoverFallback, { backgroundColor: openingCoverColor(item.id) }]}>
-          <Text numberOfLines={3} style={styles.openingCoverFallbackTitle}>
-            {privacy ? "内容封面" : item.title}
-          </Text>
-          <Text numberOfLines={1} style={styles.openingCoverFallbackAuthor}>
-            {privacy ? "创作者已隐藏" : item.author ?? "未知创作者"}
-          </Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
 function HourDial({
   hourRotation,
   hours,
@@ -1647,17 +1669,16 @@ function collectOpeningContent(model: StoryModel): StoryContentItem[] {
   return [...items.values()];
 }
 
-function buildOpeningCovers(items: readonly StoryContentItem[]): StoryContentItem[] {
+function buildOpeningCovers(items: readonly StoryContentItem[], limit: number): StoryContentItem[] {
   if (items.length === 0) return [];
-  // 连续的观看记录常指向同一张封面，直接取前 20 条会让相邻拼图重图，接缝看着像撕裂。
-  // 相邻拼图不能取相邻记录：连续的观看记录常是同一创作者的同系列，缩略图几乎一样，
-  // 接缝看着就像撕裂。跨全表等距取样，再跳过与上一块同作者的候选。
-  const stride = Math.max(1, Math.floor(items.length / OPENING_COVER_LAYOUTS.length));
+  // 跨全表等距取样，并跳过相邻同作者，避免胶卷里连续出现近似缩略图。
+  const targetCount = Math.min(limit, items.length);
+  const stride = Math.max(1, Math.floor(items.length / targetCount));
   const picked: StoryContentItem[] = [];
   const usedKeys = new Set<string>();
-  for (let slot = 0; slot < OPENING_COVER_LAYOUTS.length; slot += 1) {
+  for (let slot = 0; slot < targetCount; slot += 1) {
     let candidate = items[(slot * stride) % items.length]!;
-    for (let probe = 0; probe < stride; probe += 1) {
+    for (let probe = 0; probe < items.length; probe += 1) {
       const next = items[(slot * stride + probe) % items.length]!;
       const clashes = usedKeys.has(next.key)
         || (picked.at(-1)?.record.author != null && next.record.author === picked.at(-1)!.record.author);
@@ -1702,7 +1723,7 @@ function buildOpeningParticles(
     if (creators.length >= OPENING_CREATOR_LIMIT) break;
   }
 
-  const particles: Array<Omit<OpeningParticle, "revealOrder" | "revealFrom" | "revealTo">> = [];
+  const particles: Array<Omit<OpeningParticle, "revealOrder">> = [];
   tags.forEach((tag, index) => particles.push({
     key: `tag:${tag.name}`,
     kind: "tag",
@@ -1728,13 +1749,7 @@ function buildOpeningParticles(
       || (hashString(left.key) >>> 4) - (hashString(right.key) >>> 4)
       || left.key.localeCompare(right.key))
     .map((item, index) => [item.key, index] as const));
-  const total = Math.max(1, particles.length);
-  const fadeWidth = OPENING_WORD_FADE_SLOTS / total;
-  return particles.map((item) => {
-    const revealOrder = releaseOrder.get(item.key) ?? 0;
-    const revealFrom = revealOrder / total;
-    return { ...item, revealOrder, revealFrom, revealTo: Math.min(1, revealFrom + fadeWidth) };
-  });
+  return particles.map((item) => ({ ...item, revealOrder: releaseOrder.get(item.key) ?? 0 }));
 }
 
 function openingParticleAccessibilityLabel(item: OpeningParticle): string {
@@ -1778,48 +1793,65 @@ function collectStoryContent(model: StoryModel): StoryContentItem[] {
   return [...items.values()];
 }
 
-function storyParticleLayouts(items: readonly OpeningParticle[], width: number, height: number): OpeningParticleLayout[] {
-  const radiusX = Math.min(610, Math.max(420, (width - 160) * 0.46));
-  const radiusY = Math.min(340, Math.max(260, height * 0.43));
-  const columnCount = width < 1180 ? 10 : 12;
-  const rowCount = Math.max(12, Math.ceil(items.length / columnCount));
-  const slots = Array.from({ length: columnCount * rowCount }, (_, index) => ({
-    column: index % columnCount,
-    row: Math.floor(index / columnCount),
-  })).map(({ column, row }) => ({
-    x: ((column + 0.5) / columnCount) * 2 - 1,
-    y: ((row + 0.5) / rowCount) * 2 - 1,
-  }));
-  const availableSlots = slots.map((_, index) => index);
-  const alignments = ["left", "center", "right"] as const;
+function storyParticleLayouts(
+  items: readonly OpeningParticle[],
+  width: number,
+  height: number,
+): OpeningParticleLayout[] {
+  const narrow = width < 1180;
+  const layouts = new Map<string, OpeningParticleLayout>();
+  const rowCount = Math.min(items.length, Math.max(OPENING_STEP_COUNT, Math.round(height / OPENING_VISUAL_ROW_HEIGHT)));
+  const itemCount = Math.max(1, items.length);
 
-  return items.map((item) => {
-    const hash = hashString(item.key);
-    const availableIndex = hash % availableSlots.length;
-    const slotIndex = availableSlots.splice(availableIndex, 1)[0] ?? 0;
-    const slot = slots[slotIndex]!;
-    const narrow = width < 1180;
-    const widthForKind = item.kind === "title"
-      ? (narrow ? 104 + (hash % 19) : 145 + (hash % 32))
-      : item.kind === "creator"
-        ? (narrow ? 112 + (hash % 17) : 120 + (hash % 41))
-        : (narrow ? 88 + (hash % 18) : 110 + (hash % 36));
-    const fontSize = item.kind === "title"
-      ? (narrow ? 12 + (hash % 5) : 14 + (hash % 7))
-      : item.kind === "tag"
-        ? (narrow ? 11 + (hash % 5) : 13 + (hash % 7))
-        : (narrow ? 10 + (hash % 4) : 11 + (hash % 6));
-    const scaledFontSize = fontSize * OPENING_PARTICLE_SCALE;
-    const maxWidth = widthForKind * OPENING_PARTICLE_SCALE;
-    return {
-      x: slot.x * radiusX + (narrow ? ((hash >>> 12) % 9) - 4 : ((hash >>> 12) % 17) - 8),
-      y: slot.y * radiusY + (narrow ? ((hash >>> 17) % 11) - 5 : ((hash >>> 17) % 17) - 8),
-      width: estimateOpeningParticleWidth(item, scaledFontSize, maxWidth),
-      fontSize: scaledFontSize,
-      rotation: ((hash >>> 5) % 15) - 7,
-      textAlign: alignments[(hash >>> 9) % alignments.length]!,
-    };
-  });
+  for (let row = 1; row <= rowCount; row += 1) {
+    const rowItems = items.filter((item) => openingVisualRow(item.revealOrder, itemCount, rowCount) === row);
+    if (rowItems.length === 0) continue;
+    const measured = rowItems.map((item) => {
+      const hash = hashString(item.key);
+      const fontSize = item.kind === "title"
+        ? (narrow ? 12 + (hash % 5) : 14 + (hash % 7))
+        : item.kind === "tag"
+          ? (narrow ? 11 + (hash % 5) : 13 + (hash % 7))
+          : (narrow ? 10 + (hash % 4) : 11 + (hash % 6));
+      const scaledFontSize = fontSize * OPENING_PARTICLE_SCALE;
+      return {
+        item,
+        fontSize: scaledFontSize,
+        naturalWidth: estimateOpeningParticleWidth(item, scaledFontSize, width * 0.38),
+      };
+    });
+    const totalNaturalWidth = measured.reduce((sum, item) => sum + item.naturalWidth, 0);
+    const rowScale = Math.min(1, Math.max(1, width - 48) / totalNaturalWidth);
+    const arranged = measured.map((item) => ({
+      ...item,
+      width: item.naturalWidth * rowScale,
+    }));
+    const destinations = planOpeningDestinations({
+      seed: hashString(`opening-row:${row}`),
+      width,
+      height,
+      step: row,
+      stepCount: rowCount,
+      items: arranged.map((item) => ({
+        key: item.item.key,
+        collisionWidth: item.width * 0.94,
+        collisionHeight: openingParticleHeight(item.fontSize) * 0.92,
+        displayWidth: item.width,
+      })),
+    });
+
+    arranged.forEach(({ item, fontSize, width: itemWidth }) => {
+      const position = destinations.get(item.key)!;
+      layouts.set(item.key, {
+        x: position.x,
+        y: position.y,
+        width: itemWidth,
+        fontSize,
+      });
+    });
+  }
+
+  return items.map((item) => layouts.get(item.key)!);
 }
 
 function padHour(hour: number): string {
@@ -1871,11 +1903,6 @@ function fallbackColor(value: string): string {
   return palette[hashString(value) % palette.length]!;
 }
 
-function openingCoverColor(value: string): string {
-  const palette = ["#153334", "#3A1721", "#382E19", "#1D2940", "#2D2038", "#173429"];
-  return palette[hashString(value) % palette.length]!;
-}
-
 function buildTrackPath(count: number, total: number, startY: number, endY: number, reverse = false): string {
   const ratio = total > 0 ? Math.min(1, count / total) : 0;
   const bend = 54 + ratio * 78;
@@ -1907,14 +1934,6 @@ const styles = StyleSheet.create({
   stickyChapter: { position: "relative", backgroundColor: color.canvas },
   scene: { position: "relative", justifyContent: "center", overflow: "hidden", backgroundColor: color.canvas },
   openingBackdrop: { ...ABSOLUTE_FILL, overflow: "hidden", backgroundColor: color.surfaceMuted },
-  openingCollageLayer: { ...ABSOLUTE_FILL },
-  openingCoverTile: { position: "absolute", overflow: "hidden", borderRadius: radius.small, backgroundColor: color.surfaceMuted },
-  openingCoverImage: { flex: 1 },
-  openingCoverImageShade: { ...ABSOLUTE_FILL, backgroundColor: "rgba(5,5,6,0.12)" },
-  openingCoverFallback: { flex: 1, justifyContent: "space-between", padding: 20 },
-  openingCoverFallbackTitle: { maxWidth: 250, color: "rgba(255,255,255,0.62)", fontSize: 22, lineHeight: 29, fontWeight: "900" },
-  openingCoverFallbackAuthor: { color: "rgba(255,255,255,0.42)", fontSize: 11, fontWeight: "800" },
-  openingBackdropShade: { ...ABSOLUTE_FILL, backgroundColor: "rgba(5,5,6,0.36)" },
   openingMessage: { ...ABSOLUTE_FILL, zIndex: 3, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
   openingMessageLine: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
   openingMessageCharShell: { position: "relative" },
@@ -1925,9 +1944,11 @@ const styles = StyleSheet.create({
   openingForegroundFill: { ...ABSOLUTE_FILL },
   openingParticleStage: { ...ABSOLUTE_FILL, zIndex: 4, alignItems: "center", justifyContent: "center" },
   openingWordLayer: { ...ABSOLUTE_FILL },
+  openingWordCurtain: { position: "absolute", zIndex: 6, top: 0, left: 0, width: "100%" },
   chapterNo: { color: color.cyan, fontSize: 10, fontWeight: "900" },
   lead: { maxWidth: 640, color: color.textSecondary, fontSize: 16, lineHeight: 26, marginTop: 18 },
   floatingItem: { position: "absolute", zIndex: 4, left: "50%", top: "50%", justifyContent: "center" },
+  openingBubble: { position: "absolute", top: 0, bottom: 0, borderWidth: 1, borderColor: color.border, borderRadius: 999, backgroundColor: color.surface },
   floatingTag: { color: color.cyan, fontWeight: "900", lineHeight: 26 * OPENING_PARTICLE_SCALE },
   floatingTitle: { color: color.text, fontWeight: "900", lineHeight: 29 * OPENING_PARTICLE_SCALE },
   floatingCreator: { color: color.accent, fontWeight: "800", lineHeight: 23 * OPENING_PARTICLE_SCALE },
@@ -1935,6 +1956,9 @@ const styles = StyleSheet.create({
   logoButton: { zIndex: 10, width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
   logoButtonPressed: { opacity: 0.86, transform: [{ scale: 0.97 }] },
   logoProgress: { width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
+  logoFragment: { position: "absolute", zIndex: 2, left: -30, width: 280, overflow: "hidden" },
+  logoFragmentArtwork: { position: "absolute", left: 0 },
+  logoEntryBody: { ...ABSOLUTE_FILL, zIndex: 3, alignItems: "center", justifyContent: "center" },
   logoArtwork: { position: "absolute", left: -30, top: -30 },
   chapter: { minHeight: 820, justifyContent: "center", paddingHorizontal: 52, paddingVertical: 92, borderTopWidth: 1, borderTopColor: color.borderSoft, backgroundColor: color.canvas },
   sectionInner: { width: "100%", maxWidth: 1180, alignSelf: "center" },

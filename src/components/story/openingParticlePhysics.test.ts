@@ -7,6 +7,7 @@ import {
   openingLogoRevealScale,
   openingPileDestinationStep,
   openingSurfaceY,
+  openingVisualRow,
   OpeningParticlePhysics,
   planOpeningParticleExit,
   planOpeningDestinations,
@@ -300,6 +301,35 @@ describe("opening particle physics", () => {
     expect(Math.max(...gaps)).toBeLessThan((1_280 / items.length) * 2.2);
   });
 
+  it("lays one wave out as a straight edge-to-edge mosaic row", () => {
+    const items = [420, 120, 320, 300].map((displayWidth, index) => ({
+      key: `tile-${index}`,
+      collisionWidth: displayWidth * 0.94,
+      collisionHeight: 28,
+      displayWidth,
+    }));
+    const destinations = planOpeningDestinations({
+      seed: 456_789,
+      width: 1_280,
+      height: 720,
+      step: 2,
+      stepCount: 5,
+      items,
+    });
+    const row = items
+      .map((item) => ({ item, ...destinations.get(item.key)! }))
+      .sort((left, right) => left.x - right.x);
+    const gaps = row.slice(1).map((item, index) => (
+      item.x - item.item.displayWidth / 2
+      - (row[index]!.x + row[index]!.item.displayWidth / 2)
+    ));
+
+    expect(new Set(row.map((item) => item.y)).size).toBe(1);
+    expect(row[0]!.x - row[0]!.item.displayWidth / 2).toBeCloseTo(-616);
+    expect(row.at(-1)!.x + row.at(-1)!.item.displayWidth / 2).toBeCloseTo(616);
+    gaps.forEach((gap) => expect(gap).toBeCloseTo(24));
+  });
+
   it("stacks each wave above the previous one, bottom of the stage first", () => {
     const items = Array.from({ length: 10 }, (_, index) => ({
       key: `word-${index}`,
@@ -340,6 +370,15 @@ describe("opening particle physics", () => {
     expect(openingPileDestinationStep(12, 12)).toBe(1);
   });
 
+  it("distributes reveal order across dense visual rows", () => {
+    const rows = Array.from({ length: 264 }, (_, order) => openingVisualRow(order, 264, 24));
+
+    expect(rows[0]).toBe(1);
+    expect(rows.at(-1)).toBe(24);
+    expect(Array.from({ length: 24 }, (_, index) => rows.filter((row) => row === index + 1).length))
+      .toEqual(Array(24).fill(11));
+  });
+
   it("keeps destinations inside the available stage", () => {
     const items = Array.from({ length: 16 }, (_, index) => ({
       key: `word-${index}`,
@@ -359,6 +398,22 @@ describe("opening particle physics", () => {
       const destination = destinations.get(item.key)!;
       expect(Math.abs(destination.x) + item.collisionWidth / 2).toBeLessThan(1_024 / 2 - 18);
       expect(Math.abs(destination.y) + item.collisionHeight / 2).toBeLessThan(650 / 2 - 18);
+    });
+  });
+
+  it("keeps the first and last visual rows clear of their neighbors", () => {
+    const item = { key: "word", collisionWidth: 120, collisionHeight: 26.4 };
+    const ys = Array.from({ length: 20 }, (_, index) => planOpeningDestinations({
+      seed: 123_456,
+      width: 1_280,
+      height: 602,
+      step: index + 1,
+      stepCount: 20,
+      items: [item],
+    }).get(item.key)!.y);
+
+    ys.slice(1).forEach((y, index) => {
+      expect(ys[index]! - y).toBeGreaterThanOrEqual(item.collisionHeight);
     });
   });
 });

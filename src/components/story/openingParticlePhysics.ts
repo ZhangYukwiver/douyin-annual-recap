@@ -5,8 +5,6 @@ const WALL_THICKNESS = 160;
 const TARGET_FORCE = 0.000_016;
 const UINT32_RANGE = 4_294_967_296;
 const DESTINATION_MARGIN = 24;
-const COLUMN_JITTER = 0.34;
-const BAND_INSET = 0.16;
 const COLLISION_WIDTH_SCALE = 0.94;
 const COLLISION_HEIGHT_SCALE = 0.92;
 const WALL_RESTITUTION = 0.08;
@@ -15,6 +13,7 @@ export interface OpeningDestinationItem {
   key: string;
   collisionWidth: number;
   collisionHeight: number;
+  displayWidth?: number;
 }
 
 export interface OpeningDestinationOptions {
@@ -144,6 +143,13 @@ export function openingPileDestinationStep(revealStep: number, stepCount: number
   return safeStepCount - safeRevealStep + 1;
 }
 
+export function openingVisualRow(revealOrder: number, itemCount: number, rowCount: number): number {
+  const safeItemCount = Math.max(1, Math.floor(itemCount));
+  const safeRowCount = Math.max(1, Math.min(safeItemCount, Math.floor(rowCount)));
+  const safeOrder = Math.min(safeItemCount - 1, Math.max(0, Math.floor(revealOrder)));
+  return Math.floor((safeOrder * safeRowCount) / safeItemCount) + 1;
+}
+
 export function planOpeningDestinations({
   seed,
   width,
@@ -155,25 +161,31 @@ export function planOpeningDestinations({
   if (items.length === 0) return new Map();
 
   const safeStepCount = Math.max(1, Math.floor(stepCount));
-  const bandHeight = height / safeStepCount;
-  const bandBottom = openingSurfaceY(height, step, stepCount);
-  const columnWidth = width / items.length;
+  const availableHeight = Math.max(1, height - DESTINATION_MARGIN * 2);
+  const bandHeight = availableHeight / safeStepCount;
+  const bandBottom = openingSurfaceY(availableHeight, step, stepCount);
   const orderedItems = [...items].sort((left, right) => {
     const order = seededHash(seed, `order:${left.key}`) - seededHash(seed, `order:${right.key}`);
     return order || left.key.localeCompare(right.key);
   });
+  const displayWidths = orderedItems.map((item) => Math.max(1, item.displayWidth ?? item.collisionWidth));
+  const availableWidth = Math.max(1, width - DESTINATION_MARGIN * 2);
+  const totalWidth = displayWidths.reduce((sum, itemWidth) => sum + itemWidth, 0);
+  const widthScale = Math.min(1, availableWidth / totalWidth);
+  const scaledWidth = totalWidth * widthScale;
+  const gap = orderedItems.length > 1 ? Math.max(0, availableWidth - scaledWidth) / (orderedItems.length - 1) : 0;
+  let cursor = orderedItems.length === 1 ? -scaledWidth / 2 : -width / 2 + DESTINATION_MARGIN;
 
-  return new Map(orderedItems.map((item, columnIndex) => {
+  return new Map(orderedItems.map((item, itemIndex) => {
+    const itemWidth = displayWidths[itemIndex]! * widthScale;
     const limitX = Math.max(0, width / 2 - item.collisionWidth / 2 - DESTINATION_MARGIN);
     const limitY = Math.max(0, height / 2 - item.collisionHeight / 2 - DESTINATION_MARGIN);
-    const columnJitter = (
-      seededUnit(seed, `column:${item.key}`) * 2 - 1
-    ) * columnWidth * COLUMN_JITTER;
-    const depth = BAND_INSET + (1 - BAND_INSET * 2) * seededUnit(seed, `depth:${item.key}`);
-    return [item.key, {
-      x: clamp(-width / 2 + (columnIndex + 0.5) * columnWidth + columnJitter, -limitX, limitX),
-      y: clamp(bandBottom - bandHeight * depth, -limitY, limitY),
-    }];
+    const pose: OpeningPhysicsPose = {
+      x: clamp(cursor + itemWidth / 2, -limitX, limitX),
+      y: clamp(bandBottom - bandHeight / 2, -limitY, limitY),
+    };
+    cursor += itemWidth + gap;
+    return [item.key, pose];
   }));
 }
 
