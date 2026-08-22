@@ -69,6 +69,72 @@ interface TrackedParticle {
 export const FIXED_STEP_MS = 1000 / 60;
 const MAX_STEP_BACKLOG_MS = 100;
 
+export function openingTransitionProgress(scrollY: number, distance: number, ready: boolean): number {
+  if (!ready) return 0;
+  return clamp(scrollY / Math.max(1, distance), 0, 1);
+}
+
+export function openingScrollTop(
+  scrollY: number,
+  distance: number,
+  ready: boolean,
+  continued: boolean,
+): number {
+  if (continued) return Math.max(0, scrollY);
+  return clamp(scrollY, 0, ready ? Math.max(1, distance) : 0);
+}
+
+export function openingMessageExitWindow(index: number, count: number): readonly [number, number] {
+  const safeCount = Math.max(1, Math.floor(count));
+  const safeIndex = clamp(Math.floor(index), 0, safeCount - 1);
+  const reversePosition = safeCount === 1 ? 0 : (safeCount - 1 - safeIndex) / (safeCount - 1);
+  const start = 0.05 + reversePosition * 0.36;
+  return [start, start + 0.35];
+}
+
+export function coverStackLayerOffset(index: number, count: number): number {
+  const safeCount = Math.max(1, Math.floor(count));
+  const visibleLayers = Math.min(6, safeCount);
+  const visibleIndex = Math.min(clamp(Math.floor(index), 0, safeCount - 1), visibleLayers - 1);
+  return (visibleIndex - (visibleLayers - 1) / 2) * 4;
+}
+
+export function coverGatherWindow(index: number, count: number): readonly [number, number] {
+  const safeCount = Math.max(1, Math.floor(count));
+  const safeIndex = clamp(Math.floor(index), 0, safeCount - 1);
+  const orderProgress = safeCount === 1 ? 0 : safeIndex / (safeCount - 1);
+  const start = 0.04 + orderProgress * 0.64;
+  return [start, start + 0.3];
+}
+
+export function shuffledCoverIndices(count: number, random: () => number = Math.random): number[] {
+  const indices = Array.from({ length: Math.max(0, Math.floor(count)) }, (_, index) => index);
+  for (let index = indices.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [indices[index], indices[swapIndex]] = [indices[swapIndex]!, indices[index]!];
+  }
+  return indices;
+}
+
+export function openingBorderGlowPose(
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+): { edgeProximity: number; angle: number } | null {
+  if (width <= 0 || height <= 0 || x < 0 || y < 0 || x > width || y > height) return null;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const deltaX = x - centerX;
+  const deltaY = y - centerY;
+  const scaleX = deltaX === 0 ? Infinity : centerX / Math.abs(deltaX);
+  const scaleY = deltaY === 0 ? Infinity : centerY / Math.abs(deltaY);
+  const edgeProximity = clamp(1 / Math.min(scaleX, scaleY), 0, 1) * 100;
+  if (deltaX === 0 && deltaY === 0) return { edgeProximity, angle: 0 };
+  const angle = (Math.atan2(deltaY, deltaX) * 180 / Math.PI + 450) % 360;
+  return { edgeProximity, angle };
+}
+
 // ponytail: fixed-step accumulator so a 120Hz display doesn't run the flight at double speed.
 export function consumeFixedSteps(accumulator: number, deltaMs: number): { steps: number; remainder: number } {
   const pending = Math.min(accumulator + Math.max(0, deltaMs), MAX_STEP_BACKLOG_MS);
