@@ -20,6 +20,7 @@ const OPENING_TAG_MAX = 12;
 const TOPIC_RECORD_LIMIT = 3;
 const TOPIC_CREATOR_LIMIT = 5;
 const OVERLAP_RECORD_LIMIT = 3;
+const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1_000;
 
 export type StoryOpeningTagSource = "topic" | "author";
 export type StoryOverlapKey = "watchLiked" | "watchFavorite" | "likedFavorite" | "allThree";
@@ -113,6 +114,34 @@ export function buildStoryModel(records: PersonalRecordCollection): StoryModel {
     topics: buildTopics(context),
     overlaps: buildOverlaps(index.snapshotSets, context),
   };
+}
+
+export function selectOpeningCovers(
+  model: StoryModel,
+  perStream: number,
+  now = Date.now(),
+): StoryContentItem[] {
+  const limit = Math.max(0, Math.floor(perStream));
+  if (limit === 0) return [];
+  const cutoff = now - THREE_DAYS_MS;
+  const used = new Set<string>();
+  const selected: StoryContentItem[] = [];
+
+  for (const type of LIST_ORDER) {
+    let streamCount = 0;
+    const ranked = [...model.streams[type].records]
+      .sort((left, right) => compareOpeningCover(left, right, cutoff, now));
+
+    for (const item of ranked) {
+      if (used.has(item.key)) continue;
+      used.add(item.key);
+      selected.push(item);
+      streamCount += 1;
+      if (streamCount >= limit) break;
+    }
+  }
+
+  return selected;
 }
 
 function createBuildContext(entries: readonly AnnualIndexedRecord[]): StoryBuildContext {
@@ -387,6 +416,32 @@ function stableContentOrder(items: readonly StoryContentItem[]): StoryContentIte
       - (Number.isFinite(rightTime) ? rightTime : Number.POSITIVE_INFINITY);
     return timeOrder || compareText(left.key, right.key);
   });
+}
+
+function compareOpeningCover(
+  left: StoryContentItem,
+  right: StoryContentItem,
+  cutoff: number,
+  now: number,
+): number {
+  const leftTime = reliableTimestamp(left);
+  const rightTime = reliableTimestamp(right);
+  const leftRecent = leftTime >= cutoff && leftTime <= now;
+  const rightRecent = rightTime >= cutoff && rightTime <= now;
+  const leftWatched = left.record.watchProgress?.watchedSeconds ?? -1;
+  const rightWatched = right.record.watchProgress?.watchedSeconds ?? -1;
+
+  return Number(rightRecent) - Number(leftRecent)
+    || Number(Number.isFinite(rightTime)) - Number(Number.isFinite(leftTime))
+    || rightWatched - leftWatched
+    || rightTime - leftTime
+    || compareText(left.key, right.key);
+}
+
+function reliableTimestamp(item: StoryContentItem): number {
+  if (!item.reliableTime || !item.occurredAt) return Number.NEGATIVE_INFINITY;
+  const timestamp = Date.parse(item.occurredAt);
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
 }
 
 function rankCounts(counts: ReadonlyMap<string, number>): RankedName[] {

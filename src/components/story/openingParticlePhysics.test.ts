@@ -2,20 +2,75 @@ import { describe, expect, it } from "vitest";
 
 import {
   consumeFixedSteps,
+  coverGatherWindow,
+  coverStackLayerOffset,
   FIXED_STEP_MS,
   fillOpeningRows,
   insetCollisionBox,
+  openingBorderGlowPose,
   openingLogoRevealScale,
+  openingMessageExitWindow,
   openingPileDestinationStep,
+  openingScrollTop,
   openingSurfaceY,
+  openingTransitionProgress,
   openingVisualRow,
   OpeningParticlePhysics,
   planOpeningParticleExit,
   planOpeningDestinations,
+  shuffledCoverIndices,
   truncateOpeningParticleLabel,
 } from "./openingParticlePhysics";
 
 describe("opening particle physics", () => {
+  it("only advances the cover transition after the opening message is ready", () => {
+    expect(openingTransitionProgress(230, 460, false)).toBe(0);
+    expect(openingTransitionProgress(230, 460, true)).toBe(0.5);
+    expect(openingTransitionProgress(-20, 460, true)).toBe(0);
+    expect(openingTransitionProgress(900, 460, true)).toBe(1);
+  });
+
+  it("keeps the opening at the stacked cover until the user continues", () => {
+    expect(openingScrollTop(230, 460, false, false)).toBe(0);
+    expect(openingScrollTop(230, 460, true, false)).toBe(230);
+    expect(openingScrollTop(900, 460, true, false)).toBe(460);
+    expect(openingScrollTop(900, 460, true, true)).toBe(900);
+  });
+
+  it("hides opening message characters in reverse playback order", () => {
+    const first = openingMessageExitWindow(0, 12);
+    const last = openingMessageExitWindow(11, 12);
+
+    expect(last[0]).toBeLessThan(first[0]);
+    expect(last[1] - last[0]).toBeCloseTo(first[1] - first[0]);
+  });
+
+  it("packs covers into six tightly aligned visible layers", () => {
+    const offsets = Array.from({ length: 21 }, (_, index) => coverStackLayerOffset(index, 21));
+
+    expect(offsets.slice(0, 6)).toEqual([-10, -6, -2, 2, 6, 10]);
+    expect(offsets.slice(6).every((offset) => offset === 10)).toBe(true);
+    expect(coverStackLayerOffset(0, 1)).toBe(0);
+  });
+
+  it("gathers shuffled covers through staggered progress windows", () => {
+    const first = coverGatherWindow(0, 5);
+    const last = coverGatherWindow(4, 5);
+
+    expect(first[0]).toBeCloseTo(0.04);
+    expect(first[1]).toBeCloseTo(0.34);
+    expect(last[0]).toBeCloseTo(0.68);
+    expect(last[1]).toBeCloseTo(0.98);
+    expect(shuffledCoverIndices(4, () => 0)).toEqual([1, 2, 3, 0]);
+  });
+
+  it("tracks a neutral border glow by pointer angle and edge distance", () => {
+    expect(openingBorderGlowPose(100, 40, 50, 20)).toEqual({ edgeProximity: 0, angle: 0 });
+    expect(openingBorderGlowPose(100, 40, 100, 20)).toEqual({ edgeProximity: 100, angle: 90 });
+    expect(openingBorderGlowPose(100, 40, 50, 0)).toEqual({ edgeProximity: 100, angle: 0 });
+    expect(openingBorderGlowPose(100, 40, 101, 20)).toBeNull();
+  });
+
   it("advances the same simulated time per second on 60Hz and 120Hz displays", () => {
     const simulate = (frameMs: number) => {
       let accumulator = 0;

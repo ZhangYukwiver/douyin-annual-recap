@@ -6,7 +6,7 @@ import {
   type PersonalRecordType,
   type PersonalVideoRecord,
 } from "../../domain/personalRecords";
-import { buildStoryModel } from "./storyModel";
+import { buildStoryModel, selectOpeningCovers } from "./storyModel";
 
 function record(id: string, extra: Partial<PersonalVideoRecord> = {}): PersonalVideoRecord {
   return {
@@ -24,6 +24,74 @@ function recordsOf(values: Partial<Record<PersonalRecordType, PersonalVideoRecor
 }
 
 describe("story model", () => {
+  it("selects unique opening covers per stream and backfills beyond three days", () => {
+    const now = Date.parse("2025-06-10T12:00:00.000Z");
+    const cover = (id: string, occurredAt: string, watchedSeconds: number, videoId = id) => record(id, {
+      videoId,
+      coverUrl: `https://example.com/${id}.jpg`,
+      occurredAt,
+      occurredAtSource: "platform_action",
+      watchProgress: { watchedSeconds },
+    });
+    const model = buildStoryModel(recordsOf({
+      watch_history: [
+        cover("watch-recent-short", "2025-06-10T10:00:00.000Z", 12),
+        cover("watch-recent-long", "2025-06-09T10:00:00.000Z", 90),
+        cover("watch-old", "2025-06-01T10:00:00.000Z", 120),
+      ],
+      liked_videos: [
+        cover("liked-duplicate", "2025-06-10T11:00:00.000Z", 200, "watch-recent-long"),
+        cover("liked-recent", "2025-06-08T10:00:00.000Z", 20),
+        cover("liked-old", "2025-06-06T10:00:00.000Z", 80),
+      ],
+      favorite_videos: [
+        cover("favorite-recent", "2025-06-10T09:00:00.000Z", 30),
+        cover("favorite-old", "2025-05-20T10:00:00.000Z", 100),
+      ],
+    }));
+
+    const selected = selectOpeningCovers(model, 2, now);
+
+    expect(selected.map((item) => item.record.id)).toEqual([
+      "watch-recent-long",
+      "watch-recent-short",
+      "liked-recent",
+      "liked-old",
+      "favorite-recent",
+      "favorite-old",
+    ]);
+    expect(new Set(selected.map((item) => item.key)).size).toBe(6);
+  });
+
+  it("returns 90 unique covers when every stream can fill its 30 slots", () => {
+    const datedCover = (type: string, index: number, videoId = `${type}-${index}`) => record(`${type}-${index}`, {
+      videoId,
+      coverUrl: `https://example.com/${type}-${index}.jpg`,
+      occurredAt: `2025-05-${String((index % 28) + 1).padStart(2, "0")}T10:00:00.000Z`,
+      occurredAtSource: "platform_action",
+      watchProgress: { watchedSeconds: index },
+    });
+    const model = buildStoryModel(recordsOf({
+      watch_history: Array.from({ length: 30 }, (_, index) => datedCover("watch", index)),
+      liked_videos: [
+        datedCover("liked-duplicate", 0, "watch-0"),
+        ...Array.from({ length: 30 }, (_, index) => datedCover("liked", index)),
+      ],
+      favorite_videos: [
+        datedCover("favorite-duplicate", 0, "liked-0"),
+        ...Array.from({ length: 30 }, (_, index) => datedCover("favorite", index)),
+      ],
+    }));
+
+    const selected = selectOpeningCovers(model, 30, Date.parse("2025-06-10T12:00:00.000Z"));
+
+    expect(selected).toHaveLength(90);
+    expect(new Set(selected.map((item) => item.key)).size).toBe(90);
+    expect(selected.filter((item) => item.record.id.startsWith("watch-"))).toHaveLength(30);
+    expect(selected.filter((item) => item.record.id.startsWith("liked-"))).toHaveLength(30);
+    expect(selected.filter((item) => item.record.id.startsWith("favorite-"))).toHaveLength(30);
+  });
+
   it("builds stable opening tags from watch topics and fills short lists with authors", () => {
     const watch = [
       record("a", { videoId: "a", title: "#摄影 清晨", topics: ["城市散步"], author: "作者甲" }),

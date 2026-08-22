@@ -56,6 +56,7 @@ import type {
 import { workspaceColors as color, workspaceRadii as radius } from "../workspace/workspaceTheme";
 import {
   buildStoryModel,
+  selectOpeningCovers,
   type StoryContentItem,
   type StoryHour,
   type StoryModel,
@@ -67,6 +68,10 @@ import {
 import { OpeningReelGallery } from "./OpeningReelGallery";
 import {
   fillOpeningRows,
+  openingBorderGlowPose,
+  openingMessageExitWindow,
+  openingScrollTop,
+  openingTransitionProgress,
   planOpeningDestinations,
   truncateOpeningParticleLabel,
 } from "./openingParticlePhysics";
@@ -74,28 +79,21 @@ import {
 const MIN_STORY_WIDTH = 1024;
 const CHAPTER_COUNT = 6;
 const OPENING_STEP_COUNT = 12;
-const OPENING_TAG_LIMIT = 24;
-const OPENING_TITLE_LIMIT = 168;
-const OPENING_CREATOR_LIMIT = 72;
-const OPENING_PARTICLE_SCALE = 1.12;
+const OPENING_PARTICLE_SCALE = 1.28;
 const OPENING_VISUAL_ROW_HEIGHT = 30;
 const OPENING_LABEL_MAX_LENGTH = 8;
 const OPENING_ROW_GAP = 12;
-const OPENING_BUBBLE_PALETTE = ["#F3EFE3", "#76C8F2", "#9BDDB5", "#F3A4BD", "#F5B36A"] as const;
-const OPENING_TEXT_PALETTE_BY_BUBBLE = [
-  ["#07869B", "#D62F68", "#4D61C8", "#079B60", "#2F4FA3"],
-  ["#D62F68", "#C97808", "#079B60", "#8A45C2", "#2F4FA3"],
-  ["#D62F68", "#C97808", "#4D61C8", "#8A45C2", "#2F4FA3"],
-  ["#07869B", "#079B60", "#4D61C8", "#C97808", "#2F4FA3"],
-  ["#07869B", "#D62F68", "#079B60", "#4D61C8", "#8A45C2"],
-] as const;
 // Logo 液面和词条幕布共用这段进度。
 const OPENING_TOTAL_DURATION = 6_500;
 const OPENING_FADE_DELAY = 500;
 const OPENING_FADE_DURATION = 900;
-const OPENING_REEL_COVER_LIMIT = 24;
+const OPENING_TRANSITION_SCROLL = 460;
+const OPENING_REEL_COVERS_PER_STREAM = 30;
 const NOTE_WIDTH = 220;
 const NOTE_HEIGHT = 240;
+const OPENING_LOGO_SCALE = 1.1;
+const OPENING_LOGO_WIDTH = NOTE_WIDTH * OPENING_LOGO_SCALE;
+const OPENING_LOGO_HEIGHT = NOTE_HEIGHT * OPENING_LOGO_SCALE;
 const NOTE_VIEWBOX_WIDTH = 220;
 const NOTE_VIEWBOX_HEIGHT = 240;
 const NOTE_PATH = "M121 18H158C159 43 177 64 204 70V105C187 103 171 98 158 89V170C158 203 131 228 98 228C65 228 38 204 38 173C38 142 63 117 95 117C104 117 113 119 121 123V160C114 155 106 152 98 152C84 152 73 162 73 175C73 188 84 198 98 198C112 198 124 188 124 174L121 18Z";
@@ -113,6 +111,20 @@ const LOGO_ENTRANCE_FRAGMENTS = [
   { key: "base", top: 168, height: 84, revealAt: 0.17, arriveAt: 0.55, fromX: 76, fromY: -14, fromRotation: 7, overshootX: -9, color: "#FE2C55" },
 ] as const;
 const NOTE_WORD_MASK_URI = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${NOTE_VIEWBOX_WIDTH} ${NOTE_VIEWBOX_HEIGHT}"><path fill="white" d="${NOTE_PATH}"/></svg>`)}")`;
+const OPENING_LOGO_SPOTLIGHT = Platform.OS === "web"
+  ? ({
+      backgroundImage: "radial-gradient(circle 24vmin at var(--opening-spotlight-x, -999px) var(--opening-spotlight-y, -999px), rgba(255,255,255,0.38) 0%, rgba(255,255,255,0.18) 52%, transparent 78%)",
+      WebkitMaskImage: NOTE_WORD_MASK_URI,
+      WebkitMaskPosition: "center",
+      WebkitMaskRepeat: "no-repeat",
+      WebkitMaskSize: `${OPENING_LOGO_WIDTH}px ${OPENING_LOGO_HEIGHT}px`,
+      maskImage: NOTE_WORD_MASK_URI,
+      maskPosition: "center",
+      maskRepeat: "no-repeat",
+      maskSize: `${OPENING_LOGO_WIDTH}px ${OPENING_LOGO_HEIGHT}px`,
+      mixBlendMode: "screen",
+    } as unknown as ViewStyle)
+  : null;
 // ReactBits GradientBlinds 的光斑核心；移除底色和百叶，只保留中性光与黑幕揭示。
 const OPENING_SPOTLIGHT_VERTEX = `
 attribute vec2 position;
@@ -188,9 +200,17 @@ const AnimatedSvgPath = Animated.createAnimatedComponent(SvgPath);
 const ABSOLUTE_FILL: ViewStyle = { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 };
 const WEB_POINTER = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
 const WEB_NO_WRAP = Platform.OS === "web" ? ({ whiteSpace: "nowrap" } as unknown as TextStyle) : null;
-const OPENING_BUBBLE_VIVID = Platform.OS === "web"
-  ? ({ filter: "brightness(1.16) saturate(1.1)" } as unknown as ViewStyle)
+const OPENING_BORDER_GLOW_WEB = Platform.OS === "web"
+  ? ({
+      WebkitMaskImage: "conic-gradient(from var(--cursor-angle, 45deg) at center, black 2.5%, transparent 10%, transparent 90%, black 97.5%)",
+      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.95), inset 0 0 5px rgba(255,255,255,0.48), 0 0 2px rgba(255,255,255,0.72), 0 0 8px rgba(255,255,255,0.38), 0 0 18px rgba(255,255,255,0.18)",
+      maskImage: "conic-gradient(from var(--cursor-angle, 45deg) at center, black 2.5%, transparent 10%, transparent 90%, black 97.5%)",
+      opacity: "calc(0.72 * (var(--edge-proximity, 70) - 30) / 70)",
+      transition: "opacity 0.25s ease-out",
+      willChange: "opacity",
+    } as unknown as ViewStyle)
   : null;
+
 const LIST_LABELS: Record<PersonalRecordType, string> = {
   watch_history: "观看历史",
   liked_videos: "喜欢列表",
@@ -279,11 +299,14 @@ interface OpeningWebglRevealProps {
 
 function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebglRevealProps) {
   const containerRef = useRef<View | null>(null);
+  const logoSpotlightRef = useRef<View | null>(null);
 
   useEffect(() => {
     if (Platform.OS !== "web") return undefined;
     const container = containerRef.current as unknown as HTMLElement | null;
-    if (!container) return undefined;
+    const logoSpotlight = logoSpotlightRef.current as unknown as HTMLElement | null;
+    const stage = container?.parentElement;
+    if (!container || !logoSpotlight || !stage) return undefined;
 
     const renderer = new Renderer({
       dpr: window.devicePixelRatio || 1,
@@ -297,6 +320,7 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
       display: "block",
       height: "100%",
       left: "0",
+      pointerEvents: "none",
       position: "absolute",
       top: "0",
       width: "100%",
@@ -325,6 +349,8 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
 
     const hideReveal = () => {
       uniforms.iMouse.value = [-10_000, -10_000];
+      logoSpotlight.style.setProperty("--opening-spotlight-x", "-999px");
+      logoSpotlight.style.setProperty("--opening-spotlight-y", "-999px");
     };
     const resize = () => {
       const rect = container.getBoundingClientRect();
@@ -341,13 +367,17 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
       const x = (event.clientX - rect.left) * scale;
       const y = (rect.height - (event.clientY - rect.top)) * scale;
       uniforms.iMouse.value = [x, y];
+      const spotlightRect = logoSpotlight.getBoundingClientRect();
+      logoSpotlight.style.setProperty("--opening-spotlight-x", `${event.clientX - spotlightRect.left}px`);
+      logoSpotlight.style.setProperty("--opening-spotlight-y", `${event.clientY - spotlightRect.top}px`);
     };
 
     resize();
+    hideReveal();
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(container);
-    canvas.addEventListener("pointermove", followPointer, { passive: true });
-    canvas.addEventListener("pointerleave", hideReveal);
+    stage.addEventListener("pointermove", followPointer, { passive: true });
+    stage.addEventListener("pointerleave", hideReveal);
 
     let frame = 0;
     const render = (time: number) => {
@@ -361,8 +391,8 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
     return () => {
       cancelAnimationFrame(frame);
       resizeObserver.disconnect();
-      canvas.removeEventListener("pointermove", followPointer);
-      canvas.removeEventListener("pointerleave", hideReveal);
+      stage.removeEventListener("pointermove", followPointer);
+      stage.removeEventListener("pointerleave", hideReveal);
       geometry.remove();
       program.remove();
       canvas.remove();
@@ -371,14 +401,26 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
   }, [disabledRef, reducedMotion]);
 
   return (
-    <View
-      accessibilityElementsHidden
-      aria-hidden
-      importantForAccessibility="no-hide-descendants"
-      ref={containerRef}
-      style={[styles.openingWebglReveal, { height }]}
-      testID="opening-webgl-reveal"
-    />
+    <>
+      <View
+        accessibilityElementsHidden
+        aria-hidden
+        importantForAccessibility="no-hide-descendants"
+        pointerEvents="none"
+        ref={containerRef}
+        style={[styles.openingWebglReveal, { height }]}
+        testID="opening-webgl-reveal"
+      />
+      <View
+        accessibilityElementsHidden
+        aria-hidden
+        importantForAccessibility="no-hide-descendants"
+        pointerEvents="none"
+        ref={logoSpotlightRef}
+        style={[styles.openingLogoSpotlight, OPENING_LOGO_SPOTLIGHT]}
+        testID="opening-logo-spotlight"
+      />
+    </>
   );
 }
 
@@ -398,8 +440,8 @@ export function AnnualScrollStory({
   const storyContent = useMemo(() => collectStoryContent(model), [model]);
   const openingContent = useMemo(() => collectOpeningContent(model), [model]);
   const openingCovers = useMemo(
-    () => buildOpeningCovers(openingContent, OPENING_REEL_COVER_LIMIT),
-    [openingContent],
+    () => selectOpeningCovers(model, OPENING_REEL_COVERS_PER_STREAM),
+    [model],
   );
   const openingParticles = useMemo(
     () => buildOpeningParticles(model, openingContent, privacy),
@@ -419,6 +461,9 @@ export function AnnualScrollStory({
   const [detail, setDetail] = useState<StoryDetail | null>(null);
   const [openingStep, setOpeningStep] = useState(0);
   const [openingForegroundHidden, setOpeningForegroundHidden] = useState(false);
+  const [openingMessageReady, setOpeningMessageReady] = useState(false);
+  const [openingStacked, setOpeningStacked] = useState(false);
+  const [openingContinued, setOpeningContinued] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(() => (
     Platform.OS === "web"
     && typeof window !== "undefined"
@@ -427,9 +472,11 @@ export function AnnualScrollStory({
   ));
   const openingStepRef = useRef(0);
   const openingSequenceStarted = useRef(false);
+  const openingContinuedRef = useRef(false);
   const openingForegroundFade = useRef<Animated.CompositeAnimation | null>(null);
   const openingReveal = useRef(new Animated.Value(0)).current;
   const openingForegroundOpacity = useRef(new Animated.Value(1)).current;
+  const openingTransition = useRef(new Animated.Value(0)).current;
   const logoEntrance = useRef(new Animated.Value(0)).current;
   const logoNeon = useRef(new Animated.Value(1)).current;
   const storyProgress = useRef(new Animated.Value(0)).current;
@@ -471,20 +518,20 @@ export function AnnualScrollStory({
     easing: Easing.inOut(Easing.sin),
     outputRange: [CURTAIN_WAVE_PATHS[0], CURTAIN_WAVE_PATHS[1], CURTAIN_WAVE_PATHS[2], CURTAIN_WAVE_PATHS[0]],
   });
-  const noteLeft = width / 2 - NOTE_WIDTH / 2;
-  const noteTop = openingSceneHeight / 2 - NOTE_HEIGHT / 2;
+  const noteLeft = width / 2 - OPENING_LOGO_WIDTH / 2;
+  const noteTop = openingSceneHeight / 2 - OPENING_LOGO_HEIGHT / 2;
   const openingWordLayerMask = Platform.OS === "web"
     ? ({
         WebkitMaskComposite: "xor",
         WebkitMaskImage: `linear-gradient(black, black), ${NOTE_WORD_MASK_URI}`,
         WebkitMaskPosition: `0 0, ${noteLeft}px ${noteTop}px`,
         WebkitMaskRepeat: "no-repeat, no-repeat",
-        WebkitMaskSize: `100% 100%, ${NOTE_WIDTH}px ${NOTE_HEIGHT}px`,
+        WebkitMaskSize: `100% 100%, ${OPENING_LOGO_WIDTH}px ${OPENING_LOGO_HEIGHT}px`,
         maskComposite: "exclude",
         maskImage: `linear-gradient(black, black), ${NOTE_WORD_MASK_URI}`,
         maskPosition: `0 0, ${noteLeft}px ${noteTop}px`,
         maskRepeat: "no-repeat, no-repeat",
-        maskSize: `100% 100%, ${NOTE_WIDTH}px ${NOTE_HEIGHT}px`,
+        maskSize: `100% 100%, ${OPENING_LOGO_WIDTH}px ${OPENING_LOGO_HEIGHT}px`,
       } as unknown as ViewStyle)
     : null;
   const logoBodyOpacity = logoEntrance.interpolate({
@@ -547,7 +594,9 @@ export function AnnualScrollStory({
   }, [openingReveal]);
 
   useEffect(() => {
-    return stopOpeningSequence;
+    return () => {
+      stopOpeningSequence();
+    };
   }, [stopOpeningSequence]);
 
   useEffect(() => {
@@ -662,6 +711,37 @@ export function AnnualScrollStory({
   }, [liquidWave, reducedMotion]);
 
   useEffect(() => {
+    if (Platform.OS !== "web") return undefined;
+    const root = rootRef.current as unknown as HTMLElement | null;
+    const bubbles = root
+      ? Array.from(root.querySelectorAll<HTMLElement>("[data-opening-border-glow='true']"))
+      : [];
+    if (!root || bubbles.length === 0) return undefined;
+
+    const hideGlows = () => bubbles.forEach((bubble) => bubble.style.setProperty("--edge-proximity", "70"));
+    const followPointer = (event: PointerEvent) => {
+      bubbles.forEach((bubble) => {
+        const rect = bubble.getBoundingClientRect();
+        const pose = openingBorderGlowPose(
+          rect.width,
+          rect.height,
+          event.clientX - rect.left,
+          event.clientY - rect.top,
+        );
+        bubble.style.setProperty("--edge-proximity", pose ? pose.edgeProximity.toFixed(3) : "70");
+        if (pose) bubble.style.setProperty("--cursor-angle", `${pose.angle.toFixed(3)}deg`);
+      });
+    };
+
+    root.addEventListener("pointermove", followPointer, { passive: true });
+    root.addEventListener("pointerleave", hideGlows);
+    return () => {
+      root.removeEventListener("pointermove", followPointer);
+      root.removeEventListener("pointerleave", hideGlows);
+    };
+  }, [openingParticles, width]);
+
+  useEffect(() => {
     if (Platform.OS !== "web" || width < MIN_STORY_WIDTH || reducedMotion) return undefined;
     let disposed = false;
     let revert: () => void = () => undefined;
@@ -716,6 +796,8 @@ export function AnnualScrollStory({
     logoEntrance.stopAnimation();
     logoEntrance.setValue(1);
     stopOpeningSequence();
+    setOpeningMessageReady(false);
+    openingTransition.setValue(0);
     setOpeningForegroundHidden(false);
     openingForegroundOpacity.setValue(1);
     openingReveal.stopAnimation();
@@ -762,10 +844,47 @@ export function AnnualScrollStory({
   }, [
     openingForegroundOpacity,
     openingReveal,
+    openingTransition,
     logoEntrance,
     reducedMotion,
     stopOpeningSequence,
   ]);
+
+  const updateOpeningTransition = useCallback((scrollY: number) => {
+    const progress = openingTransitionProgress(
+      scrollY,
+      OPENING_TRANSITION_SCROLL,
+      openingMessageReady,
+    );
+    const visibleProgress = reducedMotion && progress > 0 ? 1 : progress;
+    const stacked = visibleProgress >= 1;
+    openingTransition.setValue(visibleProgress);
+    setOpeningStacked((current) => current === stacked ? current : stacked);
+  }, [openingMessageReady, openingTransition, reducedMotion]);
+
+  useEffect(() => {
+    const scroller = scrollRef.current?.getScrollableNode?.() as HTMLElement | undefined;
+    updateOpeningTransition(scroller?.scrollTop ?? 0);
+  }, [updateOpeningTransition]);
+
+  const handleOpeningMessageComplete = useCallback(() => {
+    setOpeningMessageReady(true);
+  }, []);
+
+  const continuePastOpening = useCallback(() => {
+    if (!openingStacked || openingContinuedRef.current) return;
+    openingContinuedRef.current = true;
+    setOpeningContinued(true);
+    const scrollToNextChapter = () => scrollRef.current?.scrollTo({
+      y: sectionOffsets.current[1] ?? openingSceneHeight + OPENING_TRANSITION_SCROLL,
+      animated: false,
+    });
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      window.requestAnimationFrame(scrollToNextChapter);
+    } else {
+      scrollToNextChapter();
+    }
+  }, [openingSceneHeight, openingStacked]);
 
   const registerChapter = useCallback((index: number) => (event: LayoutChangeEvent) => {
     sectionOffsets.current[index - 1] = event.nativeEvent.layout.y;
@@ -773,15 +892,23 @@ export function AnnualScrollStory({
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const scrollY = openingScrollTop(
+      contentOffset.y,
+      OPENING_TRANSITION_SCROLL,
+      openingMessageReady,
+      openingContinuedRef.current,
+    );
+    if (scrollY !== contentOffset.y) scrollRef.current?.scrollTo({ y: scrollY, animated: false });
+    updateOpeningTransition(scrollY);
     const scrollable = Math.max(1, contentSize.height - layoutMeasurement.height);
-    storyProgress.setValue(Math.min(1, Math.max(0, contentOffset.y / scrollable)));
-    const marker = event.nativeEvent.contentOffset.y + event.nativeEvent.layoutMeasurement.height * 0.38;
+    storyProgress.setValue(Math.min(1, Math.max(0, scrollY / scrollable)));
+    const marker = scrollY + event.nativeEvent.layoutMeasurement.height * 0.38;
     let next = 1;
     sectionOffsets.current.forEach((offset, index) => {
       if (Number.isFinite(offset) && marker >= offset) next = index + 1;
     });
     setActiveChapter((current) => current === next ? current : next);
-  }, [storyProgress]);
+  }, [openingMessageReady, storyProgress, updateOpeningTransition]);
 
   const handleHourWheel = useCallback((event: unknown) => {
     if (Platform.OS !== "web") return;
@@ -791,10 +918,16 @@ export function AnnualScrollStory({
     setSelectedHour(next);
   }, [selectedHour]);
 
+  const storyScrollEnabled = openingContinued || (openingMessageReady && !openingStacked);
+
   useEffect(() => {
     if (Platform.OS !== "web") return undefined;
     const scroller = scrollRef.current?.getScrollableNode?.() as HTMLElement | undefined;
     if (!scroller) return undefined;
+    scroller.style.overflowY = storyScrollEnabled ? "auto" : "hidden";
+    scroller.style.touchAction = storyScrollEnabled ? "pan-y" : "none";
+    scroller.style.cursor = storyScrollEnabled ? "grab" : "default";
+    if (!storyScrollEnabled) return undefined;
     let dragging = false;
     let startY = 0;
     let startScrollTop = 0;
@@ -815,9 +948,6 @@ export function AnnualScrollStory({
       dragging = false;
       scroller.style.cursor = "grab";
     };
-    scroller.style.overflowY = "auto";
-    scroller.style.touchAction = "pan-y";
-    scroller.style.cursor = "grab";
     scroller.addEventListener("pointerdown", onPointerDown);
     scroller.addEventListener("pointermove", onPointerMove);
     scroller.addEventListener("pointerup", stopDragging);
@@ -828,7 +958,7 @@ export function AnnualScrollStory({
       scroller.removeEventListener("pointerup", stopDragging);
       scroller.removeEventListener("pointercancel", stopDragging);
     };
-  }, [width]);
+  }, [storyScrollEnabled, width]);
 
   const openStoryRecord = useCallback((item: StoryContentItem | null) => {
     if (!item) return;
@@ -903,12 +1033,13 @@ export function AnnualScrollStory({
         ref={scrollRef}
         contentContainerStyle={styles.scrollContent}
         onScroll={handleScroll}
+        scrollEnabled={storyScrollEnabled}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.storyScroller}
         testID="story-scroll-view"
       >
-        <View onLayout={registerChapter(1)} style={[styles.stickyChapter, { minHeight: openingSceneHeight + 460 }]}>
+        <View onLayout={registerChapter(1)} style={[styles.stickyChapter, { minHeight: openingSceneHeight + OPENING_TRANSITION_SCROLL }]}>
           <View style={[styles.scene, { minHeight: openingSceneHeight }, stickyStyle]}>
             <View style={styles.openingBackdrop} testID="opening-cover-collage">
               <OpeningReelGallery
@@ -917,9 +1048,15 @@ export function AnnualScrollStory({
                 items={openingCovers}
                 privacy={privacy}
                 reducedMotion={reducedMotion}
+                transitionProgress={openingTransition}
                 width={width}
               />
-              <OpeningStaggeredMessage active={openingForegroundHidden} reducedMotion={reducedMotion} />
+              <OpeningStaggeredMessage
+                active={openingForegroundHidden}
+                onComplete={handleOpeningMessageComplete}
+                reducedMotion={reducedMotion}
+                transitionProgress={openingTransition}
+              />
             </View>
 
             <Animated.View
@@ -953,7 +1090,7 @@ export function AnnualScrollStory({
                     <Rect fill="white" height={openingSceneHeight} width={width} />
                     <G
                       clipPath="url(#opening-foreground-note-clip)"
-                      transform={`translate(${noteLeft} ${noteTop})`}
+                      transform={`translate(${noteLeft} ${noteTop}) scale(${OPENING_LOGO_SCALE})`}
                     >
                       <AnimatedSvgGroup transform={liquidTransform}>
                         <AnimatedSvgGroup transform={waveTransform}>
@@ -980,10 +1117,6 @@ export function AnnualScrollStory({
                     const layout = particleLayouts[index];
                     if (!layout) return null;
                     const displayLabel = truncateOpeningParticleLabel(item.label, OPENING_LABEL_MAX_LENGTH);
-                    const bubbleIndex = hashString(item.key) % OPENING_BUBBLE_PALETTE.length;
-                    const bubbleColor = OPENING_BUBBLE_PALETTE[bubbleIndex]!;
-                    const textPalette = OPENING_TEXT_PALETTE_BY_BUBBLE[bubbleIndex]!;
-                    const textColor = textPalette[hashString(`${item.key}:text`) % textPalette.length]!;
                     const hidden = item.revealStep > openingStep;
                     const itemHeight = openingParticleHeight(layout.fontSize);
                     const bubbleFrom = Math.min(0.96, Math.max(
@@ -1022,17 +1155,23 @@ export function AnnualScrollStory({
                         ]}
                       >
                         <Animated.View
+                          {...(Platform.OS === "web" ? {
+                            dataSet: {
+                              openingBorderGlow: "true",
+                            },
+                          } : {})}
                           style={[
                             styles.openingBubble,
-                            OPENING_BUBBLE_VIVID,
                             {
-                              backgroundColor: bubbleColor,
                               left: bubbleInset,
                               right: bubbleInset,
                               transform: [{ scale: bubbleScale }],
                             },
                           ]}
-                        />
+                        >
+                          <View style={styles.openingBubbleSurface} />
+                          <View style={[styles.openingBubbleGlow, OPENING_BORDER_GLOW_WEB]} />
+                        </Animated.View>
                         <Text
                           numberOfLines={Platform.OS === "web" ? undefined : 1}
                           style={[
@@ -1040,7 +1179,6 @@ export function AnnualScrollStory({
                             WEB_NO_WRAP,
                             {
                               alignSelf: "stretch",
-                              color: textColor,
                               marginHorizontal: bubbleInset + 6,
                               fontSize: layout.fontSize,
                               lineHeight: itemHeight,
@@ -1050,7 +1188,7 @@ export function AnnualScrollStory({
                           testID="opening-particle-text"
                         >
                           {displayLabel}
-                          {item.count === undefined ? null : <Text style={[styles.floatingCount, { color: textColor }]}> {formatNumber(item.count)}</Text>}
+                          {item.count === undefined ? null : <Text style={styles.floatingCount}> {formatNumber(item.count)}</Text>}
                         </Text>
                       </View>
                     );
@@ -1120,7 +1258,7 @@ export function AnnualScrollStory({
                     accessibilityLabel={`内容展开进度 ${openingProgress}%`}
                     accessibilityRole="progressbar"
                     accessibilityValue={{ min: 0, max: 100, now: openingProgress }}
-                    style={styles.logoProgress}
+                    style={[styles.logoProgress, { transform: [{ scale: OPENING_LOGO_SCALE }] }]}
                   >
                     {LOGO_ENTRANCE_FRAGMENTS.map((fragment, index) => {
                       const motion = logoFragmentMotions[index]!;
@@ -1236,6 +1374,16 @@ export function AnnualScrollStory({
                 </Pressable>
               </View>
             </Animated.View>
+            {openingStacked && !openingContinued ? (
+              <Pressable
+                accessibilityHint="进入内容足迹"
+                accessibilityLabel="进入下一页"
+                accessibilityRole="button"
+                onPress={continuePastOpening}
+                style={[styles.openingContinue, WEB_POINTER]}
+                testID="opening-continue"
+              />
+            ) : null}
           </View>
         </View>
 
@@ -1519,7 +1667,17 @@ function StoryCover({ item, privacy }: { item: StoryContentItem["record"]; priva
   return <View style={[styles.recordCover, styles.recordCoverFallback]}><Play color={color.cyan} size={15} /></View>;
 }
 
-function OpeningStaggeredMessage({ active, reducedMotion }: { active: boolean; reducedMotion: boolean }) {
+function OpeningStaggeredMessage({
+  active,
+  onComplete,
+  reducedMotion,
+  transitionProgress,
+}: {
+  active: boolean;
+  onComplete: () => void;
+  reducedMotion: boolean;
+  transitionProgress: Animated.Value;
+}) {
   const lineChars = useMemo(() => OPENING_MESSAGE_LINES.map((line) => Array.from(line)), []);
   const charProgress = useMemo(
     () => lineChars.flatMap((line) => line.map(() => new Animated.Value(0))),
@@ -1531,7 +1689,11 @@ function OpeningStaggeredMessage({ active, reducedMotion }: { active: boolean; r
       value.stopAnimation();
       value.setValue(active && reducedMotion ? 1 : 0);
     });
-    if (!active || reducedMotion) return undefined;
+    if (!active) return undefined;
+    if (reducedMotion) {
+      onComplete();
+      return undefined;
+    }
     const animation = Animated.stagger(
       80,
       charProgress.map((value) => Animated.timing(value, {
@@ -1541,9 +1703,11 @@ function OpeningStaggeredMessage({ active, reducedMotion }: { active: boolean; r
         useNativeDriver: Platform.OS !== "web",
       })),
     );
-    animation.start();
+    animation.start(({ finished }) => {
+      if (finished) onComplete();
+    });
     return () => animation.stop();
-  }, [active, charProgress, reducedMotion]);
+  }, [active, charProgress, onComplete, reducedMotion]);
 
   let charIndex = 0;
   return (
@@ -1551,17 +1715,25 @@ function OpeningStaggeredMessage({ active, reducedMotion }: { active: boolean; r
       {lineChars.map((line, lineIndex) => (
         <View key={`opening-message-line-${lineIndex}`} style={styles.openingMessageLine}>
           {line.map((char) => {
-            const progress = charProgress[charIndex]!;
+            const currentCharIndex = charIndex;
+            const progress = charProgress[currentCharIndex]!;
             charIndex += 1;
+            const [exitStart, exitEnd] = openingMessageExitWindow(currentCharIndex, charProgress.length);
+            const exitVisibility = transitionProgress.interpolate({
+              inputRange: [0, exitStart, exitEnd, 1],
+              outputRange: [1, 1, 0, 0],
+              extrapolate: "clamp",
+            });
+            const visibleProgress = Animated.multiply(progress, exitVisibility);
             const charAnimationStyle = {
-              opacity: progress,
+              opacity: visibleProgress,
               transform: [
-                { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [-18, 0] }) },
-                { scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
+                { translateY: visibleProgress.interpolate({ inputRange: [0, 1], outputRange: [-18, 0] }) },
+                { scale: visibleProgress.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
               ],
             };
             const webBlurStyle = Platform.OS === "web"
-              ? ({ filter: progress.interpolate({ inputRange: [0, 1], outputRange: ["blur(9px)", "blur(0px)"] }) } as unknown as TextStyle)
+              ? ({ filter: visibleProgress.interpolate({ inputRange: [0, 1], outputRange: ["blur(9px)", "blur(0px)"] }) } as unknown as TextStyle)
               : null;
             return (
               <View key={`opening-message-char-${lineIndex}-${charIndex}`} style={styles.openingMessageCharShell}>
@@ -1830,36 +2002,12 @@ function collectOpeningContent(model: StoryModel): StoryContentItem[] {
   return [...items.values()];
 }
 
-function buildOpeningCovers(items: readonly StoryContentItem[], limit: number): StoryContentItem[] {
-  if (items.length === 0) return [];
-  // 跨全表等距取样，并跳过相邻同作者，避免胶卷里连续出现近似缩略图。
-  const targetCount = Math.min(limit, items.length);
-  const stride = Math.max(1, Math.floor(items.length / targetCount));
-  const picked: StoryContentItem[] = [];
-  const usedKeys = new Set<string>();
-  for (let slot = 0; slot < targetCount; slot += 1) {
-    let candidate = items[(slot * stride) % items.length]!;
-    for (let probe = 0; probe < items.length; probe += 1) {
-      const next = items[(slot * stride + probe) % items.length]!;
-      const clashes = usedKeys.has(next.key)
-        || (picked.at(-1)?.record.author != null && next.record.author === picked.at(-1)!.record.author);
-      if (!clashes) {
-        candidate = next;
-        break;
-      }
-    }
-    usedKeys.add(candidate.key);
-    picked.push(candidate);
-  }
-  return picked;
-}
-
 function buildOpeningParticles(
   model: StoryModel,
   content: readonly StoryContentItem[],
   privacy: boolean,
 ): OpeningParticle[] {
-  const tags = model.topics.slice(0, OPENING_TAG_LIMIT);
+  const tags = model.topics;
   const titles: Array<{ key: string; label: string }> = [];
   const creators: Array<{ key: string; label: string }> = [];
   const seenTitles = new Set<string>();
@@ -1868,7 +2016,7 @@ function buildOpeningParticles(
     const title = item.record.title.trim();
     const titleKey = title.toLocaleLowerCase("zh-Hans");
     const meaningfulLength = Array.from(title).filter((character) => /[\p{L}\p{N}]/u.test(character)).length;
-    if (meaningfulLength <= 4 || seenTitles.has(titleKey) || titles.length >= OPENING_TITLE_LIMIT) return;
+    if (meaningfulLength <= 4 || seenTitles.has(titleKey)) return;
     titles.push({ key: item.key, label: title });
     seenTitles.add(titleKey);
   };
@@ -1878,10 +2026,7 @@ function buildOpeningParticles(
 
   for (const item of content) {
     const creator = item.record.author?.trim();
-    if (creator && creators.length < OPENING_CREATOR_LIMIT) {
-      creators.push({ key: item.key, label: creator });
-    }
-    if (creators.length >= OPENING_CREATOR_LIMIT) break;
+    if (creator) creators.push({ key: item.key, label: creator });
   }
 
   const particles: Array<Omit<OpeningParticle, "revealOrder">> = [];
@@ -2109,14 +2254,18 @@ const styles = StyleSheet.create({
   openingWordLayer: { ...ABSOLUTE_FILL },
   openingWordCurtain: { position: "absolute", zIndex: 6, top: 0, left: 0, width: "100%" },
   openingWebglReveal: { position: "absolute", zIndex: 7, top: 10, left: 0, width: "100%", overflow: "hidden" },
+  openingLogoSpotlight: { ...ABSOLUTE_FILL, zIndex: 11 },
+  openingContinue: { ...ABSOLUTE_FILL, zIndex: 12 },
   chapterNo: { color: color.cyan, fontSize: 10, fontWeight: "900" },
   lead: { maxWidth: 640, color: color.textSecondary, fontSize: 16, lineHeight: 26, marginTop: 18 },
   floatingItem: { position: "absolute", zIndex: 4, left: "50%", top: "50%", justifyContent: "center" },
-  openingBubble: { position: "absolute", top: 0, bottom: 0, borderWidth: 1, borderColor: color.border, borderRadius: 999, backgroundColor: color.surface },
-  floatingTag: { color: color.cyan, fontWeight: "900", lineHeight: 26 * OPENING_PARTICLE_SCALE },
-  floatingTitle: { color: color.text, fontWeight: "900", lineHeight: 29 * OPENING_PARTICLE_SCALE },
-  floatingCreator: { color: color.accent, fontWeight: "800", lineHeight: 23 * OPENING_PARTICLE_SCALE },
-  floatingCount: { color: color.textMuted, fontSize: 10 * OPENING_PARTICLE_SCALE, fontWeight: "900" },
+  openingBubble: { position: "absolute", top: 0, bottom: 0, borderRadius: 999 },
+  openingBubbleSurface: { ...ABSOLUTE_FILL, borderWidth: 1, borderColor: "rgba(255,255,255,0.18)", borderRadius: 999, backgroundColor: "rgba(17,18,22,0.9)" },
+  openingBubbleGlow: { ...ABSOLUTE_FILL, borderRadius: 999 },
+  floatingTag: { color: "rgba(255,255,255,0.9)", fontWeight: "900", lineHeight: 26 * OPENING_PARTICLE_SCALE },
+  floatingTitle: { color: "rgba(255,255,255,0.9)", fontWeight: "900", lineHeight: 29 * OPENING_PARTICLE_SCALE },
+  floatingCreator: { color: "rgba(255,255,255,0.78)", fontWeight: "800", lineHeight: 23 * OPENING_PARTICLE_SCALE },
+  floatingCount: { color: "rgba(255,255,255,0.62)", fontSize: 10 * OPENING_PARTICLE_SCALE, fontWeight: "900" },
   logoButton: { zIndex: 10, width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
   logoButtonPressed: { opacity: 0.86, transform: [{ scale: 0.97 }] },
   logoProgress: { width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
