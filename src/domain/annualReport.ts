@@ -935,7 +935,7 @@ function interactionScore(record: PersonalVideoRecord): number | null {
   return playCount;
 }
 
-function contentRef(entry: AnnualIndexedRecord): AnnualContentRef {
+export function contentRef(entry: AnnualIndexedRecord): AnnualContentRef {
   const author = authorOf(entry.record);
   return {
     videoId: entry.videoId,
@@ -962,7 +962,7 @@ function cardStatus(ok: boolean, reason: string): { status: AnnualCardStatus; re
   return ok ? { status: "ok", reason: null } : { status: "insufficient", reason };
 }
 
-function isReliableAnnualEntry(entry: AnnualIndexedRecord): boolean {
+export function isReliableAnnualEntry(entry: AnnualIndexedRecord): boolean {
   return entry.timestamp !== null && entry.zoned !== null && ACCEPTED_SOURCES.has(entry.occurredAtSource);
 }
 

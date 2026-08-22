@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -44,6 +44,7 @@ import type {
   AnnualReport,
   AnnualRhythmData,
 } from "../../domain/annualReport";
+import type { LivingChapter, LivingReport } from "../../domain/livingReport";
 import type {
   PersonalRecordCollection,
   PersonalRecordType,
@@ -58,7 +59,7 @@ export type WorkspaceViewKey = PersonalRecordType | "summary" | "highlights";
 export interface ContentWorkspaceProps {
   activeView: WorkspaceViewKey;
   records: PersonalRecordCollection;
-  report: AnnualReport | null;
+  report: AnnualReport | LivingReport | null;
   sourceLabel: string;
   updatedAt: string | null;
   busy: boolean;
@@ -83,8 +84,8 @@ const navItems: Array<{ id: WorkspaceViewKey; label: string; icon: IconComponent
   { id: "watch_history", label: "观看历史", icon: History, accent: color.cyan },
   { id: "liked_videos", label: "喜欢", icon: Heart, accent: color.accent },
   { id: "favorite_videos", label: "收藏", icon: Bookmark, accent: color.amber },
-  { id: "summary", label: "数据大屏", icon: LayoutDashboard, accent: color.green },
-  { id: "highlights", label: "年度高光", icon: Star, accent: color.cyan },
+  { id: "summary", label: "持续报告", icon: LayoutDashboard, accent: color.green },
+  { id: "highlights", label: "变化线索", icon: Star, accent: color.cyan },
 ];
 
 const recordNavItems = navItems.slice(0, 3);
@@ -112,17 +113,31 @@ export function ContentWorkspace({
   const mobile = width < 720;
   const compactSidebar = width >= 720 && width < 1080;
   const currentNav = navItems.find((item) => item.id === activeView) ?? navItems[0]!;
+  const [reportUpdateNotice, setReportUpdateNotice] = useState(false);
+  const seenUpdatedAtRef = useRef<string | null>(updatedAt);
   const totalRecords = records.watch_history.length + records.liked_videos.length + records.favorite_videos.length;
+  const livingReport = report && isLivingReport(report) ? report : null;
   const counts: Record<WorkspaceViewKey, number> = {
     watch_history: records.watch_history.length,
     liked_videos: records.liked_videos.length,
     favorite_videos: records.favorite_videos.length,
-    summary: report ? (report.overview.data as AnnualOverviewData).counts.total : totalRecords,
-    highlights: report
-      ? Object.values(report.highlights.data as AnnualHighlightsData).filter(Boolean).length
-      : 0,
+    summary: livingReport
+      ? livingReport.coverage.uniqueVideoCount
+      : report && !isLivingReport(report)
+        ? (report.overview.data as AnnualOverviewData).counts.total
+        : totalRecords,
+    highlights: livingReport
+      ? livingReport.chapters.filter((chapter) => chapter.status === "ok").length
+      : report && !isLivingReport(report)
+        ? Object.values(report.highlights.data as AnnualHighlightsData).filter(Boolean).length
+        : 0,
   };
-  const annualView = activeView === "summary" || activeView === "highlights";
+  const reportView = activeView === "summary" || activeView === "highlights";
+
+  useEffect(() => {
+    if (updatedAt && seenUpdatedAtRef.current && updatedAt !== seenUpdatedAtRef.current) setReportUpdateNotice(true);
+    seenUpdatedAtRef.current = updatedAt;
+  }, [updatedAt]);
 
   return (
     <View testID="content-workspace" style={styles.root}>
@@ -141,7 +156,7 @@ export function ContentWorkspace({
                 selected={item.id === activeView}
               />
             ))}
-            {!compactSidebar ? <Text style={[styles.sidebarSectionLabel, styles.sidebarSectionLabelAnnual]}>年度分析</Text> : <View style={styles.sidebarCompactDivider} />}
+            {!compactSidebar ? <Text style={[styles.sidebarSectionLabel, styles.sidebarSectionLabelAnnual]}>持续报告</Text> : <View style={styles.sidebarCompactDivider} />}
             {annualNavItems.map((item) => (
               <NavButton
                 key={item.id}
@@ -155,7 +170,7 @@ export function ContentWorkspace({
           </View>
           <View style={styles.sidebarFooter}>
             <Pressable
-              accessibilityLabel="重看年度故事"
+              accessibilityLabel="重看内容故事"
               accessibilityRole="button"
               disabled={!report || report.status === "empty"}
               onPress={onReplayStory}
@@ -168,7 +183,7 @@ export function ContentWorkspace({
               ]}
             >
               <View style={styles.navIconWrap}><Sparkles color={color.accent} size={20} strokeWidth={2} /></View>
-              {!compactSidebar ? <Text style={styles.navLabel}>重看年度故事</Text> : null}
+              {!compactSidebar ? <Text style={styles.navLabel}>重看内容故事</Text> : null}
             </Pressable>
             {!compactSidebar ? (
               <View style={styles.localBadge}>
@@ -195,7 +210,7 @@ export function ContentWorkspace({
       <View style={[styles.main, mobile && styles.mainMobile]}>
         <View style={[styles.topbar, mobile && styles.topbarMobile]}>
           <View style={styles.topbarHeading}>
-            <Text style={styles.topbarEyebrow}>{annualView ? "PERSONAL RECAP" : "CONTENT ARCHIVE"}</Text>
+            <Text style={styles.topbarEyebrow}>{reportView ? "LIVING REPORT" : "CONTENT ARCHIVE"}</Text>
             <View style={styles.topbarTitleRow}>
               <Text numberOfLines={1} style={[styles.topbarTitle, mobile && styles.topbarTitleMobile]}>{currentNav.label}</Text>
               <Text style={styles.topbarCount}>{counts[activeView].toLocaleString("zh-CN")}</Text>
@@ -233,12 +248,32 @@ export function ContentWorkspace({
           </View>
         </View>
 
+        {reportView && reportUpdateNotice ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="报告有更新，关闭提示"
+            onPress={() => setReportUpdateNotice(false)}
+            style={({ pressed }) => [styles.reportUpdateNotice, pressed && styles.buttonPressed, webPointer]}
+          >
+            <RefreshCw color={color.green} size={15} />
+            <Text style={styles.reportUpdateNoticeText}>报告有更新 · 已保留当前阅读位置</Text>
+          </Pressable>
+        ) : null}
+
         {activeView === "summary" ? (
           report && report.status !== "empty"
-            ? <DenseSummaryDashboard mobile={mobile} privacy={privacy} report={report} />
+            ? livingReport
+              ? <DenseSummaryDashboard mobile={mobile} onOpenRecord={onOpenRecord} privacy={privacy} report={livingReport} />
+              : isLivingReport(report)
+                ? <DenseSummaryDashboard mobile={mobile} onOpenRecord={onOpenRecord} privacy={privacy} report={report} />
+                : <SummaryView mobile={mobile} privacy={privacy} report={report} />
             : <SummaryEmpty />
         ) : activeView === "highlights" ? (
-          <HighlightsView mobile={mobile} onOpenRecord={onOpenRecord} privacy={privacy} report={report} />
+          livingReport
+            ? <LivingHighlightsView mobile={mobile} onOpenRecord={onOpenRecord} privacy={privacy} report={livingReport} />
+            : report && isLivingReport(report)
+              ? <LivingHighlightsView mobile={mobile} onOpenRecord={onOpenRecord} privacy={privacy} report={report} />
+              : <HighlightsView mobile={mobile} onOpenRecord={onOpenRecord} privacy={privacy} report={report} />
         ) : (
           <RecordsGallery
             activeType={activeView}
@@ -509,6 +544,116 @@ function RecordRow({ record, type, privacy, onOpenRecord }: { record: PersonalVi
   );
 }
 
+function isLivingReport(report: AnnualReport | LivingReport): report is LivingReport {
+  return "currentWindow" in report;
+}
+
+function LivingHighlightsView({
+  report,
+  privacy,
+  mobile,
+  onOpenRecord,
+}: {
+  report: LivingReport;
+  privacy: boolean;
+  mobile: boolean;
+  onOpenRecord: (url: string) => Promise<void>;
+}) {
+  const chapters = report.chapters.filter((chapter) => ["current", "shift", "profile", "kept"].includes(chapter.id));
+  return (
+    <ScrollView
+      testID="living-changes-view"
+      contentContainerStyle={[styles.highlightsContent, mobile && styles.summaryContentMobile]}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={[styles.highlightsHeader, mobile && styles.highlightsHeaderMobile]}>
+        <View style={styles.dashboardHeaderCopy}>
+          <Text style={styles.summaryEyebrow}>CHANGES · {formatLivingFreshness(report.freshness)}</Text>
+          <Text style={[styles.summaryTitle, mobile && styles.summaryTitleMobile]}>变化线索</Text>
+          <Text style={styles.summaryLead}>把最近发生的变化、稳定倾向和真实证据放在同一条线上。</Text>
+        </View>
+        <View style={[styles.highlightCountBlock, mobile && styles.dashboardPeriodMobile]}>
+          <Text style={styles.highlightCountValue}>{chapters.filter((chapter) => chapter.status === "ok").length}</Text>
+          <Text style={styles.dashboardPeriodMeta}>项当前线索</Text>
+        </View>
+      </View>
+      <View style={styles.livingChangeList}>
+        {chapters.map((chapter) => <LivingChangeCard chapter={chapter} key={chapter.id} onOpenRecord={onOpenRecord} privacy={privacy} />)}
+      </View>
+      <View style={styles.highlightsFootnote}>
+        <Sparkles color={color.cyan} size={16} />
+        <Text style={styles.highlightsFootnoteText}>线索来自当前本地样本；不足以判断的部分会保留为“尚在形成”。</Text>
+      </View>
+    </ScrollView>
+  );
+}
+
+function LivingChangeCard({
+  chapter,
+  onOpenRecord,
+  privacy,
+}: {
+  chapter: LivingChapter;
+  onOpenRecord: (url: string) => Promise<void>;
+  privacy: boolean;
+}) {
+  const accent = chapter.id === "shift" ? color.accent : chapter.id === "profile" ? color.green : color.cyan;
+  return (
+    <View style={[styles.livingChangeCard, { borderTopColor: accent }]}>
+      <View style={styles.livingChangeHeader}>
+        <Text style={styles.livingChangeEyebrow}>{chapter.eyebrow}</Text>
+        <Text style={[styles.livingChangeStatus, chapter.status !== "ok" && styles.livingChangeStatusMuted]}>{chapter.status === "ok" ? "已形成" : "尚在形成"}</Text>
+      </View>
+      <Text style={styles.livingChangeTitle}>{chapter.title}</Text>
+      <Text style={styles.livingChangeNarrative}>{privacy ? privateLivingNarrative(chapter) : chapter.narrative}</Text>
+      {chapter.signals.slice(0, 3).map((signal) => (
+        <View key={signal.id} style={styles.livingChangeSignal}>
+          <Text numberOfLines={1} style={styles.livingChangeSignalLabel}>{privacy ? "内容线索" : signal.label}</Text>
+          <Text style={styles.livingChangeSignalValue}>{signal.value}</Text>
+          <Text style={styles.livingChangeSignalDelta}>{formatLivingDelta(signal.delta)}</Text>
+        </View>
+      ))}
+      {chapter.evidence.slice(0, 2).map((item, index) => {
+        const title = privacy ? `内容 ${index + 1}` : item.title;
+        const canOpen = Boolean(item.url && !privacy);
+        return (
+          <Pressable
+            accessibilityLabel={`${title}${canOpen ? "，打开记录" : ""}`}
+            accessibilityRole={canOpen ? "link" : undefined}
+            disabled={!canOpen}
+            key={`${item.videoId ?? item.title}:${index}`}
+            onPress={() => item.url && void onOpenRecord(item.url)}
+            style={({ pressed }) => [styles.livingChangeEvidence, pressed && styles.buttonPressed]}
+          >
+            <Text numberOfLines={1} style={styles.livingChangeEvidenceTitle}>{title}</Text>
+            <Text style={styles.livingChangeEvidenceMeta}>{privacy ? "详情已隐藏" : item.author ?? "未知创作者"}</Text>
+            {canOpen ? <ArrowUpRight color={color.textMuted} size={14} /> : null}
+          </Pressable>
+        );
+      })}
+      {chapter.notice ? <Text style={styles.panelNotice}>{chapter.notice}</Text> : null}
+    </View>
+  );
+}
+
+function privateLivingNarrative(chapter: LivingChapter): string {
+  if (chapter.id === "current") return "最近一段时间里，内容线索已经出现轮廓。";
+  if (chapter.id === "shift") return "近期内容线索的占比正在发生变化。";
+  if (chapter.id === "profile") return "当前样本显示出一些行为倾向，但具体内容已隐藏。";
+  if (chapter.id === "kept") return "列表之间存在可比较的交集，具体内容已隐藏。";
+  return chapter.narrative;
+}
+
+function formatLivingFreshness(value: LivingReport["freshness"]): string {
+  return value === "fresh" ? "刚更新" : value === "stale" ? "需要更新" : value === "partial" ? "部分采集" : "时间未知";
+}
+
+function formatLivingDelta(value: number | null): string {
+  if (value === null) return "";
+  const percent = Math.round(Math.abs(value) * 100);
+  return value > 0.02 ? `+${percent}%` : value < -0.02 ? `-${percent}%` : "稳定";
+}
+
 const highlightDefinitions: Array<{
   key: keyof AnnualHighlightsData;
   label: string;
@@ -724,12 +869,12 @@ function HighlightsView({
       <View style={[styles.highlightsHeader, mobile && styles.highlightsHeaderMobile]}>
         <View style={styles.dashboardHeaderCopy}>
           <Text style={styles.summaryEyebrow}>HIGHLIGHTS · {report.periodLabel.toUpperCase()}</Text>
-          <Text style={[styles.summaryTitle, mobile && styles.summaryTitleMobile]}>年度高光</Text>
-          <Text style={styles.summaryLead}>五个规则坐标来自当前本地样本；缺少可靠字段时保留为空，不补写结论。</Text>
+          <Text style={[styles.summaryTitle, mobile && styles.summaryTitleMobile]}>变化线索</Text>
+          <Text style={styles.summaryLead}>从最近新增、偏好变化、回访模式和稳定倾向里，保留可被证据支持的线索。</Text>
         </View>
         <View style={[styles.highlightCountBlock, mobile && styles.dashboardPeriodMobile]}>
           <Text style={styles.highlightCountValue}>{availableCount}</Text>
-          <Text style={styles.dashboardPeriodMeta}>项可确定高光</Text>
+          <Text style={styles.dashboardPeriodMeta}>项当前线索</Text>
         </View>
       </View>
       {highlightNotice ? <PanelNotice text={highlightNotice} /> : null}
@@ -833,8 +978,8 @@ function SummaryEmpty() {
   return (
     <View style={styles.summaryEmpty}>
       <Sparkles color={color.green} size={30} />
-      <Text style={styles.emptyTitle}>还没有可以总结的记录</Text>
-      <Text style={styles.emptyDetail}>完成一次读取后，数据大屏和年度高光会自动生成。</Text>
+      <Text style={styles.emptyTitle}>这一章还在形成</Text>
+      <Text style={styles.emptyDetail}>完成一次读取并积累带可靠行为时间的记录后，持续报告会逐步生成当前主线、变化线索和行为画像。</Text>
     </View>
   );
 }
@@ -993,6 +1138,8 @@ const styles = StyleSheet.create({
   topbarTitleMobile: { fontSize: 17 },
   topbarCount: { color: color.textMuted, fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"] },
   topbarActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  reportUpdateNotice: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 14, marginTop: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: color.green, borderRadius: radius.medium, backgroundColor: color.greenSoft },
+  reportUpdateNoticeText: { color: color.green, fontSize: 10, fontWeight: "800" },
   toolbarButton: { width: 46, height: 46, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: color.borderSoft, borderRadius: radius.medium, backgroundColor: color.surface },
   toolbarButtonActive: { borderColor: color.cyan, backgroundColor: color.cyanSoft },
   galleryContent: { paddingHorizontal: 28, paddingTop: 18, paddingBottom: 42 },
@@ -1145,6 +1292,21 @@ const styles = StyleSheet.create({
   highlightRule: { flex: 1, color: color.textMuted, fontSize: 9, lineHeight: 14 },
   highlightsFootnote: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16, paddingHorizontal: 14, borderLeftWidth: 3, borderLeftColor: color.amber, backgroundColor: color.amberSoft },
   highlightsFootnoteText: { flex: 1, color: color.textSecondary, fontSize: 10, lineHeight: 16 },
+  livingChangeList: { gap: 12, marginTop: 18 },
+  livingChangeCard: { minHeight: 180, padding: 16, borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
+  livingChangeHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  livingChangeEyebrow: { color: color.textMuted, fontSize: 9, fontWeight: "900", letterSpacing: 0.4 },
+  livingChangeStatus: { color: color.green, fontSize: 9, fontWeight: "900" },
+  livingChangeStatusMuted: { color: color.amber },
+  livingChangeTitle: { color: color.text, fontSize: 18, lineHeight: 24, fontWeight: "900", marginTop: 7 },
+  livingChangeNarrative: { color: color.textSecondary, fontSize: 12, lineHeight: 19, marginTop: 8 },
+  livingChangeSignal: { minHeight: 27, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 7, paddingHorizontal: 8, backgroundColor: color.surfaceRaised },
+  livingChangeSignalLabel: { flex: 1, color: color.textSecondary, fontSize: 10, fontWeight: "800" },
+  livingChangeSignalValue: { color: color.text, fontSize: 10, fontWeight: "900" },
+  livingChangeSignalDelta: { width: 40, color: color.green, fontSize: 9, textAlign: "right" },
+  livingChangeEvidence: { minHeight: 30, flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8, paddingHorizontal: 8, borderWidth: 1, borderColor: color.borderSoft, borderRadius: radius.small, backgroundColor: color.sidebar },
+  livingChangeEvidenceTitle: { flex: 1, color: color.textSecondary, fontSize: 9, fontWeight: "700" },
+  livingChangeEvidenceMeta: { maxWidth: 80, color: color.textMuted, fontSize: 8 },
   summaryEmpty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
   buttonPressed: { opacity: 0.7 },
   buttonDisabled: { opacity: 0.38 },

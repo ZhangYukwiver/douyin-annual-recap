@@ -49,6 +49,7 @@ import type {
   AnnualOverviewData,
   AnnualReport,
 } from "../../domain/annualReport";
+import type { LivingChapter, LivingReport } from "../../domain/livingReport";
 import type {
   PersonalRecordCollection,
   PersonalRecordType,
@@ -230,6 +231,7 @@ export interface NarrativeCopyProvider {
 
 export interface AnnualScrollStoryProps {
   report: AnnualReport | null;
+  livingReport?: LivingReport | null;
   records: PersonalRecordCollection;
   sourceLabel: string;
   privacy: boolean;
@@ -426,6 +428,7 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
 
 export function AnnualScrollStory({
   report,
+  livingReport = null,
   records,
   sourceLabel,
   privacy,
@@ -450,6 +453,15 @@ export function AnnualScrollStory({
   const overview = report?.overview.data as AnnualOverviewData | undefined;
   const highlights = report?.highlights.data as AnnualHighlightsData | undefined;
   const kept = report?.kept.data as AnnualKeptData | undefined;
+  const currentChapter = findLivingChapter(livingReport, "current");
+  const rhythmChapter = findLivingChapter(livingReport, "rhythm");
+  const shiftChapter = findLivingChapter(livingReport, "shift");
+  const keptChapter = findLivingChapter(livingReport, "kept");
+  const continuationChapter = findLivingChapter(livingReport, "continuation");
+  const profileLabels = livingReport?.profile.axes
+    .filter((axis) => axis.label)
+    .map((axis) => axis.label)
+    .join(" · ") ?? "";
   const overlapsAvailable = Boolean(kept && kept.comparableVideoCount > 0);
   const [activeChapter, setActiveChapter] = useState(1);
   const [selectedHour, setSelectedHour] = useState(() => {
@@ -1008,24 +1020,24 @@ export function AnnualScrollStory({
             <View style={styles.brandMarkCore}><Play color={color.white} fill={color.white} size={13} /></View>
           </View>
           <View>
-            <Text style={styles.brandTitle}>年度故事</Text>
+            <Text style={styles.brandTitle}>内容故事</Text>
             <Text style={styles.brandMeta}>{sourceLabel} · {report.periodLabel}</Text>
           </View>
         </View>
-        <View accessibilityLabel={`年度故事第 ${activeChapter} 章，共 ${CHAPTER_COUNT} 章`} accessibilityRole="progressbar" style={styles.progressWrap}>
+        <View accessibilityLabel={`内容故事第 ${activeChapter} 章，共 ${CHAPTER_COUNT} 章`} accessibilityRole="progressbar" style={styles.progressWrap}>
           <View style={styles.progressTrack}>
             <Animated.View style={[styles.progressFill, { width: progressWidth }]} />
           </View>
           <Text style={styles.progressText}>{String(activeChapter).padStart(2, "0")} / 06</Text>
         </View>
         <Pressable
-          accessibilityLabel="直接看数据大屏"
+          accessibilityLabel="直接看持续报告"
           accessibilityRole="button"
           onPress={onEnterDashboard}
           style={({ pressed }) => [styles.skipButton, pressed && styles.buttonPressed, WEB_POINTER]}
         >
           <LayoutDashboard color={color.text} size={18} />
-          <Text style={styles.skipButtonText}>直接看数据</Text>
+          <Text style={styles.skipButtonText}>直接看持续报告</Text>
         </Pressable>
       </View>
 
@@ -1109,7 +1121,7 @@ export function AnnualScrollStory({
               </Svg>
               <View
                 accessible
-                accessibilityLabel={`年度内容已展开 ${openingProgress}%`}
+                accessibilityLabel={`内容已展开 ${openingProgress}%`}
                 style={styles.openingParticleStage}
               >
                 <View pointerEvents="none" style={[styles.openingWordLayer, openingWordLayerMask]} testID="opening-word-layer">
@@ -1241,10 +1253,10 @@ export function AnnualScrollStory({
                 <Pressable
                   accessibilityHint="点击一次后自动展开全部真实标签、视频标题和创作者"
                   accessibilityLabel={openingStep >= OPENING_STEP_COUNT
-                    ? "年度内容已全部展开"
+                    ? "内容已全部展开"
                     : openingStep > 0
-                      ? "年度内容正在自动展开"
-                      : "自动展开年度内容"}
+                      ? "内容正在自动展开"
+                      : "自动展开内容"}
                   accessibilityRole="button"
                   accessibilityState={{ disabled: openingStep > 0 }}
                   disabled={openingStep > 0}
@@ -1391,9 +1403,9 @@ export function AnnualScrollStory({
           <View style={styles.sectionInner}>
             <SectionHeading
               chapter="02"
-              eyebrow="内容足迹"
-              title="三条内容流，汇成同一段足迹。"
-              copy="观看、喜欢和收藏分别保留原始列表口径，再汇聚为去重内容总量。"
+              eyebrow={currentChapter?.eyebrow ?? "内容足迹"}
+              title={currentChapter?.title ?? "三条内容流，汇成同一段足迹。"}
+              copy={livingChapterCopy(currentChapter, "观看、喜欢和收藏分别保留原始列表口径，再汇聚为去重内容总量。", privacy)}
             />
             <View style={[styles.streamGrid, compact && styles.streamGridCompact]} {...revealDataSet()}>
               <StoryStream
@@ -1433,9 +1445,9 @@ export function AnnualScrollStory({
           <View style={[styles.scene, styles.rhythmScene, { minHeight: sceneHeight }, stickyStyle]}>
             <View style={[styles.rhythmLayout, compact && styles.rhythmLayoutCompact]}>
               <View style={styles.rhythmCopy} {...revealDataSet()}>
-                <Text style={styles.chapterNo}>CHAPTER 03 · 使用节奏</Text>
-                <Text style={styles.sectionTitle}>一天里的哪一刻，{`\n`}内容最常出现？</Text>
-                <Text style={styles.lead}>只使用可靠行为时间。方向键也可以切换小时。</Text>
+                <Text style={styles.chapterNo}>CHAPTER 03 · {rhythmChapter?.eyebrow ?? "你的节拍"}</Text>
+                <Text style={styles.sectionTitle}>{rhythmChapter?.title ?? <>一天里的哪一刻，{`\n`}内容最常出现？</>}</Text>
+                <Text style={styles.lead}>{livingChapterCopy(rhythmChapter, "只使用可靠行为时间。方向键也可以切换小时。", privacy)}</Text>
                 <View style={styles.hourStory}>
                   <Text style={styles.hourStoryLabel}>{padHour(selectedHourData.hour)} · {selectedHourData.count} 条可靠记录</Text>
                   <Text style={styles.hourStoryText}>{privacy ? privateHourStory(selectedHourData) : copyProvider.hourStory(selectedHourData)}</Text>
@@ -1460,9 +1472,9 @@ export function AnnualScrollStory({
           <View style={styles.sectionInner}>
             <SectionHeading
               chapter="04"
-              eyebrow="偏好与创作者"
-              title="显式标签，连接起内容与创作者。"
-              copy="点击标签，只展示真实命中的代表内容与对应创作者。音乐和时长只作为辅助字段。"
+              eyebrow={shiftChapter?.eyebrow ?? "偏好与创作者"}
+              title={shiftChapter?.title ?? "显式标签，连接起内容与创作者。"}
+              copy={livingChapterCopy(shiftChapter, "点击标签，只展示真实命中的代表内容与对应创作者。音乐和时长只作为辅助字段。", privacy)}
             />
             <View style={[styles.preferenceLayout, compact && styles.preferenceLayoutCompact]}>
               <View style={styles.topicField} {...revealDataSet()}>
@@ -1509,9 +1521,9 @@ export function AnnualScrollStory({
           <View style={styles.sectionInner}>
             <SectionHeading
               chapter="05"
-              eyebrow="真正留下的内容"
-              title="列表相遇的位置，才是可比较的交集。"
-              copy="交集只使用可比较 videoId；缺失标识的记录不会被猜测为同一内容。"
+              eyebrow={keptChapter?.eyebrow ?? "真正留下的内容"}
+              title={keptChapter?.title ?? "列表相遇的位置，才是可比较的交集。"}
+              copy={livingChapterCopy(keptChapter, "交集只使用可比较 videoId；缺失标识的记录不会被猜测为同一内容。", privacy)}
             />
             <View style={[styles.keptLayout, compact && styles.keptLayoutCompact]}>
               <View style={styles.confluence} {...revealDataSet()}>
@@ -1547,9 +1559,9 @@ export function AnnualScrollStory({
           <View style={styles.sectionInner}>
             <SectionHeading
               chapter="06"
-              eyebrow="年度高光与收束"
-              title="五个规则坐标，把故事落回真实内容。"
-              copy="横向浏览首条、末条、峰值日、最长内容和互动快照最高内容。"
+              eyebrow={continuationChapter?.eyebrow ?? "故事还在继续"}
+              title={continuationChapter?.title ?? "五个规则坐标，把故事落回真实内容。"}
+              copy={livingChapterCopy(continuationChapter, "横向浏览代表内容，让故事落回真实记录。", privacy)}
             />
             <ScrollView
               contentContainerStyle={styles.highlightStrip}
@@ -1564,26 +1576,26 @@ export function AnnualScrollStory({
                   index={index}
                   item={highlights[definition.key]}
                   key={definition.key}
-                  label={definition.label}
+                  label={livingReport ? livingHighlightLabel(definition.key) : definition.label}
                   onOpen={openHighlight}
                   privacy={privacy}
-                  rule={definition.rule}
+                  rule={livingReport ? livingHighlightRule(definition.key) : definition.rule}
                 />
               ))}
             </ScrollView>
           </View>
           <View style={styles.finale}>
             <View style={styles.finaleMark} />
-            <Text style={styles.finaleEyebrow}>YOUR CONTENT, YOUR YEAR</Text>
-            <Text style={styles.finaleTitle}>这些内容不是答案，{`\n`}是你留下的坐标。</Text>
-            <Text style={styles.finaleCopy}>完整数字、数据口径与独立年度高光，已经整理在数据大屏中。</Text>
+            <Text style={styles.finaleEyebrow}>YOUR CONTENT, STILL UNFOLDING</Text>
+            <Text style={styles.finaleTitle}>这些内容不是答案，{`\n`}是仍在展开的坐标。</Text>
+            <Text style={styles.finaleCopy}>{livingReport && profileLabels ? `当前样本更接近：${profileLabels}。` : "新的记录会继续改变这份内容报告。"}</Text>
             <Pressable
-              accessibilityLabel="进入数据大屏"
+              accessibilityLabel="进入持续报告"
               accessibilityRole="button"
               onPress={onEnterDashboard}
               style={({ pressed }) => [styles.dashboardButton, pressed && styles.buttonPressed, WEB_POINTER]}
             >
-              <Text style={styles.dashboardButtonText}>进入数据大屏</Text>
+              <Text style={styles.dashboardButtonText}>进入持续报告</Text>
               <ArrowRight color={color.white} size={20} />
             </Pressable>
           </View>
@@ -1606,6 +1618,42 @@ function SectionHeading({ chapter, eyebrow, title, copy }: { chapter: string; ey
       </View>
     </View>
   );
+}
+
+function findLivingChapter(report: LivingReport | null, id: LivingChapter["id"]): LivingChapter | null {
+  return report?.chapters.find((chapter) => chapter.id === id) ?? null;
+}
+
+function livingChapterCopy(chapter: LivingChapter | null, fallback: string, privacy: boolean): string {
+  if (!chapter) return fallback;
+  if (!privacy) return chapter.narrative;
+  switch (chapter.id) {
+    case "current": return "最近一段时间里，内容线索已经出现轮廓。";
+    case "shift": return "近期内容线索的占比正在发生变化。";
+    case "kept": return "列表之间存在可比较的交集，具体内容已隐藏。";
+    case "profile": return "当前样本显示出一些行为倾向，但具体内容已隐藏。";
+    default: return "新的记录会继续改变这一章。";
+  }
+}
+
+function livingHighlightLabel(key: keyof AnnualHighlightsData): string {
+  switch (key) {
+    case "first": return "最早留下";
+    case "last": return "最近新增";
+    case "peakDay": return "内容密度峰值";
+    case "longest": return "深看内容";
+    case "mostEngaged": return "互动线索";
+  }
+}
+
+function livingHighlightRule(key: keyof AnnualHighlightsData): string {
+  switch (key) {
+    case "first": return "最早的可靠行为时间";
+    case "last": return "最近的可靠行为时间";
+    case "peakDay": return "可靠行为时间的活跃峰值日";
+    case "longest": return "按可用时长字段保留";
+    case "mostEngaged": return "平台互动统计快照";
+  }
 }
 
 function StoryStream({
@@ -1940,11 +1988,11 @@ function StoryWidthGate({ onEnterDashboard }: { onEnterDashboard: () => void }) 
   return (
     <View style={styles.gateRoot} testID="story-width-gate">
       <View style={styles.gateMark}><Sparkles color={color.cyan} size={28} /></View>
-      <Text style={styles.chapterNo}>ANNUAL STORY / DESKTOP</Text>
+      <Text style={styles.chapterNo}>CONTENT STORY / DESKTOP</Text>
       <Text style={styles.gateTitle}>滚动故事需要至少 1024px 的窗口宽度。</Text>
-      <Text style={styles.gateCopy}>当前设备直接进入数据大屏，完整数字和年度高光仍然可用。</Text>
+      <Text style={styles.gateCopy}>当前设备直接进入持续报告，完整数字和变化线索仍然可用。</Text>
       <Pressable accessibilityRole="button" onPress={onEnterDashboard} style={({ pressed }) => [styles.dashboardButton, pressed && styles.buttonPressed, WEB_POINTER]}>
-        <Text style={styles.dashboardButtonText}>直接看数据</Text><ArrowRight color={color.white} size={20} />
+        <Text style={styles.dashboardButtonText}>直接看持续报告</Text><ArrowRight color={color.white} size={20} />
       </Pressable>
     </View>
   );
@@ -1954,11 +2002,11 @@ function StoryEmpty({ onEnterDashboard }: { onEnterDashboard: () => void }) {
   return (
     <View style={styles.gateRoot} testID="story-empty-state">
       <View style={styles.gateMark}><Sparkles color={color.cyan} size={28} /></View>
-      <Text style={styles.chapterNo}>ANNUAL STORY / LOCAL ONLY</Text>
-      <Text style={styles.gateTitle}>还没有可以讲述的内容。</Text>
-      <Text style={styles.gateCopy}>完成一次读取后，滚动故事会在进入内容库时出现。</Text>
+      <Text style={styles.chapterNo}>CONTENT STORY / LOCAL ONLY</Text>
+      <Text style={styles.gateTitle}>这一章还在形成。</Text>
+      <Text style={styles.gateCopy}>完成一次读取并积累带可靠行为时间的记录后，内容故事会在进入内容库时出现。</Text>
       <Pressable accessibilityRole="button" onPress={onEnterDashboard} style={({ pressed }) => [styles.dashboardButton, pressed && styles.buttonPressed, WEB_POINTER]}>
-        <Text style={styles.dashboardButtonText}>返回数据大屏</Text><ArrowRight color={color.white} size={20} />
+        <Text style={styles.dashboardButtonText}>返回持续报告</Text><ArrowRight color={color.white} size={20} />
       </Pressable>
     </View>
   );

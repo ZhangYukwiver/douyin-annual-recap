@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   Alert,
   FlatList,
   Linking,
@@ -44,6 +45,7 @@ import {
 } from "./src/components/workspace";
 import { AnnualScrollStory } from "./src/components/story/AnnualScrollStory";
 import { buildPersonalSummary } from "./src/domain/annualReport";
+import { buildLivingReport } from "./src/domain/livingReport";
 import {
   describeArchiveInspection,
   type PersonalArchiveInspection,
@@ -82,6 +84,7 @@ import {
   importPersonalArchive,
 } from "./src/services/importPersonalArchive";
 import { getDesktopCollectorConfig } from "./src/desktopRuntime";
+import { shouldAutoSync } from "./src/services/autoSync";
 import { colors } from "./src/theme";
 
 type ViewKey = "summary" | "highlights" | "records" | "sources";
@@ -139,7 +142,7 @@ const recordIcons = {
 } satisfies Record<PersonalRecordType, typeof History>;
 
 const navigationItems = [
-  { id: "summary", label: "总结", icon: Sparkles },
+  { id: "summary", label: "持续报告", icon: Sparkles },
   { id: "records", label: "记录", icon: History },
   { id: "sources", label: "数据源", icon: Link2 },
 ] as const;
@@ -659,6 +662,7 @@ function AppContent() {
   const [collectorStatus, setCollectorStatus] = useState<CollectorStatus | null>(null);
   const [collectorSnapshot, setCollectorSnapshot] = useState<CollectorSnapshot | null>(null);
   const [collectorBusy, setCollectorBusy] = useState(false);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
   const [stoppingSync, setStoppingSync] = useState(false);
   const [switchingAccount, setSwitchingAccount] = useState(false);
   const [collectorError, setCollectorError] = useState<string | null>(null);
@@ -668,6 +672,9 @@ function AppContent() {
   const syncConfirmationOpenRef = useRef(false);
   const accountSwitchConfirmationOpenRef = useRef(false);
   const lastAutoStoryVersionRef = useRef<string | null>(null);
+  const workspaceEnteredRef = useRef(false);
+  const autoSyncInFlightRef = useRef(false);
+  const autoSyncTriggerRef = useRef<() => void>(() => undefined);
 
   useEffect(() => () => {
     pollRequest.current += 1;
@@ -721,7 +728,7 @@ function AppContent() {
     const collectionState = displaySnapshot?.source === "collector"
       ? collectorStatus?.state === "complete"
         ? "complete"
-        : collectorStatus
+        : collectorStatus && ["partial", "error", "collecting", "launching_browser", "awaiting_login", "observing"].includes(collectorStatus.state)
           ? "partial"
           : "unknown"
       : "unknown";
@@ -731,6 +738,45 @@ function AppContent() {
       warnings: displaySnapshot?.warnings ?? [],
     });
   }, [collectorStatus?.state, displaySnapshot?.records, displaySnapshot?.source, displaySnapshot?.warnings]);
+
+  const livingReport = useMemo(() => {
+    if (!displaySnapshot) return null;
+    const collectionState = displaySnapshot.source === "collector"
+      ? collectorStatus?.state === "complete"
+        ? "complete"
+        : collectorStatus && ["partial", "error", "collecting", "launching_browser", "awaiting_login", "observing"].includes(collectorStatus.state)
+          ? "partial"
+          : "unknown"
+      : "unknown";
+    return buildLivingReport(displaySnapshot.records, {
+      source: displaySnapshot.source,
+      sourceUpdatedAt: displaySnapshot.updatedAt,
+      collectionState,
+      warnings: displaySnapshot.warnings,
+    });
+  }, [collectorStatus?.state, displaySnapshot?.records, displaySnapshot?.source, displaySnapshot?.updatedAt, displaySnapshot?.warnings]);
+
+  useEffect(() => {
+    const trigger = () => autoSyncTriggerRef.current();
+    if (Platform.OS === "web") {
+      if (typeof document === "undefined") return undefined;
+      const onVisibilityChange = () => {
+        if (document.visibilityState === "visible") trigger();
+      };
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      if (document.visibilityState === "visible") trigger();
+      return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+    }
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") trigger();
+    });
+    if (AppState.currentState === "active") trigger();
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (collectorToken && displaySnapshot?.source === "collector") autoSyncTriggerRef.current();
+  }, [autoSyncEnabled, collectorToken, displaySnapshot?.source]);
 
   useEffect(() => {
     if (storyOpen && (!personalSummary || personalSummary.status === "empty")) {
@@ -742,6 +788,15 @@ function AppContent() {
     const snapshot = await getCollectorRecords(baseUrl, token);
     if (requestId !== undefined && pollRequest.current !== requestId) return false;
     setCollectorSnapshot(snapshot);
+    if (workspaceEnteredRef.current && autoSyncInFlightRef.current) {
+      const version = getStoryDataVersion({
+        source: "collector",
+        records: snapshot.records,
+        warnings: snapshot.warnings,
+        updatedAt: snapshot.updatedAt,
+      });
+      if (version) lastAutoStoryVersionRef.current = version;
+    }
     return true;
   }
 
@@ -763,12 +818,14 @@ function AppContent() {
           if (!await refreshCollectorSnapshot(baseUrl, token, requestId)) return;
           if (pollRequest.current !== requestId) return;
           setCollectorBusy(false);
+          autoSyncInFlightRef.current = false;
           return;
         }
       }
     } catch (error) {
       if (pollRequest.current !== requestId) return;
       setCollectorBusy(false);
+      autoSyncInFlightRef.current = false;
       const message = collectorErrorMessage(error);
       setCollectorError(message);
       showAlert("无法读取同步状态", message);
@@ -791,11 +848,30 @@ function AppContent() {
     } catch (error) {
       if (pollRequest.current !== requestId) return;
       setCollectorBusy(false);
+      autoSyncInFlightRef.current = false;
       const message = collectorErrorMessage(error);
       setCollectorError(message);
       showAlert(incremental ? "无法增量读取记录" : "无法完整读取记录", message);
     }
   }
+
+  function triggerAutoSync() {
+    const token = collectorToken;
+    if (!token || !shouldAutoSync({
+      enabled: autoSyncEnabled,
+      connected: Boolean(token),
+      source: displaySnapshot?.source ?? null,
+      busy: collectorBusy,
+      inFlight: autoSyncInFlightRef.current,
+      switchingAccount,
+      stoppingSync,
+      state: collectorStatus?.state ?? null,
+    })) return;
+    autoSyncInFlightRef.current = true;
+    void beginSync(collectorUrl, token, true);
+  }
+
+  autoSyncTriggerRef.current = triggerAutoSync;
 
   async function endSync(baseUrl: string, token: string) {
     const requestId = pollRequest.current + 1;
@@ -981,6 +1057,9 @@ function AppContent() {
     const token = collectorToken;
     if (!token) return;
     pollRequest.current += 1;
+    autoSyncInFlightRef.current = false;
+    workspaceEnteredRef.current = false;
+    lastAutoStoryVersionRef.current = null;
     setCollectorBusy(true);
     let stopError: string | null = null;
     try {
@@ -1004,6 +1083,9 @@ function AppContent() {
     if (!collectorToken || switchingAccount || collectorBusy) return;
     const requestId = pollRequest.current + 1;
     pollRequest.current = requestId;
+    autoSyncInFlightRef.current = false;
+    workspaceEnteredRef.current = false;
+    lastAutoStoryVersionRef.current = null;
     setSwitchingAccount(true);
     setCollectorBusy(true);
     setCollectorError(null);
@@ -1087,6 +1169,7 @@ function AppContent() {
       (confirmed) => {
         if (!confirmed) return;
         setStoryOpen(false);
+        autoSyncInFlightRef.current = false;
         if (collectorToken) {
           const requestId = pollRequest.current + 1;
           const token = collectorToken;
@@ -1150,6 +1233,7 @@ function AppContent() {
   }
 
   function enterWorkspace() {
+    workspaceEnteredRef.current = true;
     const storyVersion = getStoryDataVersion(displaySnapshot);
     setActiveView("summary");
     if (
@@ -1184,6 +1268,7 @@ function AppContent() {
           onEnterDashboard={enterDashboard}
           privacy={privacy}
           records={workspaceRecords}
+          livingReport={livingReport}
           report={personalSummary}
           sourceLabel={sourceLabel}
         />
@@ -1213,6 +1298,8 @@ function AppContent() {
           onStopSync={() => collectorToken ? endSync(collectorUrl, collectorToken) : Promise.resolve()}
           onStopObservation={() => collectorToken ? endObservation(collectorUrl, collectorToken) : Promise.resolve()}
           onSwitchAccount={confirmAccountSwitch}
+          autoSyncEnabled={autoSyncEnabled}
+          onToggleAutoSync={() => setAutoSyncEnabled((value) => !value)}
           observing={collectorStatus?.state === "observing"}
           pairingCode={pairingCode}
           pickingArchive={pickingArchive}
@@ -1242,7 +1329,7 @@ function AppContent() {
           onTogglePrivacy={() => setPrivacy((value) => !value)}
           privacy={privacy}
           records={workspaceRecords}
-          report={personalSummary}
+          report={livingReport}
           sourceLabel={sourceLabel}
           status={collectorStatus}
           updatedAt={displaySnapshot?.updatedAt ?? null}

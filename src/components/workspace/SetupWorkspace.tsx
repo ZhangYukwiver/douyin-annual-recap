@@ -68,6 +68,8 @@ export interface SetupWorkspaceProps {
   onClearCache: () => void;
   onPickArchive: () => Promise<void>;
   onEnterWorkspace: () => void;
+  autoSyncEnabled: boolean;
+  onToggleAutoSync: () => void;
 }
 
 const webPointer = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
@@ -100,6 +102,8 @@ export function SetupWorkspace({
   onClearCache,
   onPickArchive,
   onEnterWorkspace,
+  autoSyncEnabled,
+  onToggleAutoSync,
 }: SetupWorkspaceProps) {
   const { width } = useWindowDimensions();
   const compact = width < 860;
@@ -162,7 +166,7 @@ export function SetupWorkspace({
             </View>
             <Text style={styles.eyebrow}>LOCAL CONTENT ARCHIVE</Text>
             <Text style={[styles.introTitle, phone && styles.introTitlePhone]}>连接账号记录，建立你的内容档案。</Text>
-            <Text style={styles.introMeta}>数据留在本机。连接和读取由你主动触发。</Text>
+            <Text style={styles.introMeta}>数据留在本机。连接由你主动触发，前台增量读取可随时暂停。</Text>
 
             <View style={[styles.steps, compact && styles.stepsCompact]}>
               <Step
@@ -358,6 +362,25 @@ export function SetupWorkspace({
                 <Text style={styles.secondaryButtonText}>{observing ? "停止监听" : "手动监听"}</Text>
               </Pressable>
             </View>
+
+            {connected && snapshotSource !== "archive" ? (
+              <Pressable
+                accessibilityLabel={autoSyncEnabled ? "关闭前台自动增量读取" : "开启前台自动增量读取"}
+                accessibilityRole="switch"
+                accessibilityState={{ checked: autoSyncEnabled }}
+                onPress={onToggleAutoSync}
+                style={({ pressed }) => [styles.autoSyncRow, pressed && styles.buttonPressed, webPointer]}
+              >
+                <View style={[styles.autoSyncSwitch, autoSyncEnabled && styles.autoSyncSwitchActive]}>
+                  <View style={[styles.autoSyncThumb, autoSyncEnabled && styles.autoSyncThumbActive]} />
+                </View>
+                <View style={styles.autoSyncCopy}>
+                  <Text style={styles.autoSyncTitle}>前台自动增量读取</Text>
+                  <Text style={styles.autoSyncDetail}>打开应用或回到前台时读取新记录；应用关闭后不会后台运行。</Text>
+                </View>
+                <Text style={[styles.autoSyncState, autoSyncEnabled && styles.autoSyncStateActive]}>{autoSyncEnabled ? "已开启" : "已暂停"}</Text>
+              </Pressable>
+            ) : null}
 
             <View style={styles.utilityRow}>
               <Pressable
@@ -586,6 +609,16 @@ const styles = StyleSheet.create({
   collectionActions: { flexDirection: "row", flexWrap: "wrap", gap: 9, marginTop: 18 },
   collectionActionsPhone: { flexDirection: "column" },
   collectionPrimary: { minWidth: 174 },
+  autoSyncRow: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12, paddingHorizontal: 12, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surface },
+  autoSyncSwitch: { width: 34, height: 20, justifyContent: "center", paddingHorizontal: 2, borderRadius: 10, backgroundColor: color.surfaceMuted },
+  autoSyncSwitchActive: { backgroundColor: color.green },
+  autoSyncThumb: { width: 16, height: 16, borderRadius: 8, backgroundColor: color.textMuted },
+  autoSyncThumbActive: { alignSelf: "flex-end", backgroundColor: color.white },
+  autoSyncCopy: { flex: 1, minWidth: 0 },
+  autoSyncTitle: { color: color.textSecondary, fontSize: 11, fontWeight: "800" },
+  autoSyncDetail: { color: color.textMuted, fontSize: 9, lineHeight: 14, marginTop: 3 },
+  autoSyncState: { color: color.textMuted, fontSize: 9, fontWeight: "900" },
+  autoSyncStateActive: { color: color.green },
   stopButton: { backgroundColor: color.danger },
   secondaryButton: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 14, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surface },
   secondaryButtonText: { color: color.textSecondary, fontSize: 12, fontWeight: "800" },
