@@ -464,6 +464,33 @@ describe("hidden likes and favorites", () => {
     }
   });
 
+  it("times out when the list page stops answering script evaluations", async () => {
+    vi.useFakeTimers();
+    const page = {
+      close: vi.fn(() => new Promise(() => undefined)),
+      evaluate: vi.fn(() => new Promise(() => undefined)),
+      goto: vi.fn(async () => undefined),
+      on: vi.fn(),
+    };
+
+    try {
+      const collection = collectDirectRecordPages(
+        { newPage: vi.fn(async () => page) },
+        "liked_videos",
+        vi.fn(),
+      );
+      const rejection = expect(collection).rejects.toMatchObject({ code: "page_timeout" });
+
+      await vi.runAllTimersAsync();
+      await rejection;
+
+      expect(page.evaluate).toHaveBeenCalledTimes(1);
+      expect(page.close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the favorites collection route without requiring a visible browser", async () => {
     let onResponse;
     const page = {
