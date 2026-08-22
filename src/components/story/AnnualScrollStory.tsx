@@ -95,6 +95,16 @@ const NOTE_HEIGHT = 240;
 const OPENING_LOGO_SCALE = 1.1;
 const OPENING_LOGO_WIDTH = NOTE_WIDTH * OPENING_LOGO_SCALE;
 const OPENING_LOGO_HEIGHT = NOTE_HEIGHT * OPENING_LOGO_SCALE;
+const OPENING_PARTICLE_COLORS = [
+  { text: "#25F4EE", border: "rgba(37,244,238,0.48)", surface: "rgba(37,244,238,0.10)" },
+  { text: "#FE2C55", border: "rgba(254,44,85,0.48)", surface: "rgba(254,44,85,0.10)" },
+  { text: "#B8F500", border: "rgba(184,245,0,0.48)", surface: "rgba(184,245,0,0.10)" },
+  { text: "#FFB000", border: "rgba(255,176,0,0.48)", surface: "rgba(255,176,0,0.10)" },
+  { text: "#FF5DCE", border: "rgba(255,93,206,0.48)", surface: "rgba(255,93,206,0.10)" },
+  { text: "#6D8CFF", border: "rgba(109,140,255,0.48)", surface: "rgba(109,140,255,0.10)" },
+  { text: "#52F59A", border: "rgba(82,245,154,0.48)", surface: "rgba(82,245,154,0.10)" },
+  { text: "#FFEE58", border: "rgba(255,238,88,0.48)", surface: "rgba(255,238,88,0.10)" },
+] as const;
 const NOTE_VIEWBOX_WIDTH = 220;
 const NOTE_VIEWBOX_HEIGHT = 240;
 const NOTE_PATH = "M121 18H158C159 43 177 64 204 70V105C187 103 171 98 158 89V170C158 203 131 228 98 228C65 228 38 204 38 173C38 142 63 117 95 117C104 117 113 119 121 123V160C114 155 106 152 98 152C84 152 73 162 73 175C73 188 84 198 98 198C112 198 124 188 124 174L121 18Z";
@@ -1128,6 +1138,7 @@ export function AnnualScrollStory({
                   {openingParticles.map((item, index) => {
                     const layout = particleLayouts[index];
                     if (!layout) return null;
+                    const particleColor = openingParticleColor(item);
                     const displayLabel = truncateOpeningParticleLabel(item.label, OPENING_LABEL_MAX_LENGTH);
                     const hidden = item.revealStep > openingStep;
                     const itemHeight = openingParticleHeight(layout.fontSize);
@@ -1181,7 +1192,12 @@ export function AnnualScrollStory({
                             },
                           ]}
                         >
-                          <View style={styles.openingBubbleSurface} />
+                          <View
+                            style={[styles.openingBubbleSurface, {
+                              backgroundColor: particleColor.surface,
+                              borderColor: particleColor.border,
+                            }]}
+                          />
                           <View style={[styles.openingBubbleGlow, OPENING_BORDER_GLOW_WEB]} />
                         </Animated.View>
                         <Text
@@ -1191,6 +1207,7 @@ export function AnnualScrollStory({
                             WEB_NO_WRAP,
                             {
                               alignSelf: "stretch",
+                              color: particleColor.text,
                               marginHorizontal: bubbleInset + 6,
                               fontSize: layout.fontSize,
                               lineHeight: itemHeight,
@@ -2252,6 +2269,11 @@ function hashString(value: string): number {
     hash = Math.imul(hash, 16_777_619);
   }
   return hash >>> 0;
+}
+
+function openingParticleColor(item: OpeningParticle): (typeof OPENING_PARTICLE_COLORS)[number] {
+  // 用词条 key 做种子，保留随机感，同时避免重渲染时跳色。
+  return OPENING_PARTICLE_COLORS[hashString(`${item.key}:${item.revealOrder}`) % OPENING_PARTICLE_COLORS.length]!;
 }
 
 function fallbackColor(value: string): string {
