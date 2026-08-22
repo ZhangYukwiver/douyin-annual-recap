@@ -59,6 +59,8 @@ const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
 const MAX_SIGNER_OUTPUT_BYTES = 64 * 1024;
 const SIGNER_TIMEOUT_MS = 8_000;
 const DIRECT_LIST_RESPONSE_TIMEOUT_MS = 12_000;
+const DIRECT_LIST_PAGE_OPERATION_TIMEOUT_MS = 15_000;
+const DIRECT_LIST_CLOSE_TIMEOUT_MS = 5_000;
 const MACOS_SIGNER_PROFILE = "(version 1) (allow default) (deny network*) (deny file-write*)";
 
 export class DirectHistoryError extends Error {
@@ -66,6 +68,31 @@ export class DirectHistoryError extends Error {
     super(message);
     this.name = "DirectHistoryError";
     this.code = code;
+  }
+}
+
+function settleWithin(operation, timeoutMs, onTimeout) {
+  let timeout;
+  const task = Promise.resolve().then(operation);
+  task.catch(() => undefined);
+  const deadline = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(onTimeout()), timeoutMs);
+  });
+  return Promise.race([task, deadline]).finally(() => clearTimeout(timeout));
+}
+
+async function closeWithin(resource, timeoutMs) {
+  if (!resource || typeof resource.close !== "function") return;
+  const task = Promise.resolve().then(() => resource.close());
+  task.catch(() => undefined);
+  let timeout;
+  const deadline = new Promise((resolve) => {
+    timeout = setTimeout(resolve, timeoutMs);
+  });
+  try {
+    await Promise.race([task, deadline]);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -632,7 +659,7 @@ export async function collectDirectRecordPages(context, type, onPage) {
     let stalled = 0;
     while (!terminal && !responseError && stalled < 20) {
       const previousResponseCount = responseCount;
-      await page.evaluate(() => {
+      await settleWithin(() => page.evaluate(() => {
         const candidates = [document.scrollingElement, ...document.querySelectorAll("*")]
           .filter((element) => {
             if (!element || element.scrollHeight <= element.clientHeight + 200) return false;
@@ -646,7 +673,10 @@ export async function collectDirectRecordPages(context, type, onPage) {
         const surface = candidates[0] ?? document.scrollingElement;
         surface?.scrollTo?.(0, surface.scrollHeight);
         window.scrollTo(0, document.documentElement.scrollHeight);
-      });
+      }), DIRECT_LIST_PAGE_OPERATION_TIMEOUT_MS, () => new DirectHistoryError(
+        "page_timeout",
+        `${config.label}页面操作超时，已停止读取。`,
+      ));
       await new Promise((resolve) => setTimeout(resolve, 800));
       await processQueuedResponses().catch((error) => { responseError = error; });
       stalled = responseCount > previousResponseCount ? 0 : stalled + 1;
@@ -658,7 +688,7 @@ export async function collectDirectRecordPages(context, type, onPage) {
     if (!terminal) throw new DirectHistoryError("pagination_missing", `${config.label}未到达末页，已停止且未保存本次结果。`);
     return responseCount;
   } finally {
-    await page.close().catch(() => undefined);
+    await closeWithin(page, DIRECT_LIST_CLOSE_TIMEOUT_MS).catch(() => undefined);
   }
 }
 

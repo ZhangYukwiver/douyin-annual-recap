@@ -44,6 +44,7 @@ const ENDPOINT_ACTIVATION_WAIT_MS = 8_000;
 const RESPONSE_DRAIN_WAIT_MS = 12_000;
 const RESPONSE_PROGRESS_SILENCE_MS = 20_000;
 const RESPONSE_REPLAY_TIMEOUT_MS = 8_000;
+const CONTEXT_CLOSE_TIMEOUT_MS = 5_000;
 const MANUAL_OBSERVATION_WARNING = "手动监听模式：仅保存你在独立浏览器中实际浏览到的数据，完整性不会自动验证。";
 const DIRECT_COMPLETE_WARNING_PREFIX = "无界面读取完成：";
 
@@ -87,6 +88,46 @@ function safeMessage(error, fallback) {
   if (error instanceof CollectorAdapterError) return error.message;
   if (error instanceof Error && error.name === "TimeoutError") return "抖音网页加载超时，请检查网络后重试。";
   return fallback;
+}
+
+async function closeContextWithin(context) {
+  if (!context || typeof context.close !== "function") return;
+  const closeTask = Promise.resolve().then(() => context.close());
+  closeTask.catch(() => undefined);
+  let timeout;
+  let completed = false;
+  const deadline = new Promise((resolve) => {
+    timeout = setTimeout(resolve, CONTEXT_CLOSE_TIMEOUT_MS);
+  });
+  try {
+    await Promise.race([
+      closeTask.then(() => { completed = true; }, () => { completed = true; }),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (completed) return;
+
+  let browser = null;
+  try {
+    browser = typeof context.browser === "function" ? context.browser() : null;
+  } catch {
+    return;
+  }
+  if (!browser || typeof browser.close !== "function") return;
+  const browserTask = Promise.resolve().then(() => browser.close()).catch(() => undefined);
+  let browserTimeout;
+  try {
+    await Promise.race([
+      browserTask,
+      new Promise((resolve) => {
+        browserTimeout = setTimeout(resolve, CONTEXT_CLOSE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(browserTimeout);
+  }
 }
 
 function mergeRecordList(type, existingRecords, fetchedRecords) {
@@ -1329,7 +1370,7 @@ export class DouyinCollector {
     const visibleContext = this.context;
     if (visibleContext) {
       this.context = null;
-      await visibleContext.close();
+      await closeContextWithin(visibleContext);
       this.updateStatus({ browserOpen: false });
     }
     const context = await this.openDirectContext();
@@ -1472,7 +1513,7 @@ export class DouyinCollector {
         updatedAt: this.snapshot.updatedAt,
       });
     } finally {
-      await context.close().catch(() => undefined);
+      await closeContextWithin(context);
     }
   }
 
@@ -1533,6 +1574,6 @@ export class DouyinCollector {
     if (!this.context) return;
     const context = this.context;
     this.context = null;
-    await context.close().catch(() => undefined);
+    await closeContextWithin(context);
   }
 }
