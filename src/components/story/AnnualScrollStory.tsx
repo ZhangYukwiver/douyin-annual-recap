@@ -943,6 +943,17 @@ export function AnnualScrollStory({
   const storyScrollEnabled = openingContinued || (openingMessageReady && !openingStacked);
 
   useEffect(() => {
+    if (Platform.OS !== "web" || !openingStacked || openingContinuedRef.current || typeof window === "undefined") return undefined;
+    const blockOpeningWheel = (event: WheelEvent) => {
+      if (openingContinuedRef.current) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("wheel", blockOpeningWheel, { capture: true, passive: false });
+    return () => window.removeEventListener("wheel", blockOpeningWheel, { capture: true });
+  }, [openingContinued, openingStacked]);
+
+  useEffect(() => {
     if (Platform.OS !== "web") return undefined;
     const scroller = scrollRef.current?.getScrollableNode?.() as HTMLElement | undefined;
     if (!scroller) return undefined;
