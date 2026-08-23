@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Animated,
   Easing,
@@ -19,12 +19,14 @@ import {
 } from "react-native";
 import {
   ArrowRight,
-  Clock3,
+  Flame,
+  Heart,
+  Hourglass,
   LayoutDashboard,
+  MoonStar,
   Play,
   Sparkles,
-  Star,
-  Users,
+  Sunrise,
   X,
 } from "lucide-react-native";
 import { Mesh, Program, Renderer, Triangle } from "ogl";
@@ -55,6 +57,7 @@ import { workspaceColors as color, workspaceRadii as radius } from "../workspace
 import {
   buildStoryModel,
   selectOpeningCovers,
+  topStreamTopic,
   type StoryContentItem,
   type StoryHour,
   type StoryModel,
@@ -62,9 +65,15 @@ import {
   type StoryOverlapKey,
   type StoryTopic,
 } from "./storyModel";
+import { ConfluenceFlow } from "./ConfluenceFlow";
 import { DesktopCardSwap, type DesktopStoryStream } from "./DesktopCardSwap";
+import { fluidSurfacePaths, type FluidSurfacePaths } from "./fluidSurface";
 import { OpeningReelGallery } from "./OpeningReelGallery";
 import { PixelSwap } from "./PixelSwap";
+import { RhythmEqualizer } from "./RhythmEqualizer";
+import { SceneSection } from "./StoryBridge";
+import { STORY_PARTICLE_COLORS, storyParticleColor, type StoryParticleColor } from "./storyPalette";
+import { TopicBubbleField } from "./TopicBubbleField";
 import {
   fillOpeningRows,
   openingBorderGlowPose,
@@ -78,6 +87,142 @@ import {
 } from "./openingParticlePhysics";
 
 const MIN_STORY_WIDTH = 1024;
+// 与 DesktopCardSwap 的舞台同色，第二章之后的章节都落在这块黑底上。
+const STAGE_CANVAS = "#090B0F";
+const STAGE_TEXT = "#F4F6FA";
+// 物件向右越过画幅的像素数，StoryBridge 的落点几何用同一个值。
+// 上限由第五章定：ConfluenceFlow 把落点节点放在自身宽度的 90%，出血再大就把它推出画幅。
+const STAGE_BLEED = 24;
+
+// 每一章一套背景：墨底都留在 #09 系，但光和质地一路从深夜走到破晓；
+// 转场屏的背景是前后两章的交叠，所以「每屏不同」本身也在叙事。
+// 质地一律用能自铺的 repeating-* 渐变，省掉 backgroundSize（RN Web 只稳定透传 backgroundImage）。
+interface StageAtmosphere {
+  base: string;
+  layers: readonly string[];
+}
+
+type StageAtmosphereKey =
+  | "bridgeRhythm"
+  | "rhythm"
+  | "bridgePreference"
+  | "preference"
+  | "bridgeKept"
+  | "kept"
+  | "bridgeContinuation"
+  | "continuation"
+  | "finale";
+
+const STAGE_ATMOSPHERES: Record<StageAtmosphereKey, StageAtmosphere> = {
+  // 02 → 03：左边还留着桌面那屏的青光，右边已经压进夜里的蓝紫。
+  bridgeRhythm: {
+    base: "#070A10",
+    layers: [
+      "radial-gradient(circle at 22% 44%, rgba(37,244,238,0.11), transparent 32%)",
+      "radial-gradient(ellipse 90% 74% at 90% 66%, rgba(88,110,255,0.10), transparent 60%)",
+      "linear-gradient(100deg, #090B0F 0%, #070A10 100%)",
+    ],
+  },
+  // 03 深夜：光从画幅底部漫上来，同心环大致压在表盘所在的位置。
+  rhythm: {
+    base: "#070A10",
+    layers: [
+      "repeating-radial-gradient(circle at 75% 54%, transparent 0 57px, rgba(244,246,250,0.024) 57px 58px)",
+      "radial-gradient(ellipse 130% 70% at 50% 112%, rgba(37,244,238,0.13), transparent 62%)",
+      "radial-gradient(circle at 78% 44%, rgba(37,244,238,0.06), transparent 40%)",
+    ],
+  },
+  // 03 → 04：深夜的冷光退到左下，右边开始冒出粉和青柠。
+  bridgePreference: {
+    base: "#0A0910",
+    layers: [
+      "radial-gradient(ellipse 84% 92% at 10% 104%, rgba(37,244,238,0.11), transparent 62%)",
+      "radial-gradient(circle at 72% 30%, rgba(255,93,206,0.08), transparent 38%)",
+      "radial-gradient(circle at 90% 74%, rgba(184,245,0,0.06), transparent 34%)",
+      "linear-gradient(96deg, #070A10 0%, #0A0910 100%)",
+    ],
+  },
+  // 04 星丛：六团标签色光斑 + 交叉细纹，全片最杂最亮的一屏。
+  preference: {
+    base: "#0A0910",
+    layers: [
+      "repeating-linear-gradient(45deg, rgba(244,246,250,0.035) 0 1px, transparent 1px 5px)",
+      "repeating-linear-gradient(-45deg, rgba(244,246,250,0.025) 0 1px, transparent 1px 5px)",
+      "radial-gradient(circle at 74% 42%, rgba(37,244,238,0.09), transparent 26%)",
+      "radial-gradient(circle at 90% 25%, rgba(254,44,85,0.07), transparent 22%)",
+      "radial-gradient(circle at 63% 19%, rgba(184,245,0,0.05), transparent 20%)",
+      "radial-gradient(circle at 90% 62%, rgba(255,176,0,0.05), transparent 22%)",
+      "radial-gradient(circle at 60% 67%, rgba(255,93,206,0.05), transparent 20%)",
+      "radial-gradient(circle at 76% 78%, rgba(109,140,255,0.05), transparent 22%)",
+    ],
+  },
+  // 04 → 05：散开的彩色光斑往右收，聚成一条横向亮带。
+  bridgeKept: {
+    base: "#080B0E",
+    layers: [
+      "repeating-linear-gradient(to bottom, rgba(244,246,250,0.012) 0 1px, transparent 1px 7px)",
+      "radial-gradient(circle at 18% 28%, rgba(255,93,206,0.07), transparent 30%)",
+      "radial-gradient(circle at 34% 72%, rgba(184,245,0,0.05), transparent 28%)",
+      "radial-gradient(ellipse 70% 42% at 88% 50%, rgba(37,244,238,0.10), transparent 66%)",
+      "linear-gradient(94deg, #0A0910 0%, #080B0E 100%)",
+    ],
+  },
+  // 05 河谷：一条横贯中部的宽光带就是三条河交汇的位置，层理给沉积感。
+  kept: {
+    base: "#080B0E",
+    layers: [
+      "repeating-linear-gradient(to bottom, rgba(244,246,250,0.020) 0 1px, transparent 1px 7px)",
+      "radial-gradient(ellipse 76% 34% at 62% 50%, rgba(37,244,238,0.12), transparent 70%)",
+      "radial-gradient(ellipse 40% 28% at 100% 22%, rgba(254,44,85,0.06), transparent 70%)",
+      "radial-gradient(ellipse 40% 28% at 100% 78%, rgba(244,196,94,0.06), transparent 70%)",
+    ],
+  },
+  // 05 → 06：全片唯一一次色温翻转，冷光留在左侧，右下角起琥珀。
+  bridgeContinuation: {
+    base: "#0C0A09",
+    layers: [
+      "repeating-linear-gradient(to bottom, rgba(244,246,250,0.014) 0 1px, transparent 1px 3px)",
+      "radial-gradient(ellipse 62% 42% at 12% 50%, rgba(37,244,238,0.09), transparent 68%)",
+      "radial-gradient(ellipse 78% 74% at 94% 92%, rgba(244,196,94,0.12), transparent 64%)",
+      "linear-gradient(92deg, #080B0E 0%, #0C0A09 100%)",
+    ],
+  },
+  // 06 破晓：暖光从卡组所在的右下角升起，密扫描线像旧档案的纸纹。
+  continuation: {
+    base: "#0C0A09",
+    layers: [
+      "repeating-linear-gradient(to bottom, rgba(244,246,250,0.026) 0 1px, transparent 1px 3px)",
+      "radial-gradient(ellipse 96% 76% at 84% 96%, rgba(244,196,94,0.13), transparent 62%)",
+      "radial-gradient(ellipse 60% 50% at 96% 62%, rgba(254,44,85,0.08), transparent 66%)",
+      "radial-gradient(circle at 22% 24%, rgba(37,244,238,0.05), transparent 40%)",
+    ],
+  },
+  // 尾声：回到调色板真正的黑，青红两团光错开半格（就是标题重影那半格），暗角收视线。
+  finale: {
+    base: "#050506",
+    layers: [
+      "repeating-linear-gradient(45deg, rgba(244,246,250,0.028) 0 1px, transparent 1px 6px)",
+      "radial-gradient(ellipse 104% 84% at 50% 50%, transparent 38%, rgba(0,0,0,0.74) 100%)",
+      "radial-gradient(circle at 46% 43%, rgba(37,244,238,0.13), transparent 34%)",
+      "radial-gradient(circle at 55% 57%, rgba(254,44,85,0.11), transparent 34%)",
+    ],
+  },
+};
+
+// backgroundImage 只有 react-native-web 认；原生端退回纯底色。
+function atmosphereStyle(key: StageAtmosphereKey): ViewStyle {
+  const atmosphere = STAGE_ATMOSPHERES[key];
+  if (Platform.OS !== "web") return { backgroundColor: atmosphere.base };
+  return {
+    backgroundColor: atmosphere.base,
+    backgroundImage: atmosphere.layers.join(", "),
+  } as unknown as ViewStyle;
+}
+
+function atmosphereCss(key: StageAtmosphereKey): React.CSSProperties {
+  const atmosphere = STAGE_ATMOSPHERES[key];
+  return { backgroundColor: atmosphere.base, backgroundImage: atmosphere.layers.join(", ") };
+}
 const CHAPTER_COUNT = 6;
 const OPENING_STEP_COUNT = 12;
 const OPENING_PARTICLE_SCALE = 1.28;
@@ -95,35 +240,44 @@ const NOTE_HEIGHT = 240;
 const OPENING_LOGO_SCALE = 1.1;
 const OPENING_LOGO_WIDTH = NOTE_WIDTH * OPENING_LOGO_SCALE;
 const OPENING_LOGO_HEIGHT = NOTE_HEIGHT * OPENING_LOGO_SCALE;
-const OPENING_PARTICLE_COLORS = [
-  { text: "#25F4EE", border: "rgba(37,244,238,0.48)", surface: "rgba(37,244,238,0.10)" },
-  { text: "#FE2C55", border: "rgba(254,44,85,0.48)", surface: "rgba(254,44,85,0.10)" },
-  { text: "#B8F500", border: "rgba(184,245,0,0.48)", surface: "rgba(184,245,0,0.10)" },
-  { text: "#FFB000", border: "rgba(255,176,0,0.48)", surface: "rgba(255,176,0,0.10)" },
-  { text: "#FF5DCE", border: "rgba(255,93,206,0.48)", surface: "rgba(255,93,206,0.10)" },
-  { text: "#6D8CFF", border: "rgba(109,140,255,0.48)", surface: "rgba(109,140,255,0.10)" },
-  { text: "#52F59A", border: "rgba(82,245,154,0.48)", surface: "rgba(82,245,154,0.10)" },
-  { text: "#FFEE58", border: "rgba(255,238,88,0.48)", surface: "rgba(255,238,88,0.10)" },
-] as const;
 const NOTE_VIEWBOX_WIDTH = 220;
 const NOTE_VIEWBOX_HEIGHT = 240;
 const NOTE_PATH = "M121 18H158C159 43 177 64 204 70V105C187 103 171 98 158 89V170C158 203 131 228 98 228C65 228 38 204 38 173C38 142 63 117 95 117C104 117 113 119 121 123V160C114 155 106 152 98 152C84 152 73 162 73 175C73 188 84 198 98 198C112 198 124 188 124 174L121 18Z";
 const OPENING_CURSOR_LOGO_URI = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="-14 -14 248 268"><path d="${NOTE_PATH}" fill="#25F4EE" transform="translate(-7 5)"/><path d="${NOTE_PATH}" fill="#FE2C55" transform="translate(7 -4)"/><path d="${NOTE_PATH}" fill="#F7F7F8"/></svg>`)}`;
-const USER_DESKTOP_COPY_URI = (require("./assets/user-desktop.jpg") as { uri: string }).uri;
 const USER_DESKTOP_WALLPAPER_URI = (require("./assets/user-desktop-wallpaper.jpg") as { uri: string }).uri;
-// ReactBits 示例算法；网格密度按当前视觉反馈调整。
+// ReactBits PixelTrail 演示页参数（maxAge 250 / interpolate 5）；网格密度按当前视觉反馈调整。
 const OPENING_PIXEL_TRAIL_GRID_SIZE = 42;
-const OPENING_PIXEL_TRAIL_INTERPOLATE = 2.8;
-const OPENING_PIXEL_TRAIL_SIZE = 0.08;
+const OPENING_PIXEL_TRAIL_INTERPOLATE = 5;
+// 演示页 trailSize 0.1 是对 650px 小画布调的（笔刷≈65px）；我们全屏 1280+ 同比例会到 128px，
+// 轨迹长度（手速×250ms）却不随视口变，显得短粗。取 0.05 让常规窗口下笔刷绝对尺寸与演示页一致。
+const OPENING_PIXEL_TRAIL_SIZE = 0.05;
 const OPENING_PIXEL_TRAIL_MAX_AGE = 250;
 const OPENING_PIXEL_TRAIL_INTENSITY = 0.2;
-const LIQUID_WAVE_PATH = "M-120 -2C-110 -2 -100 22 -90 22S-70 4 -60 4S-40 16 -30 16S-10 -2 0 -2S20 22 30 22S50 4 60 4S80 16 90 16S110 -2 120 -2S140 22 150 22S170 4 180 4S200 16 210 16S230 -2 240 -2S260 22 270 22S290 4 300 4S320 16 330 16S350 -2 360 -2";
-const LIQUID_PATH = `${LIQUID_WAVE_PATH}L360 260L-120 260Z`;
-const CURTAIN_WAVE_PATHS = [
-  "M-120 18C-107 18 -95 -2 -82 -2C-57 -2 -33 24 -8 24C6 24 20 8 34 8C49 8 63 17 78 17C93 17 107 6 122 6C140 6 158 22 176 22C201 22 225 -1 250 -1C287 -1 323 18 360 18L360 -80L-120 -80Z",
-  "M-120 16C-111 16 -103 7 -94 7C-77 7 -59 22 -42 22C-12 22 18 -2 48 -2C69 -2 91 20 112 20C128 20 144 8 160 8C177 8 193 28 210 28C236 28 262 3 288 3C312 3 336 16 360 16L360 -80L-120 -80Z",
-  "M-120 20C-101 20 -81 2 -62 2C-35 2 -9 16 18 16C35 16 53 9 70 9C86 9 102 30 118 30C138 30 158 -2 178 -2C198 -2 218 21 238 21C261 21 285 6 308 6C325 6 343 20 360 20L360 -80L-120 -80Z",
-] as const;
+// 方向分色：向左拖出红色、向右拖出青色（抖音色差）。
+const OPENING_PIXEL_TRAIL_LEFT_RGB = "217,14,32";
+const OPENING_PIXEL_TRAIL_RIGHT_RGB = "37,244,238";
+const OPENING_PIXEL_TRAIL_GOO_ID = "opening-pixel-trail-goo";
+// 演示页 goo strength 2 是对着 13px 格子调的；按格子尺寸等比换算，否则阈值会把大格子切出残块。
+const OPENING_PIXEL_TRAIL_GOO_RATIO = 2 / 13;
+// 液面几何：注意符 viewBox 坐标系里的采样跨度与封口边。
+const FLUID_FILL_SURFACE = {
+  baselineY: 8,
+  amplitude: 16,
+  idleAmplitude: 5,
+  spanStart: -120,
+  spanEnd: 360,
+  closeY: 260,
+} as const;
+const FLUID_CURTAIN_SURFACE = {
+  baselineY: 12,
+  amplitude: 26,
+  idleAmplitude: 8,
+  spanStart: -120,
+  spanEnd: 360,
+  closeY: -60,
+} as const;
+// openingReveal 的满速约 0.3/s（easeInOut 峰值），映射到扰动强度 1。
+const FLUID_FULL_AGITATION_VELOCITY = 0.28;
 const LOGO_ENTRANCE_FRAGMENTS = [
   { key: "cap", top: -12, height: 72, revealAt: 0.02, arriveAt: 0.42, fromX: -72, fromY: 16, fromRotation: -7, overshootX: 8, color: "#25F4EE" },
   { key: "shoulder", top: 48, height: 70, revealAt: 0.07, arriveAt: 0.47, fromX: 64, fromY: -12, fromRotation: 6, overshootX: -7, color: "#FE2C55" },
@@ -209,14 +363,6 @@ const SvgGroup = React.forwardRef<React.ComponentRef<typeof G>, SvgGroupProps>(f
   return <G ref={ref} {...props} />;
 });
 const AnimatedSvgGroup = Animated.createAnimatedComponent(SvgGroup);
-type SvgPathProps = React.ComponentProps<typeof Path> & { collapsable?: boolean };
-const SvgPath = React.forwardRef<React.ComponentRef<typeof Path>, SvgPathProps>(function SvgPath(
-  { collapsable: _collapsable, ...props },
-  ref,
-) {
-  return <Path ref={ref} {...props} />;
-});
-const AnimatedSvgPath = Animated.createAnimatedComponent(SvgPath);
 const ABSOLUTE_FILL: ViewStyle = { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 };
 const WEB_POINTER = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
 const OPENING_LOGO_CURSOR = Platform.OS === "web"
@@ -226,14 +372,37 @@ const DOM_CANVAS = "canvas" as unknown as React.ElementType;
 const OPENING_PIXEL_TRAIL_STYLE: React.CSSProperties = {
   position: "absolute",
   zIndex: 24,
-  top: 68,
+  // 铺满全屏：顶栏 zIndex 30 在画布之上，靠近顶部的方块会钻到顶栏下面而不是被画布上缘切成残块。
+  top: 0,
   left: 0,
   width: "100%",
-  height: "calc(100% - 68px)",
+  height: "100%",
   display: "block",
   pointerEvents: "none",
 };
 const WEB_NO_WRAP = Platform.OS === "web" ? ({ whiteSpace: "nowrap" } as unknown as TextStyle) : null;
+const HIGHLIGHT_CARD_WEB = Platform.OS === "web"
+  ? ({
+      transition: "transform 0.18s ease-out, box-shadow 0.28s ease",
+      willChange: "transform",
+    } as unknown as ViewStyle)
+  : null;
+const HIGHLIGHT_SHEEN_WEB = Platform.OS === "web"
+  ? ({
+      backgroundImage: "radial-gradient(circle at var(--sheen-x, 50%) var(--sheen-y, 38%), rgba(255,255,255,0.13), transparent 56%)",
+      opacity: "var(--sheen-opacity, 0)",
+      transition: "opacity 0.3s ease",
+    } as unknown as ViewStyle)
+  : null;
+const FINALE_GHOST_CYAN_WEB = Platform.OS === "web"
+  ? ({ WebkitTextStroke: "1px rgba(37,244,238,0.75)", textShadow: "-3px 0 10px rgba(37,244,238,0.35)" } as unknown as TextStyle)
+  : null;
+const FINALE_GHOST_RED_WEB = Platform.OS === "web"
+  ? ({ WebkitTextStroke: "1px rgba(254,44,85,0.75)", textShadow: "3px 0 10px rgba(254,44,85,0.35)" } as unknown as TextStyle)
+  : null;
+const DASHBOARD_BUTTON_GLOW_WEB = Platform.OS === "web"
+  ? ({ boxShadow: "0 0 18px rgba(254,44,85,0.45), 0 0 44px rgba(254,44,85,0.2)" } as unknown as ViewStyle)
+  : null;
 const OPENING_BORDER_GLOW_WEB = Platform.OS === "web"
   ? ({
       WebkitMaskImage: "conic-gradient(from var(--cursor-angle, 45deg) at center, black 2.5%, transparent 10%, transparent 90%, black 97.5%)",
@@ -255,6 +424,12 @@ const OVERLAP_LABELS: Record<StoryOverlapKey, string> = {
   watchFavorite: "观看 ∩ 收藏",
   likedFavorite: "喜欢 ∩ 收藏",
   allThree: "三类列表都有",
+};
+const OVERLAP_ACCENTS: Record<StoryOverlapKey, string> = {
+  watchLiked: color.cyan,
+  watchFavorite: color.amber,
+  likedFavorite: color.accent,
+  allThree: color.green,
 };
 
 export interface NarrativeCopyProvider {
@@ -313,17 +488,20 @@ const localCopyProvider: NarrativeCopyProvider = {
     : `#${topic.name} 有明确计数，但当前样本没有可展示的代表内容。`,
 };
 
+type HighlightIcon = React.ComponentType<{ color?: string; size?: number; strokeWidth?: number }>;
+
 const highlightDefinitions: Array<{
   key: keyof AnnualHighlightsData;
   label: string;
   rule: string;
   accent: string;
+  icon: HighlightIcon;
 }> = [
-  { key: "first", label: "首条记录", rule: "按可靠行为时间排序", accent: color.cyan },
-  { key: "last", label: "末条记录", rule: "按可靠行为时间排序", accent: color.green },
-  { key: "peakDay", label: "峰值日代表", rule: "活跃峰值日中的代表内容", accent: color.accent },
-  { key: "longest", label: "最长内容", rule: "按可用时长字段排序", accent: color.amber },
-  { key: "mostEngaged", label: "互动快照最高", rule: "按平台互动统计快照合计", accent: color.cyan },
+  { key: "first", label: "首条记录", rule: "按可靠行为时间排序", accent: color.cyan, icon: Sunrise },
+  { key: "last", label: "末条记录", rule: "按可靠行为时间排序", accent: color.green, icon: MoonStar },
+  { key: "peakDay", label: "峰值日代表", rule: "活跃峰值日中的代表内容", accent: color.accent, icon: Flame },
+  { key: "longest", label: "最长内容", rule: "按可用时长字段排序", accent: color.amber, icon: Hourglass },
+  { key: "mostEngaged", label: "互动快照最高", rule: "按平台互动统计快照合计", accent: color.cyan, icon: Heart },
 ];
 
 interface OpeningWebglRevealProps {
@@ -467,7 +645,7 @@ interface OpeningPixelTrailPoint {
   y: number;
 }
 
-function OpeningDirectionalPixelTrail() {
+function OpeningPixelTrail() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -475,6 +653,14 @@ function OpeningDirectionalPixelTrail() {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return undefined;
+
+    // 演示页的 gooey 滤镜：模糊 + alpha 阈值再把原图 atop 回来，相邻像素块之间会长出液态拖拽桥。
+    const goo = document.createElement("div");
+    goo.setAttribute("aria-hidden", "true");
+    goo.innerHTML = `<svg width="0" height="0" style="position:absolute"><defs><filter id="${OPENING_PIXEL_TRAIL_GOO_ID}"><feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/><feColorMatrix in="blur" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 19 -9" result="goo"/><feComposite in="SourceGraphic" in2="goo" operator="atop"/></filter></defs></svg>`;
+    document.body.appendChild(goo);
+    const gooBlur = goo.querySelector("feGaussianBlur");
+    canvas.style.filter = `url(#${OPENING_PIXEL_TRAIL_GOO_ID})`;
 
     const opacity = {
       left: new Float32Array(OPENING_PIXEL_TRAIL_GRID_SIZE ** 2),
@@ -498,6 +684,7 @@ function OpeningDirectionalPixelTrail() {
       height = Math.max(1, rect.height);
       squareSize = Math.max(width, height);
       cellSize = squareSize / OPENING_PIXEL_TRAIL_GRID_SIZE;
+      gooBlur?.setAttribute("stdDeviation", (cellSize * OPENING_PIXEL_TRAIL_GOO_RATIO).toFixed(2));
       originX = (width - squareSize) / 2;
       originY = (height - squareSize) / 2;
       canvas.width = Math.round(width * dpr);
@@ -558,7 +745,7 @@ function OpeningDirectionalPixelTrail() {
         const age = now - point.bornAt;
         const riseTime = OPENING_PIXEL_TRAIL_MAX_AGE * 0.3;
         const life = age < riseTime
-          ? age / riseTime
+          ? Math.sin((age / riseTime) * Math.PI / 2)
           : 1 - (age - riseTime) / (OPENING_PIXEL_TRAIL_MAX_AGE - riseTime);
         const brushRadius = squareSize * OPENING_PIXEL_TRAIL_SIZE * Math.max(0, life) * point.force;
         if (brushRadius < 0.5) continue;
@@ -584,25 +771,26 @@ function OpeningDirectionalPixelTrail() {
       }
 
       for (let row = 0; row < OPENING_PIXEL_TRAIL_GRID_SIZE; row += 1) {
-        const top = originY + row * cellSize;
-        if (top + cellSize <= 0 || top >= height) continue;
+        const rowTop = Math.floor(originY + row * cellSize);
+        const rowBottom = Math.floor(originY + (row + 1) * cellSize);
+        if (rowBottom <= 0 || rowTop >= height) continue;
         for (let column = 0; column < OPENING_PIXEL_TRAIL_GRID_SIZE; column += 1) {
           const index = row * OPENING_PIXEL_TRAIL_GRID_SIZE + column;
           const red = opacity.left[index]!;
-          const blue = opacity.right[index]!;
-          if (red <= 0 && blue <= 0) continue;
-          const left = Math.floor(originX + column * cellSize);
-          const pixelTop = Math.floor(top);
-          const pixelSize = Math.ceil(cellSize) + 1;
+          const cyan = opacity.right[index]!;
+          if (red <= 0 && cyan <= 0) continue;
+          // 整数铺格：相邻格子共享边界，半透明填充不会因 +1px 重叠叠出亮缝。
+          const cellLeft = Math.floor(originX + column * cellSize);
+          const cellRight = Math.floor(originX + (column + 1) * cellSize);
           if (red > 0) {
             context.globalCompositeOperation = "source-over";
-            context.fillStyle = `rgba(217,14,32,${red})`;
-            context.fillRect(left, pixelTop, pixelSize, pixelSize);
+            context.fillStyle = `rgba(${OPENING_PIXEL_TRAIL_LEFT_RGB},${red})`;
+            context.fillRect(cellLeft, rowTop, cellRight - cellLeft, rowBottom - rowTop);
           }
-          if (blue > 0) {
+          if (cyan > 0) {
             context.globalCompositeOperation = red > 0 ? "screen" : "source-over";
-            context.fillStyle = `rgba(37,244,238,${blue})`;
-            context.fillRect(left, pixelTop, pixelSize, pixelSize);
+            context.fillStyle = `rgba(${OPENING_PIXEL_TRAIL_RIGHT_RGB},${cyan})`;
+            context.fillRect(cellLeft, rowTop, cellRight - cellLeft, rowBottom - rowTop);
           }
         }
       }
@@ -622,16 +810,108 @@ function OpeningDirectionalPixelTrail() {
       resizeObserver.disconnect();
       window.removeEventListener("pointermove", followPointer);
       context.clearRect(0, 0, width, height);
+      canvas.style.filter = "";
+      goo.remove();
     };
   }, []);
 
   if (Platform.OS !== "web") return null;
   return React.createElement(DOM_CANVAS, {
     "aria-hidden": true,
-    "data-testid": "opening-directional-pixel-trail",
+    "data-testid": "opening-pixel-trail",
     ref: canvasRef,
     style: OPENING_PIXEL_TRAIL_STYLE,
   });
+}
+
+interface OpeningFluidSurfaceProps {
+  reveal: Animated.Value;
+  active: boolean;
+  reducedMotion: boolean;
+  surface: {
+    baselineY: number;
+    amplitude: number;
+    idleAmplitude: number;
+    spanStart: number;
+    spanEnd: number;
+    closeY: number;
+  };
+  fill: string;
+  /** 沿液面画一条青色光边（词条幕布用）。 */
+  showSurfaceGlow?: boolean;
+}
+
+/**
+ * 流体液面：波形由多个不可通约频率叠加（无可见循环），
+ * 波幅跟随 openingReveal 的上升速度——涨得快时涌动，停下后回落成微幅涟漪。
+ */
+function OpeningFluidSurface({
+  reveal,
+  active,
+  reducedMotion,
+  surface,
+  fill,
+  showSurfaceGlow = false,
+}: OpeningFluidSurfaceProps) {
+  const [paths, setPaths] = useState<FluidSurfacePaths>(() => fluidSurfacePaths({
+    timeMs: 0,
+    agitation: 0,
+    ...surface,
+  }));
+
+  useEffect(() => {
+    if (reducedMotion) {
+      setPaths(fluidSurfacePaths({ timeMs: 4_200, agitation: 0.3, ...surface }));
+      return undefined;
+    }
+    if (!active || typeof requestAnimationFrame !== "function") return undefined;
+
+    let latestReveal: number | null = null;
+    const listener = reveal.addListener(({ value }) => {
+      latestReveal = value;
+    });
+
+    let frame = 0;
+    let lastValue: number | null = null;
+    let lastTime: number | null = null;
+    let smoothedVelocity = 0;
+    const step = (now: number) => {
+      frame = requestAnimationFrame(step);
+      if (lastTime === null || latestReveal === null) {
+        lastTime = now;
+        lastValue = latestReveal;
+        return;
+      }
+      const dt = Math.max(1, now - lastTime) / 1000;
+      const velocity = lastValue === null ? 0 : Math.abs(latestReveal - lastValue) / dt;
+      lastValue = latestReveal;
+      lastTime = now;
+      smoothedVelocity += (velocity - smoothedVelocity) * Math.min(1, dt * 6);
+      setPaths(fluidSurfacePaths({
+        timeMs: now,
+        agitation: smoothedVelocity / FLUID_FULL_AGITATION_VELOCITY,
+        ...surface,
+      }));
+    };
+    frame = requestAnimationFrame(step);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      reveal.removeListener(listener);
+    };
+  }, [active, reducedMotion, reveal, surface]);
+
+  return (
+    <>
+      <Path d={paths.body} fill={fill} />
+      {showSurfaceGlow ? (
+        <>
+          <Path d={paths.surface} fill="none" stroke="rgba(37,244,238,0.28)" strokeWidth={7} vectorEffect="non-scaling-stroke" />
+          <Path d={paths.surface} fill="none" stroke="rgba(210,254,255,0.85)" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        </>
+      ) : null}
+    </>
+  );
 }
 
 export function AnnualScrollStory({
@@ -644,7 +924,6 @@ export function AnnualScrollStory({
   copyProvider = localCopyProvider,
 }: AnnualScrollStoryProps) {
   const { width, height } = useWindowDimensions();
-  const compact = width < 1180;
   const openingSceneHeight = Math.max(1, height - 68);
   const sceneHeight = Math.max(650, height - 68);
   const model = useMemo(() => buildStoryModel(records), [records]);
@@ -654,29 +933,39 @@ export function AnnualScrollStory({
     () => selectOpeningCovers(model, OPENING_REEL_COVERS_PER_STREAM),
     [model],
   );
-  const desktopStreams = useMemo<DesktopStoryStream[]>(() => [
-    {
-      key: "watch_history",
-      label: "观看",
-      accent: color.cyan,
-      count: model.streams.watch_history.uniqueCount,
-      records: model.streams.watch_history.records,
-    },
-    {
-      key: "liked_videos",
-      label: "喜欢",
-      accent: color.accent,
-      count: model.streams.liked_videos.uniqueCount,
-      records: model.streams.liked_videos.records,
-    },
-    {
-      key: "favorite_videos",
-      label: "收藏",
-      accent: color.amber,
-      count: model.streams.favorite_videos.uniqueCount,
-      records: model.streams.favorite_videos.records,
-    },
-  ], [model]);
+  const desktopStreams = useMemo<DesktopStoryStream[]>(() => {
+    // 观看卡的词条取最近窗口的头号线索（与"这 N 天"口径一致）；
+    // 喜欢/收藏没有窗口分析，取各自列表的最高频话题
+    const recentTerm = findLivingChapter(livingReport, "current")?.signals[0]?.label ?? null;
+    const likedTopic = topStreamTopic(model.streams.liked_videos.records);
+    const favoriteTopic = topStreamTopic(model.streams.favorite_videos.records);
+    return [
+      {
+        key: "watch_history",
+        label: "观看",
+        accent: color.cyan,
+        count: model.streams.watch_history.uniqueCount,
+        records: model.streams.watch_history.records,
+        term: recentTerm,
+      },
+      {
+        key: "liked_videos",
+        label: "喜欢",
+        accent: color.accent,
+        count: model.streams.liked_videos.uniqueCount,
+        records: model.streams.liked_videos.records,
+        term: likedTopic ? `#${likedTopic}` : null,
+      },
+      {
+        key: "favorite_videos",
+        label: "收藏",
+        accent: color.amber,
+        count: model.streams.favorite_videos.uniqueCount,
+        records: model.streams.favorite_videos.records,
+        term: favoriteTopic ? `#${favoriteTopic}` : null,
+      },
+    ];
+  }, [model, livingReport]);
   const openingParticles = useMemo(
     () => buildOpeningParticles(model, openingContent, privacy),
     [model, openingContent, privacy],
@@ -726,8 +1015,6 @@ export function AnnualScrollStory({
   const logoEntrance = useRef(new Animated.Value(0)).current;
   const logoNeon = useRef(new Animated.Value(1)).current;
   const storyProgress = useRef(new Animated.Value(0)).current;
-  const liquidWave = useRef(new Animated.Value(0)).current;
-  const hourRotation = useRef(new Animated.Value(selectedHour)).current;
   const rootRef = useRef<View | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
   const sectionOffsets = useRef<number[]>([]);
@@ -735,11 +1022,72 @@ export function AnnualScrollStory({
   const selectedHourData = model.hours[selectedHour] ?? model.hours[0]!;
   const selectedTopicData = model.topics.find((topic) => topic.name === selectedTopic) ?? model.topics[0] ?? null;
   const selectedTopicIndex = selectedTopicData ? model.topics.findIndex((topic) => topic.name === selectedTopicData.name) : -1;
+  // 与 TopicBubbleField 用同一个种子，标题词条的颜色和气泡颜色一致。
+  const selectedTopicAccent = selectedTopicData ? storyParticleColor(`topic-bubble:${selectedTopicData.name}`).text : color.cyan;
+
+  // 转场取的是两侧章节的真实数据，接缝处的刻度长度、气泡大小才和下一屏对得上。
+  const bridgeHours = useMemo(() => model.hours.map((entry) => entry.count), [model.hours]);
+  const bridgeTopics = useMemo(() => model.topics.slice(0, 12).map((topic, index) => ({
+    label: privacy ? `话题 ${index + 1}` : `#${topic.name}`,
+    count: topic.count,
+    color: storyParticleColor(`topic-bubble:${topic.name}`).text,
+  })), [model.topics, privacy]);
+  const bridgeNodes = useMemo(() => (["allThree", "watchLiked", "watchFavorite", "likedFavorite"] as const)
+    .map((key) => ({ label: OVERLAP_LABELS[key], color: OVERLAP_ACCENTS[key] })), []);
+  const bridgeCardLabels = useMemo(
+    () => highlightDefinitions.map((definition) => (livingReport ? livingHighlightLabel(definition.key) : definition.label)),
+    [livingReport],
+  );
+
+  // 三段场景内形变的文案与数据；kind 对应「本章物件 → 下一章物件」。
+  const bridgeSpecs = useMemo(() => ({
+    lead: {
+      kind: "cardsToDial" as const,
+      hours: bridgeHours,
+      eyebrow: "CHAPTER 02 → 03",
+      line1: "看过什么之后，",
+      line2: "该问什么时候看的了。",
+      copy: "三叠卡片的封面格摊平，按小时重新排成一圈——下一屏的表盘，就是这些格子换了一套坐标系。",
+    },
+    rhythm: {
+      kind: "dialToBubbles" as const,
+      hours: bridgeHours,
+      topics: bridgeTopics,
+      eyebrow: "CHAPTER 03 → 04",
+      line1: "知道了什么时候，",
+      line2: "再看是什么在吸引你。",
+      copy: "刻度从环上松开浮起，一半聚成标签气泡，一半安静退场——时间让位给偏好。",
+    },
+    preference: {
+      kind: "bubblesToStreams" as const,
+      topics: bridgeTopics,
+      eyebrow: "CHAPTER 04 → 05",
+      line1: "标签之外，",
+      line2: "还有真正留下来的。",
+      copy: "气泡沉进三条列表的源头，观看、喜欢、收藏各自成河——从「喜欢什么」转到「留下了什么」。",
+    },
+    kept: {
+      kind: "nodesToCards" as const,
+      nodes: bridgeNodes,
+      cardLabels: bridgeCardLabels,
+      eyebrow: "CHAPTER 05 → 06",
+      line1: "留下来的里面，",
+      line2: "有几个格外具体的坐标。",
+      copy: "四个交集节点松开、排队，摊成六章的五张坐标卡——故事在这里落回真实记录。",
+    },
+  }), [bridgeCardLabels, bridgeHours, bridgeNodes, bridgeTopics]);
+  const chapterTopSetters = useMemo(
+    () => [3, 4, 5, 6].map((index) => (y: number) => {
+      sectionOffsets.current[index - 1] = y;
+    }),
+    [],
+  );
   const selectedOverlapData = model.overlaps[selectedOverlap];
+  // 第三到第六章共用的舞台尺寸：卡片按视口高等比收缩，卡头 72 + 描述条 44 之后剩下的给物件。
+  const stageCardHeight = Math.round(Math.min(760, sceneHeight * 0.84));
+  const stageBodyHeight = stageCardHeight - 116;
+  const rhythmDiscScale = Math.min(1, (stageBodyHeight - 24) / 540);
   const openingStickyStyle = Platform.OS === "web"
-    ? ({ position: "sticky", top: 0 } as unknown as ViewStyle)
-    : null;
-  const stickyStyle = Platform.OS === "web" && !reducedMotion
     ? ({ position: "sticky", top: 0 } as unknown as ViewStyle)
     : null;
   const particleLayouts = useMemo(
@@ -752,21 +1100,14 @@ export function AnnualScrollStory({
     outputRange: ["0%", "100%"],
     extrapolate: "clamp",
   });
-  // Logo 液面和词条幕布共用 openingReveal（0..1），两边没有第二套计时器。
+  // Logo 液面和词条幕布共用 openingReveal（0..1）决定水位；波形扰动由 OpeningFluidSurface 按上升速度实时生成。
   const liquidTransform = openingReveal.interpolate({
     inputRange: [0, 1],
     outputRange: [`translate(0 ${NOTE_VIEWBOX_HEIGHT})`, "translate(0 -12)"],
     extrapolate: "clamp",
   });
-  const waveTransform = liquidWave.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["translate(0 0)", "translate(-120 0)"],
-  });
-  const curtainWavePath = liquidWave.interpolate({
-    inputRange: [0, 0.34, 0.68, 1],
-    easing: Easing.inOut(Easing.sin),
-    outputRange: [CURTAIN_WAVE_PATHS[0], CURTAIN_WAVE_PATHS[1], CURTAIN_WAVE_PATHS[2], CURTAIN_WAVE_PATHS[0]],
-  });
+  // 液面动效只在揭示进行中运行；揭示前不可见，前景淡出后停表。
+  const fluidActive = openingStep > 0 && !openingForegroundHidden;
   const noteLeft = width / 2 - OPENING_LOGO_WIDTH / 2;
   const noteTop = openingSceneHeight / 2 - OPENING_LOGO_HEIGHT / 2;
   const openingWordLayerMask = Platform.OS === "web"
@@ -943,23 +1284,6 @@ export function AnnualScrollStory({
   }, [activeChapter, logoNeon, openingForegroundHidden, reducedMotion]);
 
   useEffect(() => {
-    liquidWave.stopAnimation();
-    if (reducedMotion) {
-      liquidWave.setValue(0.25);
-      return undefined;
-    }
-    liquidWave.setValue(0);
-    const animation = Animated.loop(Animated.timing(liquidWave, {
-      toValue: 1,
-      duration: 1_400,
-      easing: Easing.linear,
-      useNativeDriver: false,
-    }));
-    animation.start();
-    return () => animation.stop();
-  }, [liquidWave, reducedMotion]);
-
-  useEffect(() => {
     if (Platform.OS !== "web") return undefined;
     const root = rootRef.current as unknown as HTMLElement | null;
     const bubbles = root
@@ -990,6 +1314,38 @@ export function AnnualScrollStory({
     };
   }, [openingParticles, width]);
 
+  // 第六章卡片：指针跟随的 3D 倾斜和光泽扫过（与词条描边光同一套 DOM 模式）。
+  useEffect(() => {
+    if (Platform.OS !== "web" || reducedMotion) return undefined;
+    const root = rootRef.current as unknown as HTMLElement | null;
+    if (!root) return undefined;
+    const cards = Array.from(root.querySelectorAll<HTMLElement>("[data-tilt-card='true']"));
+    if (cards.length === 0) return undefined;
+    const cleanups = cards.map((card) => {
+      const followPointer = (event: PointerEvent) => {
+        const rect = card.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        const ratioX = (event.clientX - rect.left) / rect.width;
+        const ratioY = (event.clientY - rect.top) / rect.height;
+        card.style.transform = `perspective(920px) rotateX(${((0.5 - ratioY) * 7).toFixed(2)}deg) rotateY(${((ratioX - 0.5) * 8).toFixed(2)}deg) translateY(-4px)`;
+        card.style.setProperty("--sheen-x", `${(ratioX * 100).toFixed(1)}%`);
+        card.style.setProperty("--sheen-y", `${(ratioY * 100).toFixed(1)}%`);
+        card.style.setProperty("--sheen-opacity", "1");
+      };
+      const reset = () => {
+        card.style.transform = "";
+        card.style.setProperty("--sheen-opacity", "0");
+      };
+      card.addEventListener("pointermove", followPointer, { passive: true });
+      card.addEventListener("pointerleave", reset);
+      return () => {
+        card.removeEventListener("pointermove", followPointer);
+        card.removeEventListener("pointerleave", reset);
+      };
+    });
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [reducedMotion]);
+
   useEffect(() => {
     if (Platform.OS !== "web" || width < MIN_STORY_WIDTH || reducedMotion) return undefined;
     let disposed = false;
@@ -1006,15 +1362,31 @@ export function AnnualScrollStory({
       if (!root || !scroller) return;
       const context = gsap.context(() => {
         root.querySelectorAll<HTMLElement>("[data-story-reveal]").forEach((element, index) => {
-          gsap.fromTo(element, { opacity: 0, y: 24 }, {
+          gsap.fromTo(element, { opacity: 0, y: 30, scale: 0.985, filter: "blur(8px)" }, {
             opacity: 1,
             y: 0,
-            duration: 0.5,
-            delay: Math.min(index % 3, 2) * 0.04,
-            ease: "power2.out",
+            scale: 1,
+            filter: "blur(0px)",
+            duration: 0.65,
+            delay: Math.min(index % 3, 2) * 0.05,
+            ease: "power3.out",
+            clearProps: "filter,transform",
             scrollTrigger: { trigger: element, scroller, start: "top 86%", once: true },
           });
         });
+        const cascadeCards = root.querySelectorAll<HTMLElement>("[data-story-cascade]");
+        if (cascadeCards.length) {
+          gsap.fromTo(cascadeCards, { opacity: 0, y: 52, rotate: -2.4 }, {
+            opacity: 1,
+            y: 0,
+            rotate: 0,
+            duration: 0.72,
+            stagger: 0.09,
+            ease: "power3.out",
+            clearProps: "transform",
+            scrollTrigger: { trigger: cascadeCards[0]!, scroller, start: "top 90%", once: true },
+          });
+        }
       }, root);
       ScrollTrigger.refresh();
       revert = () => context.revert();
@@ -1024,20 +1396,6 @@ export function AnnualScrollStory({
       revert();
     };
   }, [reducedMotion, width]);
-
-  useEffect(() => {
-    hourRotation.stopAnimation();
-    if (reducedMotion) {
-      hourRotation.setValue(selectedHour);
-      return;
-    }
-    Animated.timing(hourRotation, {
-      toValue: selectedHour,
-      duration: 260,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: Platform.OS !== "web",
-    }).start();
-  }, [hourRotation, reducedMotion, selectedHour]);
 
   const startOpeningSequence = useCallback(() => {
     if (openingSequenceStarted.current || openingStepRef.current > 0) return;
@@ -1373,9 +1731,13 @@ export function AnnualScrollStory({
                       transform={`translate(${noteLeft} ${noteTop}) scale(${OPENING_LOGO_SCALE})`}
                     >
                       <AnimatedSvgGroup transform={liquidTransform}>
-                        <AnimatedSvgGroup transform={waveTransform}>
-                          <Path d={LIQUID_PATH} fill="black" />
-                        </AnimatedSvgGroup>
+                        <OpeningFluidSurface
+                          active={fluidActive}
+                          fill="black"
+                          reducedMotion={reducedMotion}
+                          reveal={openingReveal}
+                          surface={FLUID_FILL_SURFACE}
+                        />
                       </AnimatedSvgGroup>
                     </G>
                   </Mask>
@@ -1515,7 +1877,14 @@ export function AnnualScrollStory({
                       x="-120"
                       y={-openingSceneHeight}
                     />
-                    <AnimatedSvgPath d={curtainWavePath} fill={color.black} />
+                    <OpeningFluidSurface
+                      active={fluidActive}
+                      fill={color.black}
+                      reducedMotion={reducedMotion}
+                      reveal={openingReveal}
+                      showSurfaceGlow
+                      surface={FLUID_CURTAIN_SURFACE}
+                    />
                   </Svg>
                 </Animated.View>
                 {Platform.OS === "web" && openingStep === 0 ? (
@@ -1623,9 +1992,13 @@ export function AnnualScrollStory({
                           >
                             <Path d={NOTE_PATH} fill="white" />
                             <AnimatedSvgGroup transform={liquidTransform}>
-                              <AnimatedSvgGroup transform={waveTransform}>
-                                <Path d={LIQUID_PATH} fill="black" />
-                              </AnimatedSvgGroup>
+                              <OpeningFluidSurface
+                                active={fluidActive}
+                                fill="black"
+                                reducedMotion={reducedMotion}
+                                reveal={openingReveal}
+                                surface={FLUID_FILL_SURFACE}
+                              />
                             </AnimatedSvgGroup>
                           </Mask>
                           <Mask height={300} id="opening-logo-outer-mask" maskUnits="userSpaceOnUse" width={280} x={-30} y={-30}>
@@ -1686,11 +2059,11 @@ export function AnnualScrollStory({
               "观看、喜欢和收藏各自保留真实列表口径，封面会在对应页面中展开。",
               privacy,
             )}
-            desktopCopyUri={USER_DESKTOP_COPY_URI}
             eyebrow={"CHAPTER 02 · " + (currentChapter?.eyebrow ?? "最近发生什么")}
             onOpenApp={openDesktopApp}
             onOpenRecord={openStoryRecord}
             privacy={privacy}
+            recentDays={livingReport?.currentWindow.days ?? 30}
             reducedMotion={reducedMotion}
             streams={desktopStreams}
             title={currentChapter?.title ?? "你最近在靠近什么？"}
@@ -1700,138 +2073,249 @@ export function AnnualScrollStory({
           />
         </View>
 
-        <View onLayout={registerChapter(3)} style={[styles.stickyChapter, { minHeight: sceneHeight + 380 }]}>
-          <View style={[styles.scene, styles.rhythmScene, { minHeight: sceneHeight }, stickyStyle]}>
-            <View style={[styles.rhythmLayout, compact && styles.rhythmLayoutCompact]}>
-              <View style={styles.rhythmCopy} {...revealDataSet()}>
-                <Text style={styles.chapterNo}>CHAPTER 03 · {rhythmChapter?.eyebrow ?? "你的节拍"}</Text>
-                <Text style={styles.sectionTitle}>{rhythmChapter?.title ?? <>一天里的哪一刻，{`\n`}内容最常出现？</>}</Text>
-                <Text style={styles.lead}>{livingChapterCopy(rhythmChapter, "只使用可靠行为时间。方向键也可以切换小时。", privacy)}</Text>
-                <View style={styles.hourStory}>
-                  <Text style={styles.hourStoryLabel}>{padHour(selectedHourData.hour)} · {selectedHourData.count} 条可靠记录</Text>
-                  <Text style={styles.hourStoryText}>{privacy ? privateHourStory(selectedHourData) : copyProvider.hourStory(selectedHourData)}</Text>
-                  {selectedHourData.representative ? (
-                    <StoryRecordButton compact item={selectedHourData.representative} onOpen={openStoryRecord} privacy={privacy} />
-                  ) : <Text style={styles.emptyText}>这个小时没有可展示的代表内容</Text>}
-                </View>
-              </View>
-              <HourDial
-                hourRotation={hourRotation}
-                hours={model.hours}
-                onWheel={handleHourWheel}
-                onHourKey={handleHourKey}
-                onSelectHour={setSelectedHour}
-                selectedHour={selectedHour}
-              />
-            </View>
-          </View>
-        </View>
+        <SceneSection
+          atmosphereNext={atmosphereCss("rhythm")}
+          atmosphereSelf={atmosphereCss("bridgeRhythm")}
+          bridge={bridgeSpecs.lead}
+          fadeIn
+          height={sceneHeight}
+          reducedMotion={reducedMotion}
+          width={width}
+          zIndex={10}
+        />
 
-        <View onLayout={registerChapter(4)} style={styles.chapter}>
-          <View style={styles.sectionInner}>
-            <SectionHeading
-              chapter="04"
-              eyebrow={shiftChapter?.eyebrow ?? "偏好与创作者"}
-              title={shiftChapter?.title ?? "显式标签，连接起内容与创作者。"}
-              copy={livingChapterCopy(shiftChapter, "点击标签，只展示真实命中的代表内容与对应创作者。音乐和时长只作为辅助字段。", privacy)}
-            />
-            <View style={[styles.preferenceLayout, compact && styles.preferenceLayoutCompact]}>
-              <View style={styles.topicField} {...revealDataSet()}>
-                {model.topics.length ? model.topics.slice(0, 12).map((topic, index) => {
-                  const selected = topic.name === selectedTopicData?.name;
-                  return (
-                    <Pressable
-                      key={topic.name}
-                      accessibilityLabel={`${privacy ? `话题 ${index + 1}` : `话题 ${topic.name}`}，${topic.count} 条内容`}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      onPress={() => setSelectedTopic(topic.name)}
-                      style={({ pressed }) => [styles.topicButton, selected && styles.topicButtonSelected, pressed && styles.buttonPressed, WEB_POINTER]}
-                    >
-                      <Text style={[styles.topicButtonText, selected && styles.topicButtonTextSelected]}>{privacy ? `话题 ${index + 1}` : `#${topic.name}`}</Text>
-                      <Text style={styles.topicButtonCount}>{topic.count}</Text>
-                    </Pressable>
-                  );
-                }) : <Text style={styles.emptyText}>当前样本没有可识别的显式标签</Text>}
+        <SceneSection
+          atmosphereNext={atmosphereCss("preference")}
+          atmosphereSelf={atmosphereCss("rhythm")}
+          bridge={bridgeSpecs.rhythm}
+          height={sceneHeight}
+          onTop={chapterTopSetters[0]}
+          overlapPrev
+          reducedMotion={reducedMotion}
+          width={width}
+          zIndex={11}
+        >
+          <ChapterStage
+            accent={color.cyan}
+            atmosphere="rhythm"
+            copy={livingChapterCopy(rhythmChapter, "只使用可靠行为时间。点击圆盘上的小时，方向键和滚轮也可以切换。", privacy)}
+            detail={selectedHourData.representative
+              ? <StoryRecordButton compact item={selectedHourData.representative} onOpen={openStoryRecord} privacy={privacy} />
+              : <Text style={styles.emptyText}>这个小时没有可展示的代表内容</Text>}
+            eyebrow={`CHAPTER 03 · ${rhythmChapter?.eyebrow ?? "你的节拍"}`}
+            height={sceneHeight}
+            title={hourNarrativeTitle(selectedHourData, privacy)}
+            width={width}
+          >
+            <StageCard
+              accent={color.cyan}
+              description={privacy ? privateHourStory(selectedHourData) : copyProvider.hourStory(selectedHourData)}
+              height={stageCardHeight}
+              label={padHour(selectedHourData.hour)}
+              meta="一天里的这一刻"
+              value={selectedHourData.count}
+            >
+              <View style={[styles.stageDisc, { transform: [{ scale: rhythmDiscScale }] }]}>
+                <RhythmEqualizer
+                  active={activeChapter >= 3}
+                  hours={model.hours}
+                  onHourKey={handleHourKey}
+                  onSelectHour={setSelectedHour}
+                  onWheel={handleHourWheel}
+                  reducedMotion={reducedMotion}
+                  selectedHour={selectedHour}
+                />
               </View>
-              <View style={styles.preferenceResult} {...revealDataSet()}>
-                {selectedTopicData ? (
-                  <>
-                    <Text style={styles.resultEyebrow}>SELECTED TOPIC</Text>
-                    <Text style={styles.resultTitle}>{privacy ? `话题 ${selectedTopicIndex + 1}` : `#${selectedTopicData.name}`}</Text>
-                    <Text style={styles.resultCopy}>{privacy ? `该标签关联 ${selectedTopicData.count} 条内容，标签与创作者已隐藏。` : copyProvider.topicStory(selectedTopicData)}</Text>
-                    {selectedTopicData.records[0] ? <StoryRecordButton item={selectedTopicData.records[0]} onOpen={openStoryRecord} privacy={privacy} /> : null}
-                    <View style={styles.creatorFilmstrip}>
-                      {selectedTopicData.creators.length ? selectedTopicData.creators.slice(0, 5).map((creator, index) => (
-                        <View key={creator.key} style={styles.creatorFrame}>
-                          <Text style={styles.creatorIndex}>{String(index + 1).padStart(2, "0")}</Text>
-                          <Text numberOfLines={1} style={styles.creatorName}>{privacy ? `创作者 ${index + 1}` : creator.name} · {creator.count}</Text>
-                        </View>
-                      )) : <Text style={styles.emptyText}>没有可归属的创作者</Text>}
-                    </View>
-                  </>
+            </StageCard>
+          </ChapterStage>
+        </SceneSection>
+
+        <SceneSection
+          atmosphereNext={atmosphereCss("kept")}
+          atmosphereSelf={atmosphereCss("preference")}
+          bridge={bridgeSpecs.preference}
+          height={sceneHeight}
+          onTop={chapterTopSetters[1]}
+          overlapPrev
+          reducedMotion={reducedMotion}
+          width={width}
+          zIndex={12}
+        >
+          <ChapterStage
+            accent={selectedTopicAccent}
+            atmosphere="preference"
+            copy={livingChapterCopy(shiftChapter, "点击气泡切换标签，只展示真实命中的代表内容与对应创作者。", privacy)}
+            detail={selectedTopicData ? (
+              <>
+                {selectedTopicData.records[0] ? (
+                  <StoryRecordButton compact item={selectedTopicData.records[0]} onOpen={openStoryRecord} privacy={privacy} />
                 ) : null}
-              </View>
-            </View>
-          </View>
-        </View>
+                <View style={styles.creatorRankList}>
+                  {selectedTopicData.creators.length ? selectedTopicData.creators.slice(0, 5).map((creator, index) => {
+                    const topCount = Math.max(1, selectedTopicData.creators[0]?.count ?? 1);
+                    const share = Math.max(0.12, creator.count / topCount);
+                    return (
+                      <View key={creator.key} style={styles.creatorRankRow}>
+                        <Text style={styles.creatorIndex}>{String(index + 1).padStart(2, "0")}</Text>
+                        <View style={styles.creatorRankBody}>
+                          <Text numberOfLines={1} style={styles.creatorName}>{privacy ? `创作者 ${index + 1}` : creator.name}</Text>
+                          <View style={styles.creatorRankTrack}>
+                            <View
+                              style={[
+                                styles.creatorRankFill,
+                                {
+                                  width: `${Math.round(share * 100)}%`,
+                                  backgroundColor: index === 0 ? selectedTopicAccent : hexToRgba(selectedTopicAccent, 0.7 - index * 0.12),
+                                },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                        <Text style={styles.creatorRankCount}>{creator.count}</Text>
+                      </View>
+                    );
+                  }) : <Text style={styles.emptyText}>没有可归属的创作者</Text>}
+                </View>
+              </>
+            ) : null}
+            eyebrow={`CHAPTER 04 · ${shiftChapter?.eyebrow ?? "偏好与创作者"}`}
+            height={sceneHeight}
+            title={topicNarrativeTitle(selectedTopicData, selectedTopicIndex, selectedTopicAccent, privacy)}
+            width={width}
+          >
+            <StageCard
+              accent={selectedTopicAccent}
+              description={selectedTopicData
+                ? (privacy
+                  ? `该标签关联 ${selectedTopicData.count} 条内容，标签与创作者已隐藏。`
+                  : copyProvider.topicStory(selectedTopicData))
+                : "当前样本没有可识别的显式标签"}
+              height={stageCardHeight}
+              label={selectedTopicData ? (privacy ? `话题 ${selectedTopicIndex + 1}` : `#${selectedTopicData.name}`) : "无标签"}
+              meta="显式标签 · 拖拽甩动"
+              value={selectedTopicData?.count ?? 0}
+            >
+              {model.topics.length ? (
+                <TopicBubbleField
+                  active={activeChapter === 4}
+                  bare
+                  height={stageBodyHeight}
+                  onSelect={setSelectedTopic}
+                  reducedMotion={reducedMotion}
+                  selectedName={selectedTopicData?.name ?? null}
+                  topics={model.topics.slice(0, 12).map((topic, index) => ({
+                    name: topic.name,
+                    label: privacy ? `话题 ${index + 1}` : `#${topic.name}`,
+                    count: topic.count,
+                  }))}
+                />
+              ) : <View style={styles.stageEmpty}><Text style={styles.emptyText}>当前样本没有可识别的显式标签</Text></View>}
+            </StageCard>
+          </ChapterStage>
+        </SceneSection>
 
-        <View onLayout={registerChapter(5)} style={styles.chapter}>
-          <View style={styles.sectionInner}>
-            <SectionHeading
-              chapter="05"
-              eyebrow={keptChapter?.eyebrow ?? "真正留下的内容"}
-              title={keptChapter?.title ?? "列表相遇的位置，才是可比较的交集。"}
-              copy={livingChapterCopy(keptChapter, "交集只使用可比较 videoId；缺失标识的记录不会被猜测为同一内容。", privacy)}
-            />
-            <View style={[styles.keptLayout, compact && styles.keptLayoutCompact]}>
-              <View style={styles.confluence} {...revealDataSet()}>
-                <Svg accessibilityLabel="观看、喜欢和收藏三条真实数据轨道汇流图" height="100%" viewBox="0 0 700 390" width="100%">
-                  <Path d={buildTrackPath(model.streams.watch_history.uniqueCount, overview.counts.total, 88, 194, false)} fill="none" stroke={color.cyan} strokeLinecap="round" strokeWidth="6" />
-                  <Path d={buildTrackPath(model.streams.liked_videos.uniqueCount, overview.counts.total, 195, 194, false)} fill="none" stroke={color.accent} strokeLinecap="round" strokeWidth="6" />
-                  <Path d={buildTrackPath(model.streams.favorite_videos.uniqueCount, overview.counts.total, 302, 194, true)} fill="none" stroke={color.amber} strokeLinecap="round" strokeWidth="6" />
-                </Svg>
-                <Text style={[styles.trackLabel, styles.trackWatch]}>观看</Text>
-                <Text style={[styles.trackLabel, styles.trackLiked]}>喜欢</Text>
-                <Text style={[styles.trackLabel, styles.trackFavorite]}>收藏</Text>
-                <OverlapButton available={overlapsAvailable} data={model.overlaps.watchLiked} id="watchLiked" onSelect={setSelectedOverlap} selected={selectedOverlap === "watchLiked"} style={styles.overlapWatchLiked} />
-                <OverlapButton available={overlapsAvailable} data={model.overlaps.watchFavorite} id="watchFavorite" onSelect={setSelectedOverlap} selected={selectedOverlap === "watchFavorite"} style={styles.overlapWatchFavorite} />
-                <OverlapButton available={overlapsAvailable} data={model.overlaps.likedFavorite} id="likedFavorite" onSelect={setSelectedOverlap} selected={selectedOverlap === "likedFavorite"} style={styles.overlapLikedFavorite} />
-                <OverlapButton available={overlapsAvailable} data={model.overlaps.allThree} id="allThree" onSelect={setSelectedOverlap} selected={selectedOverlap === "allThree"} style={styles.overlapAll} />
-              </View>
-              <View style={styles.overlapResult} {...revealDataSet()}>
-                <Text style={styles.resultEyebrow}>LIST INTERSECTION</Text>
-                <Text style={styles.resultTitle}>{OVERLAP_LABELS[selectedOverlap]}</Text>
-                <Text style={styles.resultCopy}>{overlapsAvailable ? `${selectedOverlapData.count} 个可比较视频` : "缺少可比较 videoId，无法判断"}</Text>
+        <SceneSection
+          atmosphereNext={atmosphereCss("continuation")}
+          atmosphereSelf={atmosphereCss("kept")}
+          bridge={bridgeSpecs.kept}
+          height={sceneHeight}
+          onTop={chapterTopSetters[2]}
+          overlapPrev
+          reducedMotion={reducedMotion}
+          width={width}
+          zIndex={13}
+        >
+          <ChapterStage
+            accent={OVERLAP_ACCENTS[selectedOverlap]}
+            atmosphere="kept"
+            copy={selectedOverlap === "allThree"
+              // 生活报告的这段叙述只讲三类列表的交集，换到别的节点就退回规则说明，避免和标题打架。
+              ? livingChapterCopy(keptChapter, "交集只使用可比较 videoId；缺失标识的记录不会被猜测为同一内容。", privacy)
+              : "交集只使用可比较 videoId；缺失标识的记录不会被猜测为同一内容。"}
+            detail={(
+              <>
                 <View style={styles.overlapItems}>
-                  {selectedOverlapData.records.length ? selectedOverlapData.records.map((item) => (
+                  {selectedOverlapData.records.length ? selectedOverlapData.records.slice(0, 3).map((item) => (
                     <StoryRecordButton compact item={item} key={item.key} onOpen={openStoryRecord} privacy={privacy} />
                   )) : <Text style={styles.emptyText}>当前交集没有可展示内容</Text>}
                 </View>
                 <View style={styles.snapshotNotice}><View style={styles.snapshotMark} /><Text style={styles.snapshotNoticeText}>当前列表快照，不代表行为转化</Text></View>
-              </View>
-            </View>
-          </View>
-        </View>
+              </>
+            )}
+            eyebrow={`CHAPTER 05 · ${keptChapter?.eyebrow ?? "真正留下的内容"}`}
+            height={sceneHeight}
+            title={overlapNarrativeTitle(selectedOverlap, selectedOverlapData.count, overlapsAvailable)}
+            width={width}
+          >
+            <StageCard
+              accent={OVERLAP_ACCENTS[selectedOverlap]}
+              description={overlapsAvailable
+                ? `${selectedOverlapData.count} 个可比较视频同时出现在这份交集里。`
+                : "缺少可比较 videoId，无法判断交集。"}
+              height={stageCardHeight}
+              label={OVERLAP_LABELS[selectedOverlap]}
+              meta="列表交集 · 点击节点切换"
+              value={selectedOverlapData.count}
+            >
+              <ConfluenceFlow
+                accent={OVERLAP_ACCENTS[selectedOverlap]}
+                active={activeChapter === 5}
+                available={overlapsAvailable}
+                bare
+                height={stageBodyHeight}
+                onSelect={setSelectedOverlap}
+                overlaps={(["watchLiked", "watchFavorite", "likedFavorite", "allThree"] as const).map((key) => ({
+                  key,
+                  label: OVERLAP_LABELS[key],
+                  count: model.overlaps[key].count,
+                }))}
+                reducedMotion={reducedMotion}
+                selected={selectedOverlap}
+                streamCounts={{
+                  watch_history: model.streams.watch_history.uniqueCount,
+                  liked_videos: model.streams.liked_videos.uniqueCount,
+                  favorite_videos: model.streams.favorite_videos.uniqueCount,
+                }}
+                streamLabels={{
+                  watch_history: "观看",
+                  liked_videos: "喜欢",
+                  favorite_videos: "收藏",
+                }}
+              />
+            </StageCard>
+          </ChapterStage>
+        </SceneSection>
 
-        <View onLayout={registerChapter(6)} style={[styles.chapter, styles.highlightsChapter]}>
-          <View style={styles.sectionInner}>
-            <SectionHeading
-              chapter="06"
-              eyebrow={continuationChapter?.eyebrow ?? "故事还在继续"}
-              title={continuationChapter?.title ?? "五个规则坐标，把故事落回真实内容。"}
-              copy={livingChapterCopy(continuationChapter, "横向浏览代表内容，让故事落回真实记录。", privacy)}
-            />
+        <SceneSection
+          atmosphereSelf={atmosphereCss("continuation")}
+          height={sceneHeight}
+          onTop={chapterTopSetters[3]}
+          overlapPrev
+          reducedMotion={reducedMotion}
+          width={width}
+          zIndex={14}
+        >
+          <ChapterStage
+            accent={color.cyan}
+            atmosphere="continuation"
+            copy={livingChapterCopy(continuationChapter, "横向浏览代表内容，让故事落回真实记录。", privacy)}
+            detail={<Text style={styles.stageHint}>横向滑动，看完 5 张规则卡 →</Text>}
+            eyebrow={`CHAPTER 06 · ${continuationChapter?.eyebrow ?? "故事还在继续"}`}
+            flush
+            height={sceneHeight}
+            title={continuationChapter?.title ?? <>五个规则坐标，{`\n`}把故事落回真实内容。</>}
+            width={width}
+          >
             <ScrollView
               contentContainerStyle={styles.highlightStrip}
               horizontal
               showsHorizontalScrollIndicator={false}
               style={styles.highlightScroller}
-              {...revealDataSet()}
             >
               {highlightDefinitions.map((definition, index) => (
                 <StoryHighlightCard
                   accent={definition.accent}
+                  icon={definition.icon}
                   index={index}
                   item={highlights[definition.key]}
                   key={definition.key}
@@ -1842,26 +2326,50 @@ export function AnnualScrollStory({
                 />
               ))}
             </ScrollView>
-          </View>
-          <View style={styles.finale}>
-            <View style={styles.finaleMark} />
+          </ChapterStage>
+        </SceneSection>
+        <View style={[styles.finale, atmosphereStyle("finale")]}>
+            <FinaleEqualizer active={activeChapter === 6} reducedMotion={reducedMotion} />
             <Text style={styles.finaleEyebrow}>YOUR CONTENT, STILL UNFOLDING</Text>
-            <Text style={styles.finaleTitle}>这些内容不是答案，{`\n`}是仍在展开的坐标。</Text>
+            <View style={styles.finaleTitleWrap} {...revealDataSet()}>
+              <Text
+                accessibilityElementsHidden
+                aria-hidden
+                importantForAccessibility="no-hide-descendants"
+                style={[styles.finaleTitle, styles.finaleTitleGhost, styles.finaleTitleGhostCyan, FINALE_GHOST_CYAN_WEB]}
+              >
+                这些内容不是答案，{`\n`}是仍在展开的坐标。
+              </Text>
+              <Text
+                accessibilityElementsHidden
+                aria-hidden
+                importantForAccessibility="no-hide-descendants"
+                style={[styles.finaleTitle, styles.finaleTitleGhost, styles.finaleTitleGhostRed, FINALE_GHOST_RED_WEB]}
+              >
+                这些内容不是答案，{`\n`}是仍在展开的坐标。
+              </Text>
+              <Text style={styles.finaleTitle}>这些内容不是答案，{`\n`}是仍在展开的坐标。</Text>
+            </View>
             <Text style={styles.finaleCopy}>{livingReport && profileLabels ? `当前样本更接近：${profileLabels}。` : "新的记录会继续改变这份内容报告。"}</Text>
             <Pressable
               accessibilityLabel="进入持续报告"
               accessibilityRole="button"
               onPress={onEnterDashboard}
-              style={({ pressed }) => [styles.dashboardButton, pressed && styles.buttonPressed, WEB_POINTER]}
+              style={(state) => [
+                styles.dashboardButton,
+                // hovered 只有 react-native-web 提供，核心类型里没有。
+                Boolean((state as { hovered?: boolean }).hovered) && DASHBOARD_BUTTON_GLOW_WEB,
+                state.pressed && styles.buttonPressed,
+                WEB_POINTER,
+              ]}
             >
               <Text style={styles.dashboardButtonText}>进入持续报告</Text>
               <ArrowRight color={color.white} size={20} />
             </Pressable>
-          </View>
         </View>
       </ScrollView>
 
-      {openingStacked && !desktopOpened && !reducedMotion ? <OpeningDirectionalPixelTrail /> : null}
+      {openingStacked && !desktopOpened && !reducedMotion ? <OpeningPixelTrail /> : null}
 
       {openingPixelSwapActive ? (
         <View pointerEvents="none" style={styles.openingTransitionOverlay} testID="opening-transition-overlay">
@@ -1885,18 +2393,157 @@ export function AnnualScrollStory({
   );
 }
 
-function SectionHeading({ chapter, eyebrow, title, copy }: { chapter: string; eyebrow: string; title: string; copy: string }) {
+function FinaleEqualizer({ active, reducedMotion }: { active: boolean; reducedMotion: boolean }) {
+  const progress = useRef(new Animated.Value(0.5)).current;
+
+  useEffect(() => {
+    progress.stopAnimation();
+    if (reducedMotion || !active) {
+      progress.setValue(0.5);
+      return undefined;
+    }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(progress, { toValue: 1, duration: 640, easing: Easing.inOut(Easing.sin), useNativeDriver: Platform.OS !== "web" }),
+      Animated.timing(progress, { toValue: 0, duration: 640, easing: Easing.inOut(Easing.sin), useNativeDriver: Platform.OS !== "web" }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [active, progress, reducedMotion]);
+
+  const bases = [0.4, 0.85, 0.55, 1, 0.5, 0.9, 0.62];
   return (
-    <View style={styles.sectionHeading} {...revealDataSet()}>
-      <Text style={styles.sectionChapter}>{chapter}</Text>
-      <View style={styles.sectionHeadingCopy}>
-        <Text style={styles.chapterNo}>CHAPTER {chapter} · {eyebrow}</Text>
-        <Text style={styles.sectionTitle}>{title}</Text>
-        <Text style={styles.sectionLead}>{copy}</Text>
+    <View accessibilityElementsHidden aria-hidden importantForAccessibility="no-hide-descendants" style={styles.finaleEq}>
+      {bases.map((base, index) => (
+        <Animated.View
+          key={index}
+          style={[
+            styles.finaleEqBar,
+            {
+              backgroundColor: index % 2 ? color.accent : color.cyan,
+              transform: [{
+                scaleY: progress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: index % 2 ? [base, 1.4 - base] : [1.4 - base, base],
+                }),
+              }],
+            },
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
+
+// 章节舞台：与第二章同一套版式——满屏黑底、左侧叙事列、右半屏一个可点的主物件。
+function ChapterStage({
+  accent,
+  atmosphere,
+  children,
+  copy,
+  detail,
+  eyebrow,
+  flush,
+  height,
+  title,
+  width,
+}: {
+  accent: string;
+  atmosphere: StageAtmosphereKey;
+  children: ReactNode;
+  copy: string;
+  detail?: ReactNode;
+  eyebrow: string;
+  flush?: boolean;
+  height: number;
+  title: ReactNode;
+  width: number;
+}) {
+  const narrow = width < 1250;
+  return (
+    <View style={[styles.stageInner, { minHeight: height }, atmosphereStyle(atmosphere)]}>
+      <View
+        style={[styles.stageCopy, { left: narrow ? 44 : "14%", width: narrow ? 320 : 560 }]}
+        {...revealDataSet()}
+        {...(Platform.OS === "web" ? { dataSet: { sceneCopy: "true", storyReveal: "true" } } : {})}
+      >
+        <Text style={[styles.stageEyebrow, { color: accent }]}>{eyebrow}</Text>
+        <Text style={[styles.stageTitle, narrow && styles.stageTitleNarrow]}>{title}</Text>
+        <Text style={styles.stageLead}>{copy}</Text>
+        {detail ? <View style={styles.stageDetail}>{detail}</View> : null}
+      </View>
+      <View style={[styles.stageObject, { left: narrow ? 380 : "50%" }, flush && styles.stageObjectFlush]}>
+        {children}
       </View>
     </View>
   );
 }
+
+// 物件外壳：第二章卡片的同款卡头（强调色顶边 + 标签 + 大号数字）与 44px 描述条。
+function StageCard({
+  accent,
+  children,
+  description,
+  height,
+  label,
+  meta,
+  value,
+}: {
+  accent: string;
+  children: ReactNode;
+  description: string;
+  height: number;
+  label: string;
+  meta: string;
+  value: number;
+}) {
+  return (
+    <View style={[styles.stageCard, { height, borderTopColor: accent }]} {...revealDataSet()}>
+      <View style={styles.stageCardHeader}>
+        <View style={styles.stageCardHeaderCopy}>
+          <Text numberOfLines={1} style={styles.stageCardLabel}>{label}</Text>
+          <Text style={styles.stageCardMeta}>{meta}</Text>
+        </View>
+        <Text style={styles.stageCardValue}>{formatNumber(value)}</Text>
+      </View>
+      <View style={styles.stageCardDescription}>
+        <Text numberOfLines={1} style={styles.stageCardDescriptionText}>{description}</Text>
+      </View>
+      <View style={styles.stageCardBody}>{children}</View>
+    </View>
+  );
+}
+
+// 叙事标题：词条 + 描述两行，词条用该章强调色（与第二章 narrativeTitle 同一写法）。
+function hourNarrativeTitle(hour: StoryHour, privacy: boolean): ReactNode {
+  const label = padHour(hour.hour);
+  if (!hour.count) return <>{label} 前后，{`\n`}还没有可靠记录</>;
+  if (!privacy && hour.topTopic) {
+    return <>{label} 前后，{`\n`}<Text style={{ color: color.cyan }}>#{hour.topTopic}</Text> 出现得最多</>;
+  }
+  return <>{label} 前后，{`\n`}有 <Text style={{ color: color.cyan }}>{hour.count}</Text> 条可靠记录</>;
+}
+
+function topicNarrativeTitle(
+  topic: StoryTopic | null,
+  index: number,
+  accent: string,
+  privacy: boolean,
+): ReactNode {
+  if (!topic) return "当前样本没有可识别的显式标签";
+  const label = privacy ? `话题 ${index + 1}` : `#${topic.name}`;
+  return <><Text style={{ color: accent }}>{label}</Text> 出现在{`\n`}{topic.count} 条内容里</>;
+}
+
+function overlapNarrativeTitle(key: StoryOverlapKey, count: number, available: boolean): ReactNode {
+  if (!available) return <>列表快照缺少可比较 videoId，{`\n`}这一章无法判断交集</>;
+  return (
+    <>
+      <Text style={{ color: OVERLAP_ACCENTS[key] }}>{OVERLAP_LABELS[key]}</Text>，{`\n`}
+      有 {count} 个视频同时在场
+    </>
+  );
+}
+
 
 function findLivingChapter(report: LivingReport | null, id: LivingChapter["id"]): LivingChapter | null {
   return report?.chapters.find((chapter) => chapter.id === id) ?? null;
@@ -2059,102 +2706,9 @@ function OpeningStaggeredMessage({
   );
 }
 
-function HourDial({
-  hourRotation,
-  hours,
-  selectedHour,
-  onSelectHour,
-  onHourKey,
-  onWheel,
-}: {
-  hourRotation: Animated.Value;
-  hours: StoryHour[];
-  selectedHour: number;
-  onSelectHour: (hour: number) => void;
-  onHourKey: (event: unknown, hour: number) => void;
-  onWheel: (event: unknown) => void;
-}) {
-  const rotation = hourRotation.interpolate({ inputRange: [0, 24], outputRange: ["0deg", "360deg"] });
-  const maxCount = Math.max(1, ...hours.map((hour) => hour.count));
-  return (
-    <View
-      accessibilityLabel="24 小时可靠记录拨盘，滚动鼠标滚轮可切换小时"
-      style={styles.dialWrap}
-      {...revealDataSet()}
-      {...({ onWheel } as Record<string, unknown>)}
-    >
-      <View style={styles.dialTrack} />
-      <Animated.View style={[styles.dialHand, { transform: [{ rotate: rotation }] }]}><View style={styles.dialHandLine} /></Animated.View>
-      {hours.map((hour) => {
-        const angle = hour.hour / 24 * Math.PI * 2 - Math.PI / 2;
-        const left = 50 + Math.cos(angle) * 43;
-        const top = 50 + Math.sin(angle) * 43;
-        const selected = hour.hour === selectedHour;
-        return (
-          <Pressable
-            key={hour.hour}
-            accessibilityLabel={`${padHour(hour.hour)}，${hour.count} 条可靠记录`}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            onPress={() => onSelectHour(hour.hour)}
-            style={({ pressed }) => [
-              styles.hourButton,
-              { left: `${left}%`, top: `${top}%` },
-              selected && styles.hourButtonSelected,
-              pressed && styles.buttonPressed,
-              WEB_POINTER,
-            ]}
-            {...({
-              dataSet: { storyHour: String(hour.hour) },
-              onKeyDown: (event: unknown) => onHourKey(event, hour.hour),
-              tabIndex: selected ? 0 : -1,
-            } as Record<string, unknown>)}
-          >
-            <View style={[styles.hourDot, { opacity: 0.28 + hour.count / maxCount * 0.72 }, selected && styles.hourDotSelected]} />
-            <Text style={[styles.hourText, selected && styles.hourTextSelected]}>{String(hour.hour).padStart(2, "0")}</Text>
-          </Pressable>
-        );
-      })}
-      <View style={styles.dialCenter}>
-        <Clock3 color={color.cyan} size={22} />
-        <Text style={styles.dialTime}>{padHour(selectedHour)}</Text>
-        <Text style={styles.dialCount}>{hours[selectedHour]?.count ?? 0} 条可靠记录</Text>
-      </View>
-    </View>
-  );
-}
-
-function OverlapButton({
-  available,
-  data,
-  id,
-  selected,
-  onSelect,
-  style,
-}: {
-  available: boolean;
-  data: StoryOverlap;
-  id: StoryOverlapKey;
-  selected: boolean;
-  onSelect: (id: StoryOverlapKey) => void;
-  style: ViewStyle;
-}) {
-  return (
-    <Pressable
-      accessibilityLabel={`${OVERLAP_LABELS[id]}，${available ? `${data.count} 个视频` : "不可判断"}`}
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={() => onSelect(id)}
-      style={({ pressed }) => [styles.overlapButton, style, selected && styles.overlapButtonSelected, pressed && styles.buttonPressed, WEB_POINTER]}
-    >
-      <Text style={styles.overlapButtonLabel}>{OVERLAP_LABELS[id]}</Text>
-      <Text style={styles.overlapButtonValue}>{available ? data.count : "--"}</Text>
-    </Pressable>
-  );
-}
-
 function StoryHighlightCard({
   accent,
+  icon: Icon,
   index,
   item,
   label,
@@ -2163,6 +2717,7 @@ function StoryHighlightCard({
   privacy,
 }: {
   accent: string;
+  icon: HighlightIcon;
   index: number;
   item: AnnualContentRef | null;
   label: string;
@@ -2172,17 +2727,30 @@ function StoryHighlightCard({
 }) {
   const title = item ? (privacy ? "内容标题已隐藏" : item.title) : "暂无可确定内容";
   const author = item ? (privacy ? "创作者已隐藏" : item.author ?? "未知创作者") : "当前样本缺少对应记录";
+  const visualBackground = Platform.OS === "web"
+    ? ({
+        backgroundImage: `linear-gradient(155deg, ${hexToRgba(accent, 0.2)} 0%, rgba(17,18,22,0.35) 62%), radial-gradient(circle at 82% 16%, ${hexToRgba(accent, 0.16)}, transparent 55%)`,
+      } as unknown as ViewStyle)
+    : ({ backgroundColor: hexToRgba(accent, 0.14) } as ViewStyle);
   return (
     <Pressable
       accessibilityLabel={`${label}：${title}${item ? "，打开详情" : ""}`}
       accessibilityRole={item ? "button" : undefined}
       disabled={!item}
       onPress={() => onOpen(item)}
-      style={({ pressed }) => [styles.highlightCard, { borderTopColor: accent }, !item && styles.disabled, pressed && styles.buttonPressed, item && WEB_POINTER]}
+      {...(Platform.OS === "web" ? { dataSet: { storyCascade: "true", tiltCard: "true" } } : {})}
+      style={({ pressed }) => [
+        styles.highlightCard,
+        { borderTopColor: accent },
+        HIGHLIGHT_CARD_WEB,
+        !item && styles.disabled,
+        pressed && styles.buttonPressed,
+        item && WEB_POINTER,
+      ]}
     >
-      <View style={[styles.highlightVisual, { backgroundColor: fallbackColor(`${label}:${index}`) }]}>
-        <Star color={accent} size={48} strokeWidth={1.5} />
-        <Text style={styles.highlightIndex}>{String(index + 1).padStart(2, "0")}</Text>
+      <View style={[styles.highlightVisual, visualBackground]}>
+        <Icon color={accent} size={54} strokeWidth={1.4} />
+        <Text style={[styles.highlightIndex, { color: hexToRgba(accent, 0.3) }]}>{String(index + 1).padStart(2, "0")}</Text>
       </View>
       <View style={styles.highlightCopy}>
         <Text style={[styles.highlightLabel, { color: accent }]}>{label}</Text>
@@ -2190,6 +2758,7 @@ function StoryHighlightCard({
         <Text numberOfLines={1} style={styles.highlightMeta}>{author}</Text>
         <Text style={styles.highlightRule}>{rule}</Text>
       </View>
+      <View pointerEvents="none" style={[styles.highlightSheen, HIGHLIGHT_SHEEN_WEB]} />
     </Pressable>
   );
 }
@@ -2510,23 +3079,17 @@ function hashString(value: string): number {
   return hash >>> 0;
 }
 
-function openingParticleColor(item: OpeningParticle): (typeof OPENING_PARTICLE_COLORS)[number] {
+function openingParticleColor(item: OpeningParticle): StoryParticleColor {
   // 用词条 key 做种子，保留随机感，同时避免重渲染时跳色。
-  return OPENING_PARTICLE_COLORS[hashString(`${item.key}:${item.revealOrder}`) % OPENING_PARTICLE_COLORS.length]!;
+  return STORY_PARTICLE_COLORS[hashString(`${item.key}:${item.revealOrder}`) % STORY_PARTICLE_COLORS.length]!;
 }
 
-function fallbackColor(value: string): string {
-  const palette = [color.cyanSoft, color.accentSoft, color.amberSoft, color.greenSoft, color.surfaceMuted];
-  return palette[hashString(value) % palette.length]!;
-}
-
-function buildTrackPath(count: number, total: number, startY: number, endY: number, reverse = false): string {
-  const ratio = total > 0 ? Math.min(1, count / total) : 0;
-  const bend = 54 + ratio * 78;
-  const direction = reverse ? -1 : 1;
-  const firstControlY = startY + direction * bend;
-  const secondControlY = endY - direction * (bend * 0.72);
-  return `M 20 ${startY} C 180 ${firstControlY}, 350 ${secondControlY}, 665 ${endY}`;
+function hexToRgba(hex: string, alpha: number): string {
+  const value = hex.replace("#", "");
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 const styles = StyleSheet.create({
@@ -2569,7 +3132,6 @@ const styles = StyleSheet.create({
   openingTransitionPixels: { ...ABSOLUTE_FILL, zIndex: 25 },
   pixelSwapEmpty: { ...ABSOLUTE_FILL, backgroundColor: "transparent" },
   chapterNo: { color: color.cyan, fontSize: 10, fontWeight: "900" },
-  lead: { maxWidth: 640, color: color.textSecondary, fontSize: 16, lineHeight: 26, marginTop: 18 },
   floatingItem: { position: "absolute", zIndex: 4, left: "50%", top: "50%", justifyContent: "center" },
   openingBubble: { position: "absolute", top: 0, bottom: 0, borderRadius: 999 },
   openingBubbleSurface: { ...ABSOLUTE_FILL, borderWidth: 1, borderColor: "rgba(255,255,255,0.18)", borderRadius: 999, backgroundColor: "rgba(17,18,22,0.9)" },
@@ -2587,12 +3149,32 @@ const styles = StyleSheet.create({
   logoArtwork: { position: "absolute", left: -30, top: -30 },
   chapter: { minHeight: 820, justifyContent: "center", paddingHorizontal: 52, paddingVertical: 92, borderTopWidth: 1, borderTopColor: color.borderSoft, backgroundColor: color.canvas },
   desktopChapter: { paddingHorizontal: 0, paddingVertical: 0, borderTopWidth: 0 },
-  sectionInner: { width: "100%", maxWidth: 1180, alignSelf: "center" },
-  sectionHeading: { flexDirection: "row", alignItems: "flex-start", gap: 38, marginBottom: 48 },
-  sectionChapter: { width: 84, color: color.textMuted, fontSize: 44, lineHeight: 50, fontWeight: "900", fontVariant: ["tabular-nums"] },
-  sectionHeadingCopy: { flex: 1, minWidth: 0 },
-  sectionTitle: { maxWidth: 820, color: color.text, fontSize: 44, lineHeight: 54, fontWeight: "900", marginTop: 10 },
-  sectionLead: { maxWidth: 740, color: color.textSecondary, fontSize: 15, lineHeight: 25, marginTop: 16 },
+  // 第三到第六章舞台：与 DesktopCardSwap 同一底色与版式
+  stage: { position: "relative", backgroundColor: STAGE_CANVAS },
+  stageInner: { position: "relative", width: "100%", overflow: "hidden", backgroundColor: STAGE_CANVAS },
+  stageCopy: { position: "absolute", zIndex: 2, top: 0, bottom: 0, justifyContent: "center" },
+  stageEyebrow: { fontSize: 13, fontWeight: "900" },
+  stageTitle: { marginTop: 14, color: STAGE_TEXT, fontSize: 56, lineHeight: 63, fontWeight: "700", letterSpacing: -2.2 },
+  // 与第二章同一个断点：窄屏把大标题降到 38px。
+  stageTitleNarrow: { marginTop: 10, fontSize: 38, lineHeight: 46, letterSpacing: -1.5 },
+  stageLead: { marginTop: 16, color: "rgba(244,246,250,0.62)", fontSize: 14, lineHeight: 24 },
+  stageDetail: { gap: 10, marginTop: 26 },
+  stageHint: { color: "rgba(244,246,250,0.42)", fontSize: 11, fontWeight: "800" },
+  // 物件向右越过画幅边缘（由 stageInner 的 overflow 裁掉），每章的剪影才不一样。
+  stageObject: { position: "absolute", top: 0, right: -STAGE_BLEED, bottom: 0, alignItems: "center", justifyContent: "center", paddingHorizontal: 0 },
+  stageObjectFlush: { paddingRight: 0 },
+  // 没有外框、没有圆角、没有底色：卡头与描述条各自带底，物件直接落在场景背景上。
+  stageCard: { width: "100%", maxWidth: 940, borderTopWidth: 4, borderColor: "transparent" },
+  stageCardHeader: { height: 72, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 16, paddingHorizontal: 22, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.12)", backgroundColor: "rgba(12,14,18,0.94)", marginRight: STAGE_BLEED },
+  stageCardHeaderCopy: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "baseline", gap: 12 },
+  stageCardLabel: { flexShrink: 1, color: STAGE_TEXT, fontSize: 20, fontWeight: "800" },
+  stageCardMeta: { color: "rgba(244,246,250,0.5)", fontSize: 11 },
+  stageCardValue: { color: STAGE_TEXT, fontSize: 25, fontWeight: "800", fontVariant: ["tabular-nums"] },
+  stageCardDescription: { height: 44, justifyContent: "center", paddingHorizontal: 22, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.12)", backgroundColor: "rgba(16,19,26,0.94)", marginRight: STAGE_BLEED },
+  stageCardDescriptionText: { color: "rgba(244,246,250,0.66)", fontSize: 14, lineHeight: 22 },
+  stageCardBody: { flex: 1, minHeight: 0 },
+  stageDisc: { flex: 1, alignItems: "center", justifyContent: "center" },
+  stageEmpty: { flex: 1, alignItems: "center", justifyContent: "center" },
   recordButton: { minHeight: 78, flexDirection: "row", alignItems: "center", gap: 12, padding: 10, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surfaceRaised },
   recordButtonCompact: { minHeight: 66 },
   recordCover: { width: 42, height: 52, flexShrink: 0, overflow: "hidden", borderRadius: radius.small, backgroundColor: color.surfaceMuted },
@@ -2601,78 +3183,46 @@ const styles = StyleSheet.create({
   recordTitle: { color: color.text, fontSize: 12, lineHeight: 18, fontWeight: "800" },
   recordMeta: { color: color.textMuted, fontSize: 9, marginTop: 5 },
   emptyText: { color: color.textMuted, fontSize: 11, lineHeight: 18 },
-  rhythmScene: { borderTopWidth: 1, borderTopColor: color.border, backgroundColor: color.sidebar },
-  rhythmLayout: { width: "100%", maxWidth: 1180, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 64, paddingHorizontal: 52, paddingVertical: 64 },
-  rhythmLayoutCompact: { gap: 28, paddingHorizontal: 40 },
-  rhythmCopy: { flex: 1, minWidth: 0 },
-  hourStory: { maxWidth: 500, minHeight: 198, marginTop: 34, padding: 20, borderLeftWidth: 3, borderLeftColor: color.accent, backgroundColor: color.surface },
-  hourStoryLabel: { color: color.cyan, fontSize: 11, fontWeight: "900" },
-  hourStoryText: { color: color.text, fontSize: 17, lineHeight: 26, fontWeight: "800", marginVertical: 12 },
-  dialWrap: { position: "relative", width: 480, height: 480, flexShrink: 0, alignItems: "center", justifyContent: "center" },
-  dialTrack: { position: "absolute", top: 34, right: 34, bottom: 34, left: 34, borderWidth: 2, borderColor: color.border, borderRadius: 206 },
-  dialHand: { position: "absolute", width: 4, height: 170, left: 238, top: 70, alignItems: "center", justifyContent: "flex-start", transformOrigin: "50% 100%" },
-  dialHandLine: { width: 4, height: 150, borderRadius: 2, backgroundColor: color.cyan },
-  hourButton: { position: "absolute", width: 44, height: 44, marginLeft: -22, marginTop: -22, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "transparent", borderRadius: 22 },
-  hourButtonSelected: { borderColor: color.cyan, backgroundColor: color.cyanSoft },
-  hourDot: { position: "absolute", top: 5, width: 5, height: 5, borderRadius: 3, backgroundColor: color.accent },
-  hourDotSelected: { backgroundColor: color.cyan },
-  hourText: { color: color.textMuted, fontSize: 9, fontWeight: "700" },
-  hourTextSelected: { color: color.text, fontWeight: "900" },
-  dialCenter: { width: 190, height: 190, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: color.border, borderRadius: 95, backgroundColor: color.canvas },
-  dialTime: { color: color.text, fontSize: 38, lineHeight: 44, fontWeight: "900", marginTop: 8, fontVariant: ["tabular-nums"] },
-  dialCount: { color: color.textMuted, fontSize: 10, marginTop: 5 },
-  preferenceLayout: { flexDirection: "row", alignItems: "stretch", gap: 34 },
-  preferenceLayoutCompact: { gap: 20 },
-  topicField: { width: "36%", flexDirection: "row", flexWrap: "wrap", alignContent: "flex-start", gap: 9 },
-  topicButton: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 13, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surface },
-  topicButtonSelected: { borderColor: color.cyan, backgroundColor: color.cyanSoft },
-  topicButtonText: { color: color.textSecondary, fontSize: 12, fontWeight: "800" },
-  topicButtonTextSelected: { color: color.cyan },
-  topicButtonCount: { color: color.accent, fontSize: 9, fontWeight: "900" },
-  preferenceResult: { flex: 1, minWidth: 0, minHeight: 410, padding: 26, borderWidth: 1, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
   resultEyebrow: { color: color.cyan, fontSize: 9, fontWeight: "900" },
-  resultTitle: { color: color.text, fontSize: 26, lineHeight: 34, fontWeight: "900", marginTop: 7 },
-  resultCopy: { color: color.textSecondary, fontSize: 13, lineHeight: 21, marginVertical: 14 },
-  creatorFilmstrip: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 18, paddingTop: 16, borderTopWidth: 1, borderTopColor: color.border },
-  creatorFrame: { flex: 1, minWidth: 120, minHeight: 68, justifyContent: "center", paddingHorizontal: 12, borderLeftWidth: 3, borderLeftColor: color.accent, backgroundColor: color.surfaceRaised },
+  creatorRankList: { gap: 10, marginTop: 18, paddingTop: 16, borderTopWidth: 1, borderTopColor: color.border },
+  creatorRankRow: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 34 },
+  creatorRankBody: { flex: 1, minWidth: 0 },
+  creatorRankTrack: { height: 5, marginTop: 5, borderRadius: 3, overflow: "hidden", backgroundColor: color.surfaceMuted },
+  creatorRankFill: { height: 5, borderRadius: 3 },
+  creatorRankCount: { width: 34, color: color.textSecondary, fontSize: 11, fontWeight: "900", textAlign: "right", fontVariant: ["tabular-nums"] },
   creatorIndex: { color: color.textMuted, fontSize: 9, fontWeight: "900" },
-  creatorName: { color: color.text, fontSize: 11, fontWeight: "800", marginTop: 5 },
-  keptLayout: { flexDirection: "row", alignItems: "stretch", gap: 24 },
-  keptLayoutCompact: { gap: 14 },
-  confluence: { position: "relative", flex: 1.35, minWidth: 0, minHeight: 430 },
-  trackLabel: { position: "absolute", left: 16, color: color.textSecondary, fontSize: 11, fontWeight: "800" },
-  trackWatch: { top: 76 },
-  trackLiked: { top: 183 },
-  trackFavorite: { top: 290 },
-  overlapButton: { position: "absolute", minWidth: 126, minHeight: 58, alignItems: "center", justifyContent: "center", paddingHorizontal: 10, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surface },
-  overlapButtonSelected: { borderColor: color.cyan, backgroundColor: color.cyanSoft },
-  overlapButtonLabel: { color: color.textSecondary, fontSize: 9, fontWeight: "800" },
-  overlapButtonValue: { color: color.cyan, fontSize: 17, fontWeight: "900", marginTop: 4 },
-  overlapWatchLiked: { left: "38%", top: 118 },
-  overlapWatchFavorite: { left: "50%", top: 238 },
-  overlapLikedFavorite: { left: "24%", top: 256 },
-  overlapAll: { right: 10, top: 166 },
-  overlapResult: { flex: 0.78, minWidth: 300, padding: 24, borderWidth: 1, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
+  creatorName: { color: color.text, fontSize: 11, fontWeight: "800" },
   overlapItems: { gap: 8 },
   snapshotNotice: { minHeight: 42, flexDirection: "row", alignItems: "center", gap: 9, marginTop: 18, paddingHorizontal: 12, backgroundColor: color.amberSoft },
   snapshotMark: { width: 16, height: 3, backgroundColor: color.amber },
   snapshotNoticeText: { flex: 1, color: color.textSecondary, fontSize: 9 },
-  highlightsChapter: { paddingHorizontal: 0, paddingBottom: 0 },
-  highlightScroller: { width: "100%" },
-  highlightStrip: { gap: 14, paddingBottom: 20 },
+  // 舞台里横向滑动的高光带：卡片保持自身高度，从左列右侧一直流出右边缘。
+  highlightScroller: { width: "100%", maxHeight: 460 },
+  highlightStrip: { gap: 14 },
   highlightCard: { width: 300, minHeight: 410, overflow: "hidden", borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
-  highlightVisual: { position: "relative", height: 220, alignItems: "center", justifyContent: "center" },
-  highlightIndex: { position: "absolute", right: 14, bottom: 8, color: "rgba(255,255,255,0.22)", fontSize: 38, fontWeight: "900" },
+  highlightVisual: { position: "relative", height: 220, alignItems: "center", justifyContent: "center", backgroundColor: color.surfaceRaised },
+  highlightIndex: { position: "absolute", right: 14, bottom: 4, fontSize: 76, lineHeight: 82, fontWeight: "900", fontVariant: ["tabular-nums"] },
+  highlightSheen: { ...ABSOLUTE_FILL },
   highlightCopy: { flex: 1, padding: 18 },
   highlightLabel: { fontSize: 9, fontWeight: "900" },
   highlightTitle: { minHeight: 46, color: color.text, fontSize: 15, lineHeight: 22, fontWeight: "900", marginTop: 8 },
   highlightMeta: { color: color.textMuted, fontSize: 10, marginTop: 8 },
   highlightRule: { color: color.textSecondary, fontSize: 9, lineHeight: 15, marginTop: "auto", paddingTop: 14, borderTopWidth: 1, borderTopColor: color.border },
   disabled: { opacity: 0.52 },
-  finale: { width: "100%", minHeight: 560, alignItems: "center", justifyContent: "center", marginTop: 88, paddingHorizontal: 40, borderTopWidth: 1, borderTopColor: color.border, backgroundColor: color.sidebar },
-  finaleMark: { width: 72, height: 5, backgroundColor: color.accent },
+  finale: { width: "100%", minHeight: 560, alignItems: "center", justifyContent: "center", paddingVertical: 96, paddingHorizontal: 40 },
+  finaleEq: { flexDirection: "row", alignItems: "center", gap: 6, height: 30 },
+  finaleEqBar: {
+    width: 6,
+    height: 26,
+    borderRadius: 3,
+    ...(Platform.OS === "web" ? ({ transformOrigin: "50% 100%" } as unknown as ViewStyle) : null),
+  },
   finaleEyebrow: { color: color.cyan, fontSize: 10, fontWeight: "900", marginTop: 34 },
-  finaleTitle: { color: color.text, fontSize: 46, lineHeight: 58, fontWeight: "900", textAlign: "center", marginTop: 12 },
+  finaleTitleWrap: { position: "relative", marginTop: 12 },
+  finaleTitle: { color: color.text, fontSize: 46, lineHeight: 58, fontWeight: "900", textAlign: "center" },
+  finaleTitleGhost: { ...ABSOLUTE_FILL, color: "transparent" },
+  finaleTitleGhostCyan: { transform: [{ translateX: -3 }] },
+  finaleTitleGhostRed: { transform: [{ translateX: 3 }] },
   finaleCopy: { maxWidth: 680, color: color.textSecondary, fontSize: 15, lineHeight: 25, textAlign: "center", marginTop: 20 },
   dashboardButton: { minHeight: 50, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 28, paddingHorizontal: 20, borderRadius: radius.medium, backgroundColor: color.accentAction },
   dashboardButtonText: { color: color.white, fontSize: 13, fontWeight: "900" },
