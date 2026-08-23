@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "expo-web",
+      "url": "http://localhost:8090",
+      "port": 8090
+    },
+    {
+      "name": "expo-web-8093",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8093"],
+      "port": 8093,
+      "autoPort": false
+    }
+  ]
+}
