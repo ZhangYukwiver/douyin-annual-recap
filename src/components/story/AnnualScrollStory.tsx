@@ -19,10 +19,7 @@ import {
 } from "react-native";
 import {
   ArrowRight,
-  Bookmark,
   Clock3,
-  Heart,
-  History,
   LayoutDashboard,
   Play,
   Sparkles,
@@ -63,18 +60,21 @@ import {
   type StoryModel,
   type StoryOverlap,
   type StoryOverlapKey,
-  type StoryStream as StoryStreamData,
   type StoryTopic,
 } from "./storyModel";
+import { DesktopCardSwap, type DesktopStoryStream } from "./DesktopCardSwap";
 import { OpeningReelGallery } from "./OpeningReelGallery";
+import { PixelSwap } from "./PixelSwap";
 import {
   fillOpeningRows,
   openingBorderGlowPose,
   openingMessageExitWindow,
+  openingPixelTrailDirection,
   openingScrollTop,
   openingTransitionProgress,
   planOpeningDestinations,
   truncateOpeningParticleLabel,
+  type OpeningPixelTrailDirection,
 } from "./openingParticlePhysics";
 
 const MIN_STORY_WIDTH = 1024;
@@ -108,6 +108,15 @@ const OPENING_PARTICLE_COLORS = [
 const NOTE_VIEWBOX_WIDTH = 220;
 const NOTE_VIEWBOX_HEIGHT = 240;
 const NOTE_PATH = "M121 18H158C159 43 177 64 204 70V105C187 103 171 98 158 89V170C158 203 131 228 98 228C65 228 38 204 38 173C38 142 63 117 95 117C104 117 113 119 121 123V160C114 155 106 152 98 152C84 152 73 162 73 175C73 188 84 198 98 198C112 198 124 188 124 174L121 18Z";
+const OPENING_CURSOR_LOGO_URI = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="-14 -14 248 268"><path d="${NOTE_PATH}" fill="#25F4EE" transform="translate(-7 5)"/><path d="${NOTE_PATH}" fill="#FE2C55" transform="translate(7 -4)"/><path d="${NOTE_PATH}" fill="#F7F7F8"/></svg>`)}`;
+const USER_DESKTOP_COPY_URI = (require("./assets/user-desktop.jpg") as { uri: string }).uri;
+const USER_DESKTOP_WALLPAPER_URI = (require("./assets/user-desktop-wallpaper.jpg") as { uri: string }).uri;
+// ReactBits 示例算法；网格密度按当前视觉反馈调整。
+const OPENING_PIXEL_TRAIL_GRID_SIZE = 42;
+const OPENING_PIXEL_TRAIL_INTERPOLATE = 2.8;
+const OPENING_PIXEL_TRAIL_SIZE = 0.08;
+const OPENING_PIXEL_TRAIL_MAX_AGE = 250;
+const OPENING_PIXEL_TRAIL_INTENSITY = 0.2;
 const LIQUID_WAVE_PATH = "M-120 -2C-110 -2 -100 22 -90 22S-70 4 -60 4S-40 16 -30 16S-10 -2 0 -2S20 22 30 22S50 4 60 4S80 16 90 16S110 -2 120 -2S140 22 150 22S170 4 180 4S200 16 210 16S230 -2 240 -2S260 22 270 22S290 4 300 4S320 16 330 16S350 -2 360 -2";
 const LIQUID_PATH = `${LIQUID_WAVE_PATH}L360 260L-120 260Z`;
 const CURTAIN_WAVE_PATHS = [
@@ -210,6 +219,20 @@ const SvgPath = React.forwardRef<React.ComponentRef<typeof Path>, SvgPathProps>(
 const AnimatedSvgPath = Animated.createAnimatedComponent(SvgPath);
 const ABSOLUTE_FILL: ViewStyle = { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 };
 const WEB_POINTER = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
+const OPENING_LOGO_CURSOR = Platform.OS === "web"
+  ? ({ cursor: `url("${OPENING_CURSOR_LOGO_URI}") 18 18, pointer` } as unknown as ViewStyle)
+  : null;
+const DOM_CANVAS = "canvas" as unknown as React.ElementType;
+const OPENING_PIXEL_TRAIL_STYLE: React.CSSProperties = {
+  position: "absolute",
+  zIndex: 24,
+  top: 68,
+  left: 0,
+  width: "100%",
+  height: "calc(100% - 68px)",
+  display: "block",
+  pointerEvents: "none",
+};
 const WEB_NO_WRAP = Platform.OS === "web" ? ({ whiteSpace: "nowrap" } as unknown as TextStyle) : null;
 const OPENING_BORDER_GLOW_WEB = Platform.OS === "web"
   ? ({
@@ -436,6 +459,181 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
   );
 }
 
+interface OpeningPixelTrailPoint {
+  bornAt: number;
+  direction: OpeningPixelTrailDirection;
+  force: number;
+  x: number;
+  y: number;
+}
+
+function OpeningDirectionalPixelTrail() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return undefined;
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return undefined;
+
+    const opacity = {
+      left: new Float32Array(OPENING_PIXEL_TRAIL_GRID_SIZE ** 2),
+      right: new Float32Array(OPENING_PIXEL_TRAIL_GRID_SIZE ** 2),
+    };
+    let width = 1;
+    let height = 1;
+    let squareSize = 1;
+    let cellSize = 1;
+    let originX = 0;
+    let originY = 0;
+    let trail: OpeningPixelTrailPoint[] = [];
+    let lastPoint: { x: number; y: number } | null = null;
+    let direction: OpeningPixelTrailDirection | null = null;
+    let frame = 0;
+
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = Math.max(1, rect.width);
+      height = Math.max(1, rect.height);
+      squareSize = Math.max(width, height);
+      cellSize = squareSize / OPENING_PIXEL_TRAIL_GRID_SIZE;
+      originX = (width - squareSize) / 2;
+      originY = (height - squareSize) / 2;
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      context.imageSmoothingEnabled = false;
+      trail = [];
+      lastPoint = null;
+    };
+
+    const followPointer = (event: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
+        lastPoint = null;
+        return;
+      }
+      if (!lastPoint) {
+        lastPoint = { x, y };
+        return;
+      }
+
+      const deltaX = x - lastPoint.x;
+      const deltaY = y - lastPoint.y;
+      if (!direction && Math.abs(deltaX) <= 0.5) {
+        lastPoint = { x, y };
+        return;
+      }
+      direction = openingPixelTrailDirection(deltaX, direction ?? "right");
+      const distanceSquared = (deltaX * deltaX + deltaY * deltaY) / (squareSize * squareSize);
+      if (distanceSquared <= 0) return;
+
+      const force = Math.max(0.3, Math.min(distanceSquared * 10_000, 1));
+      const interval = (OPENING_PIXEL_TRAIL_SIZE * 0.5 / OPENING_PIXEL_TRAIL_INTERPOLATE) ** 2;
+      const steps = Math.max(1, Math.ceil(distanceSquared / interval));
+      const bornAt = performance.now();
+      for (let step = 1; step <= steps; step += 1) {
+        const progress = step / steps;
+        trail.push({
+          bornAt,
+          direction,
+          force,
+          x: lastPoint.x + deltaX * progress,
+          y: lastPoint.y + deltaY * progress,
+        });
+      }
+      lastPoint = { x, y };
+    };
+
+    const render = (now: number) => {
+      context.clearRect(0, 0, width, height);
+      opacity.left.fill(0);
+      opacity.right.fill(0);
+      trail = trail.filter((point) => now - point.bornAt <= OPENING_PIXEL_TRAIL_MAX_AGE);
+
+      for (const point of trail) {
+        const age = now - point.bornAt;
+        const riseTime = OPENING_PIXEL_TRAIL_MAX_AGE * 0.3;
+        const life = age < riseTime
+          ? age / riseTime
+          : 1 - (age - riseTime) / (OPENING_PIXEL_TRAIL_MAX_AGE - riseTime);
+        const brushRadius = squareSize * OPENING_PIXEL_TRAIL_SIZE * Math.max(0, life) * point.force;
+        if (brushRadius < 0.5) continue;
+
+        const firstColumn = Math.max(0, Math.floor((point.x - brushRadius - originX) / cellSize));
+        const lastColumn = Math.min(OPENING_PIXEL_TRAIL_GRID_SIZE - 1, Math.floor((point.x + brushRadius - originX) / cellSize));
+        const firstRow = Math.max(0, Math.floor((point.y - brushRadius - originY) / cellSize));
+        const lastRow = Math.min(OPENING_PIXEL_TRAIL_GRID_SIZE - 1, Math.floor((point.y + brushRadius - originY) / cellSize));
+        const target = opacity[point.direction];
+
+        for (let row = firstRow; row <= lastRow; row += 1) {
+          const centerY = originY + (row + 0.5) * cellSize;
+          for (let column = firstColumn; column <= lastColumn; column += 1) {
+            const centerX = originX + (column + 0.5) * cellSize;
+            const distance = Math.hypot(centerX - point.x, centerY - point.y) / brushRadius;
+            if (distance >= 1) continue;
+            const falloff = distance <= 0.25 ? 1 : 1 - (distance - 0.25) / 0.75;
+            const index = row * OPENING_PIXEL_TRAIL_GRID_SIZE + column;
+            const contribution = OPENING_PIXEL_TRAIL_INTENSITY * falloff;
+            target[index] = 1 - (1 - target[index]!) * (1 - contribution);
+          }
+        }
+      }
+
+      for (let row = 0; row < OPENING_PIXEL_TRAIL_GRID_SIZE; row += 1) {
+        const top = originY + row * cellSize;
+        if (top + cellSize <= 0 || top >= height) continue;
+        for (let column = 0; column < OPENING_PIXEL_TRAIL_GRID_SIZE; column += 1) {
+          const index = row * OPENING_PIXEL_TRAIL_GRID_SIZE + column;
+          const red = opacity.left[index]!;
+          const blue = opacity.right[index]!;
+          if (red <= 0 && blue <= 0) continue;
+          const left = Math.floor(originX + column * cellSize);
+          const pixelTop = Math.floor(top);
+          const pixelSize = Math.ceil(cellSize) + 1;
+          if (red > 0) {
+            context.globalCompositeOperation = "source-over";
+            context.fillStyle = `rgba(217,14,32,${red})`;
+            context.fillRect(left, pixelTop, pixelSize, pixelSize);
+          }
+          if (blue > 0) {
+            context.globalCompositeOperation = red > 0 ? "screen" : "source-over";
+            context.fillStyle = `rgba(37,244,238,${blue})`;
+            context.fillRect(left, pixelTop, pixelSize, pixelSize);
+          }
+        }
+      }
+      context.globalCompositeOperation = "source-over";
+
+      frame = requestAnimationFrame(render);
+    };
+
+    resize();
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(canvas);
+    window.addEventListener("pointermove", followPointer, { passive: true });
+    frame = requestAnimationFrame(render);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      window.removeEventListener("pointermove", followPointer);
+      context.clearRect(0, 0, width, height);
+    };
+  }, []);
+
+  if (Platform.OS !== "web") return null;
+  return React.createElement(DOM_CANVAS, {
+    "aria-hidden": true,
+    "data-testid": "opening-directional-pixel-trail",
+    ref: canvasRef,
+    style: OPENING_PIXEL_TRAIL_STYLE,
+  });
+}
+
 export function AnnualScrollStory({
   report,
   livingReport = null,
@@ -456,6 +654,29 @@ export function AnnualScrollStory({
     () => selectOpeningCovers(model, OPENING_REEL_COVERS_PER_STREAM),
     [model],
   );
+  const desktopStreams = useMemo<DesktopStoryStream[]>(() => [
+    {
+      key: "watch_history",
+      label: "观看",
+      accent: color.cyan,
+      count: model.streams.watch_history.uniqueCount,
+      records: model.streams.watch_history.records,
+    },
+    {
+      key: "liked_videos",
+      label: "喜欢",
+      accent: color.accent,
+      count: model.streams.liked_videos.uniqueCount,
+      records: model.streams.liked_videos.records,
+    },
+    {
+      key: "favorite_videos",
+      label: "收藏",
+      accent: color.amber,
+      count: model.streams.favorite_videos.uniqueCount,
+      records: model.streams.favorite_videos.records,
+    },
+  ], [model]);
   const openingParticles = useMemo(
     () => buildOpeningParticles(model, openingContent, privacy),
     [model, openingContent, privacy],
@@ -486,6 +707,8 @@ export function AnnualScrollStory({
   const [openingMessageReady, setOpeningMessageReady] = useState(false);
   const [openingStacked, setOpeningStacked] = useState(false);
   const [openingContinued, setOpeningContinued] = useState(false);
+  const [openingPixelSwapActive, setOpeningPixelSwapActive] = useState(false);
+  const [desktopOpened, setDesktopOpened] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(() => (
     Platform.OS === "web"
     && typeof window !== "undefined"
@@ -495,6 +718,7 @@ export function AnnualScrollStory({
   const openingStepRef = useRef(0);
   const openingSequenceStarted = useRef(false);
   const openingContinuedRef = useRef(false);
+  const openingPixelSwapInFlight = useRef(false);
   const openingForegroundFade = useRef<Animated.CompositeAnimation | null>(null);
   const openingReveal = useRef(new Animated.Value(0)).current;
   const openingForegroundOpacity = useRef(new Animated.Value(1)).current;
@@ -512,6 +736,9 @@ export function AnnualScrollStory({
   const selectedTopicData = model.topics.find((topic) => topic.name === selectedTopic) ?? model.topics[0] ?? null;
   const selectedTopicIndex = selectedTopicData ? model.topics.findIndex((topic) => topic.name === selectedTopicData.name) : -1;
   const selectedOverlapData = model.overlaps[selectedOverlap];
+  const openingStickyStyle = Platform.OS === "web"
+    ? ({ position: "sticky", top: 0 } as unknown as ViewStyle)
+    : null;
   const stickyStyle = Platform.OS === "web" && !reducedMotion
     ? ({ position: "sticky", top: 0 } as unknown as ViewStyle)
     : null;
@@ -894,19 +1121,28 @@ export function AnnualScrollStory({
   }, []);
 
   const continuePastOpening = useCallback(() => {
-    if (!openingStacked || openingContinuedRef.current) return;
+    if (!openingStacked || openingContinuedRef.current || openingPixelSwapInFlight.current) return;
+    openingPixelSwapInFlight.current = true;
     openingContinuedRef.current = true;
     setOpeningContinued(true);
     const scrollToNextChapter = () => scrollRef.current?.scrollTo({
       y: sectionOffsets.current[1] ?? openingSceneHeight + OPENING_TRANSITION_SCROLL,
       animated: false,
     });
-    if (Platform.OS === "web" && typeof window !== "undefined") {
+    if (Platform.OS === "web" && !reducedMotion && typeof window !== "undefined") {
+      setOpeningPixelSwapActive(true);
       window.requestAnimationFrame(scrollToNextChapter);
     } else {
       scrollToNextChapter();
+      openingPixelSwapInFlight.current = false;
     }
-  }, [openingSceneHeight, openingStacked]);
+  }, [openingSceneHeight, openingStacked, reducedMotion]);
+
+  const finishOpeningPixelSwap = useCallback((active: boolean) => {
+    if (!active) return;
+    openingPixelSwapInFlight.current = false;
+    setOpeningPixelSwapActive(false);
+  }, []);
 
   const registerChapter = useCallback((index: number) => (event: LayoutChangeEvent) => {
     sectionOffsets.current[index - 1] = event.nativeEvent.layout.y;
@@ -940,7 +1176,11 @@ export function AnnualScrollStory({
     setSelectedHour(next);
   }, [selectedHour]);
 
-  const storyScrollEnabled = openingContinued || (openingMessageReady && !openingStacked);
+  const openDesktopApp = useCallback(() => {
+    setDesktopOpened(true);
+  }, []);
+  const desktopIntroActive = openingContinued && !desktopOpened;
+  const storyScrollEnabled = (openingContinued && desktopOpened) || (openingMessageReady && !openingStacked);
 
   useEffect(() => {
     if (Platform.OS !== "web" || !openingStacked || openingContinuedRef.current || typeof window === "undefined") return undefined;
@@ -959,7 +1199,14 @@ export function AnnualScrollStory({
     if (!scroller) return undefined;
     scroller.style.overflowY = storyScrollEnabled ? "auto" : "hidden";
     scroller.style.touchAction = storyScrollEnabled ? "pan-y" : "none";
-    scroller.style.cursor = storyScrollEnabled ? "grab" : "default";
+    const restingCursor = desktopIntroActive
+      ? 'url("' + OPENING_CURSOR_LOGO_URI + '") 18 18, pointer'
+      : desktopOpened
+        ? "default"
+        : storyScrollEnabled
+          ? "grab"
+          : "default";
+    scroller.style.cursor = restingCursor;
     if (!storyScrollEnabled) return undefined;
     let dragging = false;
     let startY = 0;
@@ -972,14 +1219,14 @@ export function AnnualScrollStory({
       startY = event.clientY;
       startScrollTop = scroller.scrollTop;
       scroller.setPointerCapture?.(event.pointerId);
-      scroller.style.cursor = "grabbing";
+      scroller.style.cursor = desktopOpened ? "default" : "grabbing";
     };
     const onPointerMove = (event: PointerEvent) => {
       if (dragging) scroller.scrollTop = startScrollTop - (event.clientY - startY);
     };
     const stopDragging = () => {
       dragging = false;
-      scroller.style.cursor = "grab";
+      scroller.style.cursor = restingCursor;
     };
     scroller.addEventListener("pointerdown", onPointerDown);
     scroller.addEventListener("pointermove", onPointerMove);
@@ -991,7 +1238,7 @@ export function AnnualScrollStory({
       scroller.removeEventListener("pointerup", stopDragging);
       scroller.removeEventListener("pointercancel", stopDragging);
     };
-  }, [storyScrollEnabled, width]);
+  }, [desktopIntroActive, desktopOpened, storyScrollEnabled, width]);
 
   const openStoryRecord = useCallback((item: StoryContentItem | null) => {
     if (!item) return;
@@ -1073,7 +1320,7 @@ export function AnnualScrollStory({
         testID="story-scroll-view"
       >
         <View onLayout={registerChapter(1)} style={[styles.stickyChapter, { minHeight: openingSceneHeight + OPENING_TRANSITION_SCROLL }]}>
-          <View style={[styles.scene, { minHeight: openingSceneHeight }, stickyStyle]}>
+          <View style={[styles.scene, { minHeight: openingSceneHeight }, openingStickyStyle]}>
             <View style={styles.openingBackdrop} testID="opening-cover-collage">
               <OpeningReelGallery
                 active={activeChapter === 1}
@@ -1420,53 +1667,37 @@ export function AnnualScrollStory({
                 accessibilityLabel="进入下一页"
                 accessibilityRole="button"
                 onPress={continuePastOpening}
-                style={[styles.openingContinue, WEB_POINTER]}
+                style={[styles.openingContinue, OPENING_LOGO_CURSOR]}
                 testID="opening-continue"
               />
             ) : null}
           </View>
         </View>
 
-        <View onLayout={registerChapter(2)} style={styles.chapter}>
-          <View style={styles.sectionInner}>
-            <SectionHeading
-              chapter="02"
-              eyebrow={currentChapter?.eyebrow ?? "内容足迹"}
-              title={currentChapter?.title ?? "三条内容流，汇成同一段足迹。"}
-              copy={livingChapterCopy(currentChapter, "观看、喜欢和收藏分别保留原始列表口径，再汇聚为去重内容总量。", privacy)}
-            />
-            <View style={[styles.streamGrid, compact && styles.streamGridCompact]} {...revealDataSet()}>
-              <StoryStream
-                accent={color.cyan}
-                icon={History}
-                label="观看"
-                onOpen={openStoryRecord}
-                privacy={privacy}
-                stream={model.streams.watch_history}
-              />
-              <StoryStream
-                accent={color.accent}
-                icon={Heart}
-                label="喜欢"
-                onOpen={openStoryRecord}
-                privacy={privacy}
-                stream={model.streams.liked_videos}
-              />
-              <StoryStream
-                accent={color.amber}
-                icon={Bookmark}
-                label="收藏"
-                onOpen={openStoryRecord}
-                privacy={privacy}
-                stream={model.streams.favorite_videos}
-              />
-            </View>
-            <View style={styles.totalKnot} {...revealDataSet()}>
-              <Text style={styles.totalKnotLabel}>三类记录去重后</Text>
-              <Text style={styles.totalKnotValue}>{formatNumber(overview.counts.total)}</Text>
-              <Text style={styles.totalKnotMeta}>数字来自统计，叙事不会改变它。</Text>
-            </View>
-          </View>
+        <View
+          onLayout={registerChapter(2)}
+          style={[styles.chapter, styles.desktopChapter, { minHeight: sceneHeight }]}
+        >
+          <DesktopCardSwap
+            active={openingContinued && !openingPixelSwapActive}
+            appIcon={<DesktopDouyinIcon />}
+            copy={livingChapterCopy(
+              currentChapter,
+              "观看、喜欢和收藏各自保留真实列表口径，封面会在对应页面中展开。",
+              privacy,
+            )}
+            desktopCopyUri={USER_DESKTOP_COPY_URI}
+            eyebrow={"CHAPTER 02 · " + (currentChapter?.eyebrow ?? "最近发生什么")}
+            onOpenApp={openDesktopApp}
+            onOpenRecord={openStoryRecord}
+            privacy={privacy}
+            reducedMotion={reducedMotion}
+            streams={desktopStreams}
+            title={currentChapter?.title ?? "你最近在靠近什么？"}
+            viewportHeight={sceneHeight}
+            viewportWidth={width}
+            wallpaperUri={USER_DESKTOP_WALLPAPER_URI}
+          />
         </View>
 
         <View onLayout={registerChapter(3)} style={[styles.stickyChapter, { minHeight: sceneHeight + 380 }]}>
@@ -1630,6 +1861,25 @@ export function AnnualScrollStory({
         </View>
       </ScrollView>
 
+      {openingStacked && !desktopOpened && !reducedMotion ? <OpeningDirectionalPixelTrail /> : null}
+
+      {openingPixelSwapActive ? (
+        <View pointerEvents="none" style={styles.openingTransitionOverlay} testID="opening-transition-overlay">
+          <PixelSwap
+            active
+            firstContent={<View style={styles.pixelSwapEmpty} />}
+            onComplete={finishOpeningPixelSwap}
+            pixelColor={color.black}
+            pixelDuration={460}
+            pixelSize={58}
+            pattern="random"
+            revealUnderlying
+            secondContent={<View style={styles.pixelSwapEmpty} />}
+            style={styles.openingTransitionPixels as React.CSSProperties}
+          />
+        </View>
+      ) : null}
+
       <StoryDetailModal detail={detail} onClose={() => setDetail(null)} privacy={privacy} />
     </View>
   );
@@ -1684,35 +1934,13 @@ function livingHighlightRule(key: keyof AnnualHighlightsData): string {
   }
 }
 
-function StoryStream({
-  accent,
-  icon: Icon,
-  label,
-  onOpen,
-  privacy,
-  stream,
-}: {
-  accent: string;
-  icon: React.ComponentType<{ color?: string; size?: number; strokeWidth?: number }>;
-  label: string;
-  onOpen: (item: StoryContentItem | null) => void;
-  privacy: boolean;
-  stream: StoryStreamData;
-}) {
+function DesktopDouyinIcon() {
   return (
-    <View style={[styles.stream, { borderTopColor: accent }]}>
-      <View style={styles.streamHeader}>
-        <View style={styles.streamTitle}><Icon color={accent} size={19} /><Text style={styles.streamLabel}>{label}</Text></View>
-        <Text style={styles.streamCount}>{formatNumber(stream.uniqueCount)}</Text>
-      </View>
-      <View style={styles.streamLine} />
-      <View style={styles.streamItems}>
-        {stream.records.slice(0, 3).map((item) => (
-          <StoryRecordButton compact item={item} key={item.key} onOpen={onOpen} privacy={privacy} />
-        ))}
-        {!stream.representative ? <Text style={styles.emptyText}>暂无代表内容</Text> : null}
-      </View>
-    </View>
+    <Svg accessibilityLabel="抖音" height="78%" viewBox="-14 -14 248 268" width="78%">
+      <Path d={NOTE_PATH} fill="#25F4EE" transform="translate(-7 5)" />
+      <Path d={NOTE_PATH} fill="#FE2C55" transform="translate(7 -4)" />
+      <Path d={NOTE_PATH} fill="#F7F7F8" />
+    </Svg>
   );
 }
 
@@ -2337,6 +2565,9 @@ const styles = StyleSheet.create({
   openingWebglReveal: { position: "absolute", zIndex: 7, top: 10, left: 0, width: "100%", overflow: "hidden" },
   openingLogoSpotlight: { ...ABSOLUTE_FILL, zIndex: 11 },
   openingContinue: { ...ABSOLUTE_FILL, zIndex: 12 },
+  openingTransitionOverlay: { position: "absolute", top: 68, right: 0, bottom: 0, left: 0, zIndex: 25 },
+  openingTransitionPixels: { ...ABSOLUTE_FILL, zIndex: 25 },
+  pixelSwapEmpty: { ...ABSOLUTE_FILL, backgroundColor: "transparent" },
   chapterNo: { color: color.cyan, fontSize: 10, fontWeight: "900" },
   lead: { maxWidth: 640, color: color.textSecondary, fontSize: 16, lineHeight: 26, marginTop: 18 },
   floatingItem: { position: "absolute", zIndex: 4, left: "50%", top: "50%", justifyContent: "center" },
@@ -2355,21 +2586,13 @@ const styles = StyleSheet.create({
   logoEntryBody: { ...ABSOLUTE_FILL, zIndex: 3, alignItems: "center", justifyContent: "center" },
   logoArtwork: { position: "absolute", left: -30, top: -30 },
   chapter: { minHeight: 820, justifyContent: "center", paddingHorizontal: 52, paddingVertical: 92, borderTopWidth: 1, borderTopColor: color.borderSoft, backgroundColor: color.canvas },
+  desktopChapter: { paddingHorizontal: 0, paddingVertical: 0, borderTopWidth: 0 },
   sectionInner: { width: "100%", maxWidth: 1180, alignSelf: "center" },
   sectionHeading: { flexDirection: "row", alignItems: "flex-start", gap: 38, marginBottom: 48 },
   sectionChapter: { width: 84, color: color.textMuted, fontSize: 44, lineHeight: 50, fontWeight: "900", fontVariant: ["tabular-nums"] },
   sectionHeadingCopy: { flex: 1, minWidth: 0 },
   sectionTitle: { maxWidth: 820, color: color.text, fontSize: 44, lineHeight: 54, fontWeight: "900", marginTop: 10 },
   sectionLead: { maxWidth: 740, color: color.textSecondary, fontSize: 15, lineHeight: 25, marginTop: 16 },
-  streamGrid: { flexDirection: "row", alignItems: "stretch", gap: 16 },
-  streamGridCompact: { gap: 10 },
-  stream: { flex: 1, minWidth: 0, minHeight: 470, padding: 18, borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
-  streamHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
-  streamTitle: { flexDirection: "row", alignItems: "center", gap: 8 },
-  streamLabel: { color: color.text, fontSize: 13, fontWeight: "900" },
-  streamCount: { color: color.text, fontSize: 23, fontWeight: "900", fontVariant: ["tabular-nums"] },
-  streamLine: { height: 2, marginVertical: 16, backgroundColor: color.border },
-  streamItems: { gap: 8 },
   recordButton: { minHeight: 78, flexDirection: "row", alignItems: "center", gap: 12, padding: 10, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surfaceRaised },
   recordButtonCompact: { minHeight: 66 },
   recordCover: { width: 42, height: 52, flexShrink: 0, overflow: "hidden", borderRadius: radius.small, backgroundColor: color.surfaceMuted },
@@ -2378,10 +2601,6 @@ const styles = StyleSheet.create({
   recordTitle: { color: color.text, fontSize: 12, lineHeight: 18, fontWeight: "800" },
   recordMeta: { color: color.textMuted, fontSize: 9, marginTop: 5 },
   emptyText: { color: color.textMuted, fontSize: 11, lineHeight: 18 },
-  totalKnot: { width: 260, alignSelf: "center", alignItems: "center", marginTop: 34, paddingTop: 24, borderTopWidth: 3, borderTopColor: color.cyan },
-  totalKnotLabel: { color: color.textMuted, fontSize: 10 },
-  totalKnotValue: { color: color.text, fontSize: 46, lineHeight: 52, fontWeight: "900", marginTop: 6 },
-  totalKnotMeta: { color: color.textSecondary, fontSize: 11, marginTop: 6, textAlign: "center" },
   rhythmScene: { borderTopWidth: 1, borderTopColor: color.border, backgroundColor: color.sidebar },
   rhythmLayout: { width: "100%", maxWidth: 1180, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 64, paddingHorizontal: 52, paddingVertical: 64 },
   rhythmLayoutCompact: { gap: 28, paddingHorizontal: 40 },

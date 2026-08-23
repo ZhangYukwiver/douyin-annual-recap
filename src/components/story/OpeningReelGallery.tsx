@@ -13,7 +13,7 @@ import { Play } from "lucide-react-native";
 
 import { workspaceColors as color, workspaceRadii as radius } from "../workspace/workspaceTheme";
 import type { StoryContentItem } from "./storyModel";
-import { coverGatherWindow, coverStackLayerOffset, shuffledCoverIndices } from "./openingParticlePhysics";
+import { coverGatherWindow, shuffledCoverIndices } from "./openingParticlePhysics";
 
 const ROW_CONFIGS = [
   { speed: 1, phase: 0.06 },
@@ -76,6 +76,9 @@ export function OpeningReelGallery({
   const lastDragEndedAt = useRef(0);
   const lastVerticalWheelAt = useRef(0);
   const gatherTarget = useRef({ x: width / 2, y: height / 2 });
+  const deckOriginTarget = useRef({ x: width / 2, y: height / 2 });
+  const deckFollowX = useRef(new Animated.Value(0)).current;
+  const deckFollowY = useRef(new Animated.Value(0)).current;
   const transitioning = useRef(false);
   const deckCaptured = useRef(false);
   const coversHiddenRef = useRef(false);
@@ -116,6 +119,9 @@ export function OpeningReelGallery({
     const rootRect = root.getBoundingClientRect();
     const targetX = clamp(gatherTarget.current.x, 0, rootRect.width);
     const targetY = clamp(gatherTarget.current.y, 0, rootRect.height);
+    deckOriginTarget.current = { x: targetX, y: targetY };
+    deckFollowX.setValue(0);
+    deckFollowY.setValue(0);
     const visible = Array.from(root.querySelectorAll<HTMLElement>("[data-opening-cover='true']"))
       .map((node) => {
         const item = itemsByKey.get(node.dataset.openingItemKey ?? "");
@@ -154,17 +160,19 @@ export function OpeningReelGallery({
     deckCaptured.current = true;
     setDeckCards(selected);
     setGatherStartByKey(new Map(selected.map((card) => [card.sourceKey, card.gatherStart])));
-  }, [itemsByKey]);
+  }, [deckFollowX, deckFollowY, itemsByKey]);
 
   useEffect(() => {
     deckCaptured.current = false;
+    deckFollowX.setValue(0);
+    deckFollowY.setValue(0);
     setDeckCards([]);
     setGatherStartByKey(new Map());
     if (!transitioning.current) gatherTarget.current = { x: width / 2, y: height / 2 };
     if (!transitioning.current || Platform.OS !== "web") return undefined;
     const frame = window.requestAnimationFrame(captureDeckCards);
     return () => window.cancelAnimationFrame(frame);
-  }, [captureDeckCards, height, items, width]);
+  }, [captureDeckCards, deckFollowX, deckFollowY, height, items, width]);
 
   useEffect(() => {
     const listener = transitionProgress.addListener(({ value }) => {
@@ -172,6 +180,8 @@ export function OpeningReelGallery({
       if (nextTransitioning && !transitioning.current) velocity.current = 0;
       if (!nextTransitioning && transitioning.current) {
         deckCaptured.current = false;
+        deckFollowX.setValue(0);
+        deckFollowY.setValue(0);
         setDeckCards([]);
         setGatherStartByKey(new Map());
       }
@@ -187,7 +197,7 @@ export function OpeningReelGallery({
       }
     });
     return () => transitionProgress.removeListener(listener);
-  }, [captureDeckCards, transitionProgress]);
+  }, [captureDeckCards, deckFollowX, deckFollowY, transitionProgress]);
 
   const updateTracks = useCallback((nextPosition: number) => {
     rows.forEach((_, index) => {
@@ -208,11 +218,23 @@ export function OpeningReelGallery({
     const root = rootRef.current as unknown as HTMLElement | null;
     if (!root) return;
     const rect = root.getBoundingClientRect();
-    gatherTarget.current = {
+    const nextTarget = {
       x: clamp(clientX - rect.left, 0, rect.width),
       y: clamp(clientY - rect.top, 0, rect.height),
     };
-  }, []);
+    gatherTarget.current = nextTarget;
+    if (deckCaptured.current && transitioning.current) {
+      deckFollowX.setValue(nextTarget.x - deckOriginTarget.current.x);
+      deckFollowY.setValue(nextTarget.y - deckOriginTarget.current.y);
+    }
+  }, [deckFollowX, deckFollowY]);
+
+  useEffect(() => {
+    if (!active || reducedMotion || Platform.OS !== "web" || typeof window === "undefined") return undefined;
+    const followPointer = (event: PointerEvent) => updateGatherTarget(event.clientX, event.clientY);
+    window.addEventListener("pointermove", followPointer, { passive: true });
+    return () => window.removeEventListener("pointermove", followPointer);
+  }, [active, reducedMotion, updateGatherTarget]);
 
   const handleWheel = useCallback((event: unknown) => {
     if (!active || reducedMotion || transitioning.current || Platform.OS !== "web") return;
@@ -324,7 +346,6 @@ export function OpeningReelGallery({
     if (Platform.OS === "web" && window.performance.now() - lastDragEndedAt.current < 140) return;
     setSelectedId((current) => current === selectionId ? null : selectionId);
   }, []);
-
   return (
     <View
       {...({ onWheel: handleWheel } as Record<string, unknown>)}
@@ -405,14 +426,19 @@ export function OpeningReelGallery({
         {deckCards.map((card, index) => {
           const targetWidth = clamp(width * 0.1, 112, 132);
           const targetHeight = targetWidth * (card.height / card.width);
-          const targetCenterX = card.targetX + coverStackLayerOffset(index, deckCards.length);
+          const targetCenterX = card.targetX;
           const targetCenterY = card.targetY;
           const targetLeft = targetCenterX - targetWidth / 2;
           const targetTop = targetCenterY - targetHeight / 2;
           const [gatherStart, gatherEnd] = coverGatherWindow(index, deckCards.length);
           const cardProgressInput = [0, gatherStart, gatherEnd, 1];
-          const cardVisibleInput = [0, gatherStart, gatherStart + 0.04, 1];
+          const cardVisibleInput = [0, gatherStart, gatherStart + 0.04, gatherEnd, 1];
           const cardHighlightInput = [0, 0.01, gatherStart, gatherStart + 0.001, gatherEnd, gatherEnd + 0.001, 1];
+          const cardFollowProgress = transitionProgress.interpolate({
+            inputRange: cardProgressInput,
+            outputRange: [0, 0, 1, 1],
+            extrapolate: "clamp",
+          });
           return (
             <Animated.View
               key={card.key}
@@ -420,17 +446,29 @@ export function OpeningReelGallery({
                 styles.deckCard,
                 {
                   height: transitionProgress.interpolate({ inputRange: cardProgressInput, outputRange: [card.height, card.height, targetHeight, targetHeight], extrapolate: "clamp" }),
-                  left: transitionProgress.interpolate({ inputRange: cardProgressInput, outputRange: [card.x, card.x, targetLeft, targetLeft], extrapolate: "clamp" }),
+                  left: Animated.add(
+                    transitionProgress.interpolate({ inputRange: cardProgressInput, outputRange: [card.x, card.x, targetLeft, targetLeft], extrapolate: "clamp" }),
+                    Animated.multiply(cardFollowProgress, deckFollowX),
+                  ),
                   opacity: transitionProgress.interpolate({
                     inputRange: cardVisibleInput,
-                    outputRange: [0, 0, 1, 1],
+                    outputRange: [0, 0, 1, 0, 0],
                     extrapolate: "clamp",
                   }),
-                  top: transitionProgress.interpolate({ inputRange: cardProgressInput, outputRange: [card.y, card.y, targetTop, targetTop], extrapolate: "clamp" }),
+                  top: Animated.add(
+                    transitionProgress.interpolate({ inputRange: cardProgressInput, outputRange: [card.y, card.y, targetTop, targetTop], extrapolate: "clamp" }),
+                    Animated.multiply(cardFollowProgress, deckFollowY),
+                  ),
                   transform: [{
                     rotate: transitionProgress.interpolate({
                       inputRange: cardProgressInput,
                       outputRange: [OPENING_COVER_SOURCE_ROTATION, OPENING_COVER_SOURCE_ROTATION, "0deg", "0deg"],
+                      extrapolate: "clamp",
+                    }),
+                  }, {
+                    scale: transitionProgress.interpolate({
+                      inputRange: cardProgressInput,
+                      outputRange: [1, 1, 0.08, 0.02],
                       extrapolate: "clamp",
                     }),
                   }],

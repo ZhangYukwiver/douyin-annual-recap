@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   consumeFixedSteps,
   coverGatherWindow,
-  coverStackLayerOffset,
   FIXED_STEP_MS,
   fillOpeningRows,
   insetCollisionBox,
   openingBorderGlowPose,
   openingLogoRevealScale,
   openingMessageExitWindow,
+  openingPixelTrailDirection,
   openingPileDestinationStep,
   openingScrollTop,
   openingSurfaceY,
@@ -45,14 +45,6 @@ describe("opening particle physics", () => {
     expect(last[1] - last[0]).toBeCloseTo(first[1] - first[0]);
   });
 
-  it("packs covers into six tightly aligned visible layers", () => {
-    const offsets = Array.from({ length: 21 }, (_, index) => coverStackLayerOffset(index, 21));
-
-    expect(offsets.slice(0, 6)).toEqual([-10, -6, -2, 2, 6, 10]);
-    expect(offsets.slice(6).every((offset) => offset === 10)).toBe(true);
-    expect(coverStackLayerOffset(0, 1)).toBe(0);
-  });
-
   it("gathers shuffled covers through staggered progress windows", () => {
     const first = coverGatherWindow(0, 5);
     const last = coverGatherWindow(4, 5);
@@ -69,6 +61,12 @@ describe("opening particle physics", () => {
     expect(openingBorderGlowPose(100, 40, 100, 20)).toEqual({ edgeProximity: 100, angle: 90 });
     expect(openingBorderGlowPose(100, 40, 50, 0)).toEqual({ edgeProximity: 100, angle: 0 });
     expect(openingBorderGlowPose(100, 40, 101, 20)).toBeNull();
+  });
+
+  it("colors horizontal pointer trails by movement direction", () => {
+    expect(openingPixelTrailDirection(-12, "right")).toBe("left");
+    expect(openingPixelTrailDirection(12, "left")).toBe("right");
+    expect(openingPixelTrailDirection(0.25, "left")).toBe("left");
   });
 
   it("advances the same simulated time per second on 60Hz and 120Hz displays", () => {
