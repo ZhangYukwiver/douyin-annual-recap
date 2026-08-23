@@ -6,7 +6,7 @@ import {
   type PersonalRecordType,
   type PersonalVideoRecord,
 } from "../../domain/personalRecords";
-import { buildStoryModel, selectOpeningCovers } from "./storyModel";
+import { buildStoryModel, selectOpeningCovers, topStreamTopic } from "./storyModel";
 
 function record(id: string, extra: Partial<PersonalVideoRecord> = {}): PersonalVideoRecord {
   return {
@@ -209,5 +209,20 @@ describe("story model", () => {
     });
     expect(photography?.creators.map((creator) => creator.name)).toEqual(["城市相册", "光影笔记"]);
     expect(model.streams.watch_history.representative?.record.id).toBe("photo-a");
+  });
+});
+
+describe("topStreamTopic", () => {
+  it("returns the most frequent explicit topic of a stream", () => {
+    const model = buildStoryModel(recordsOf({
+      liked_videos: [
+        record("like-1", { topics: ["模型"] }),
+        record("like-2", { topics: ["模型", "高达"] }),
+        record("like-3", { topics: ["高达"] }),
+        record("like-4", { topics: ["高达"] }),
+      ],
+    }));
+    expect(topStreamTopic(model.streams.liked_videos.records)).toBe("高达");
+    expect(topStreamTopic(model.streams.watch_history.records)).toBeNull();
   });
 });

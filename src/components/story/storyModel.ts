@@ -246,6 +246,16 @@ function buildStreams(
   };
 }
 
+export function topStreamTopic(records: readonly StoryContentItem[]): string | null {
+  const counts = new Map<string, number>();
+  for (const item of records) {
+    for (const topic of item.topics) {
+      counts.set(topic, (counts.get(topic) ?? 0) + 1);
+    }
+  }
+  return rankCounts(counts)[0]?.name ?? null;
+}
+
 function buildHours(entries: readonly AnnualIndexedRecord[], context: StoryBuildContext): StoryHour[] {
   const byHour = Array.from({ length: 24 }, () => [] as AnnualIndexedRecord[]);
   for (const entry of entries) {
