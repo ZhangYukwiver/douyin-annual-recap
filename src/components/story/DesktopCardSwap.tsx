@@ -15,6 +15,7 @@ import React, {
 import gsap from "gsap";
 
 import { DESKTOP_FALL, createFallRng, seedFallBodies, stepFallBodies } from "./desktopFallPhysics";
+import { DomeGallery } from "./DomeGallery";
 import type { StoryContentItem } from "./storyModel";
 
 export interface DesktopStoryStream {
@@ -435,9 +436,8 @@ const CSS = [
   ".desktop-cover-tile:focus-visible, .desktop-app-button:focus-visible, .desktop-swap-header:focus-visible { outline: 3px solid #25F4EE; outline-offset: 4px; }",
   ".desktop-swap-header { cursor: pointer; transition: filter 160ms ease; }",
   ".desktop-swap-header:hover { filter: brightness(1.22); }",
-  // Proportions match the reactbits demo page scaled to a 1600x900 frame:
-  // cards 925x740 (= 500x400 x1.85), so perspective scales to 1665 (= 900 x1.85).
-  ".desktop-card-swap-root .card-swap-container { position: absolute; bottom: 0; right: 0; transform: translate(5%, 20%); transform-origin: bottom right; perspective: 1665px; overflow: visible; }",
+  // 宽屏沿用户标注横向铺到 1250px 并让右缘出血；窄屏仍使用 925px 宽度。
+  ".desktop-card-swap-root .card-swap-container { position: absolute; bottom: 0; right: 0; transform: translate(4%, 20%); transform-origin: bottom right; perspective: 1665px; overflow: visible; }",
   ".desktop-card-swap-root .card { position: absolute; top: 50%; left: 50%; border-radius: 20px; border: 1px solid #fff; background: #000; transform-style: preserve-3d; will-change: transform; backface-visibility: hidden; -webkit-backface-visibility: hidden; }",
   "@media (max-width: 768px) {",
   "  .desktop-card-swap-root .card-swap-container { transform: scale(.75) translate(25%, 25%); }",
@@ -712,17 +712,24 @@ function CoverTile({
 
 function ContentPage({
   description,
+  galleryInteractive = true,
   onActivate,
   onOpen,
   privacy,
+  reducedMotion,
+  skewYDeg = 0,
   stream,
 }: {
   description?: ReactNode;
+  galleryInteractive?: boolean;
   onActivate?: () => void;
   onOpen: (item: StoryContentItem) => void;
   privacy: boolean;
+  reducedMotion: boolean;
+  skewYDeg?: number;
   stream: DesktopStoryStream;
 }) {
+  const useDomeGallery = stream.key === "watch_history";
   const covers = stream.records.slice(0, 18);
   return (
     <div
@@ -798,18 +805,30 @@ function ContentPage({
         </div>
       ) : null}
       <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: "grid",
-          gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
-          gridAutoRows: "minmax(0, 1fr)",
-          gap: 8,
-          padding: 12,
-          background: "#151820",
-        }}
+        style={useDomeGallery
+          ? { flex: 1, minHeight: 0, position: "relative", background: "#151820" }
+          : {
+              flex: 1,
+              minHeight: 0,
+              display: "grid",
+              gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
+              gridAutoRows: "minmax(0, 1fr)",
+              gap: 8,
+              padding: 12,
+              background: "#151820",
+            }}
       >
-        {covers.map((item, index) => (
+        {useDomeGallery ? (
+          <DomeGallery
+            accent={stream.accent}
+            interactive={galleryInteractive}
+            onOpen={onOpen}
+            privacy={privacy}
+            records={stream.records}
+            reducedMotion={reducedMotion}
+            skewYDeg={skewYDeg}
+          />
+        ) : covers.length ? covers.map((item, index) => (
           <CoverTile
             accent={stream.accent}
             index={index}
@@ -818,12 +837,11 @@ function ContentPage({
             onOpen={onOpen}
             privacy={privacy}
           />
-        ))}
-        {!covers.length ? (
+        )) : (
           <p style={{ gridColumn: "1 / -1", alignSelf: "center", color: "rgba(244,246,250,0.56)", textAlign: "center" }}>
             当前列表没有可展示的封面
           </p>
-        ) : null}
+        )}
       </div>
     </div>
   );
@@ -969,8 +987,7 @@ export function DesktopCardSwap({
 
   // 点击图标时，logo 光标"攒着"的封面从点击点撒出，飞进最前卡片的封面格落位——
   // 光标变回普通箭头的瞬间和下一页内容通过封面接上因果。
-  // 封面挂在卡片自己的坐标系里（offsetLeft/Top 取未变换的本地格位），
-  // 这样卡片入场轮换的大幅动画不会让落点过期。
+  // 球面封面先按屏幕投影取样，再换回卡片坐标；卡片入场轮换时落点仍跟着卡片走。
   const spawnCoverFliers = useCallback((clientX: number, clientY: number) => {
     const root = rootRef.current;
     if (!root) return;
@@ -989,19 +1006,34 @@ export function DesktopCardSwap({
         cards.forEach((card, cardIndex) => {
           const stream = streams[cardIndex];
           if (!stream) return;
+          const dome = stream.key === "watch_history";
           const records = stream.records.slice(0, 18);
-          const tiles = Array.from(card.querySelectorAll<HTMLElement>(".desktop-cover-tile"));
-          if (!records.length || !tiles.length) return;
           const cardRect = card.getBoundingClientRect();
+          const tiles = dome
+            ? Array.from(card.querySelectorAll<HTMLElement>(".story-dome-media"))
+              .map((tile) => ({ tile, rect: tile.getBoundingClientRect() }))
+              .filter(({ rect }) => rect.width > 10 && rect.height > 10
+                && rect.right > cardRect.left && rect.left < cardRect.right
+                && rect.bottom > cardRect.top && rect.top < cardRect.bottom)
+              .sort((left, right) => {
+                const centerX = cardRect.left + cardRect.width / 2;
+                const centerY = cardRect.top + cardRect.height / 2;
+                const leftDistance = Math.hypot(left.rect.left + left.rect.width / 2 - centerX, left.rect.top + left.rect.height / 2 - centerY);
+                const rightDistance = Math.hypot(right.rect.left + right.rect.width / 2 - centerX, right.rect.top + right.rect.height / 2 - centerY);
+                return leftDistance - rightDistance;
+              })
+              .map(({ tile }) => tile)
+            : Array.from(card.querySelectorAll<HTMLElement>(".desktop-cover-tile"));
+          if (!records.length || !tiles.length) return;
           const scaleX = cardRect.width / Math.max(1, card.offsetWidth);
           const scaleY = cardRect.height / Math.max(1, card.offsetHeight);
           // 点击点换算到各卡片本地坐标（忽略 skew 的近似，只决定出发方向）
           const localClickX = (clientX - cardRect.left) / scaleX;
           const localClickY = (clientY - cardRect.top) / scaleY;
-          const localPos = (el: HTMLElement) => {
+          const localPos = (element: HTMLElement) => {
             let x = 0;
             let y = 0;
-            let node: HTMLElement | null = el;
+            let node: HTMLElement | null = element;
             while (node && node !== card) {
               x += node.offsetLeft;
               y += node.offsetTop;
@@ -1016,21 +1048,31 @@ export function DesktopCardSwap({
           card.appendChild(container);
           containers.push(container);
           let order = 0;
-          for (let index = 0; index < tiles.length && order < 8; index += 2, order += 1) {
+          for (let index = 0; index < tiles.length && order < 8; index += dome ? 1 : 2, order += 1) {
             const tile = tiles[index]!;
-            const pos = localPos(tile);
-            const record = records[index]?.record;
+            const tileRect = tile.getBoundingClientRect();
+            const pos = dome
+              ? {
+                  x: (tileRect.left - cardRect.left) / scaleX,
+                  y: (tileRect.top - cardRect.top) / scaleY,
+                }
+              : localPos(tile);
+            const tileWidth = dome ? tileRect.width / scaleX : tile.offsetWidth;
+            const tileHeight = dome ? tileRect.height / scaleY : tile.offsetHeight;
+            const domeIndex = Number(tile.dataset.domePoolIndex);
+            const sourceIndex = dome && Number.isFinite(domeIndex) ? domeIndex % records.length : index;
+            const record = records[sourceIndex]?.record;
             const flier = document.createElement("div");
             flier.className = "desktop-cover-flier";
             Object.assign(flier.style, {
               position: "absolute",
               left: `${pos.x}px`,
               top: `${pos.y}px`,
-              width: `${tile.offsetWidth}px`,
-              height: `${tile.offsetHeight}px`,
+              width: `${tileWidth}px`,
+              height: `${tileHeight}px`,
               overflow: "hidden",
               border: "1px solid rgba(255,255,255,0.22)",
-              borderRadius: "10px",
+              borderRadius: dome ? "30px" : "10px",
               background: `linear-gradient(145deg, ${stream.accent}44, #171B23)`,
               boxShadow: "0 10px 28px rgba(0,0,0,0.45)",
               display: "grid",
@@ -1039,18 +1081,25 @@ export function DesktopCardSwap({
               fontSize: "15px",
               fontWeight: "800",
             });
-            flier.textContent = String(index + 1).padStart(2, "0");
+            flier.textContent = String(sourceIndex + 1).padStart(2, "0");
             if (record?.coverUrl && !privacy) {
               const img = document.createElement("img");
               img.src = record.coverUrl;
               img.alt = "";
-              Object.assign(img.style, { position: "absolute", inset: "0", width: "100%", height: "100%", objectFit: "cover" });
+              Object.assign(img.style, {
+                position: "absolute",
+                inset: "0",
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                filter: dome ? "grayscale(1)" : "none",
+              });
               img.onerror = () => img.remove();
               flier.appendChild(img);
             }
             container.appendChild(flier);
-            const dx = localClickX - (pos.x + tile.offsetWidth / 2);
-            const dy = localClickY - (pos.y + tile.offsetHeight / 2);
+            const dx = localClickX - (pos.x + tileWidth / 2);
+            const dy = localClickY - (pos.y + tileHeight / 2);
             // 三张卡的批次交错起飞，读作一次同时撒向三叠卡片
             const delay = (order * cards.length + cardIndex) * 0.03;
             timeline.fromTo(flier, {
@@ -1265,9 +1314,10 @@ export function DesktopCardSwap({
           style={{
             position: "absolute",
             top: reducedMotion ? 26 : "36%",
-            left: reducedMotion ? 34 : viewportWidth < 1250 ? 44 : "14%",
+            left: reducedMotion ? 34 : viewportWidth < 1250 ? 44 : "5%",
             width: reducedMotion ? 560 : viewportWidth < 1250 ? 320 : 560,
-            zIndex: reducedMotion ? 5 : 1,
+            pointerEvents: "none",
+            zIndex: 5,
           }}
         >
           <p style={{ margin: 0, color: "#25F4EE", fontSize: reducedMotion ? 11 : 13, fontWeight: 900 }}>
@@ -1309,7 +1359,12 @@ export function DesktopCardSwap({
           >
             {streams.map((stream) => (
               <div key={stream.key} style={{ minWidth: 0, overflow: "hidden", borderRadius: 18, border: "1px solid rgba(255,255,255,0.18)" }}>
-                <ContentPage onOpen={onOpenRecord} privacy={privacy} stream={stream} />
+                <ContentPage
+                  onOpen={onOpenRecord}
+                  privacy={privacy}
+                  reducedMotion
+                  stream={stream}
+                />
               </div>
             ))}
           </div>
@@ -1334,7 +1389,7 @@ export function DesktopCardSwap({
                 onFrontChange={setFrontIndex}
                 skewAmount={6}
                 verticalDistance={130}
-                width={925}
+                width={viewportWidth < 1250 ? 925 : 1250}
               >
                 {streams.map((stream, index) => (
                   <Card
@@ -1343,9 +1398,12 @@ export function DesktopCardSwap({
                   >
                     <ContentPage
                       description={narrativeDescription(stream, privacy)}
+                      galleryInteractive={index === frontIndex}
                       onActivate={() => swapControllerRef.current?.bringToFront(index)}
                       onOpen={onOpenRecord}
                       privacy={privacy}
+                      reducedMotion={false}
+                      skewYDeg={6}
                       stream={stream}
                     />
                   </Card>
