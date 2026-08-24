@@ -14,6 +14,7 @@ import {
   type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  type StyleProp,
   type TextStyle,
   type ViewStyle,
 } from "react-native";
@@ -70,6 +71,15 @@ import { DesktopCardSwap, type DesktopStoryStream } from "./DesktopCardSwap";
 import { fluidSurfacePaths, type FluidSurfacePaths } from "./fluidSurface";
 import { OpeningReelGallery } from "./OpeningReelGallery";
 import { PixelSwap } from "./PixelSwap";
+import {
+  attachPixelSparks,
+  attachPixelTrail,
+  createPixelLayer,
+  DECODE_STEP_MS,
+  decodeFrame,
+  decodePool,
+  type PixelLayer,
+} from "./pixelDecor";
 import { RhythmEqualizer } from "./RhythmEqualizer";
 import { SceneSection } from "./StoryBridge";
 import { STORY_PARTICLE_COLORS, storyParticleColor, type StoryParticleColor } from "./storyPalette";
@@ -78,12 +88,10 @@ import {
   fillOpeningRows,
   openingBorderGlowPose,
   openingMessageExitWindow,
-  openingPixelTrailDirection,
   openingScrollTop,
   openingTransitionProgress,
   planOpeningDestinations,
   truncateOpeningParticleLabel,
-  type OpeningPixelTrailDirection,
 } from "./openingParticlePhysics";
 
 const MIN_STORY_WIDTH = 1024;
@@ -224,6 +232,7 @@ function atmosphereCss(key: StageAtmosphereKey): React.CSSProperties {
   return { backgroundColor: atmosphere.base, backgroundImage: atmosphere.layers.join(", ") };
 }
 const CHAPTER_COUNT = 6;
+const PROGRESS_SEGMENTS = [1, 2, 3, 4, 5, 6] as const;
 const OPENING_STEP_COUNT = 12;
 const OPENING_PARTICLE_SCALE = 1.28;
 const OPENING_VISUAL_ROW_HEIGHT = 30;
@@ -245,20 +254,6 @@ const NOTE_VIEWBOX_HEIGHT = 240;
 const NOTE_PATH = "M121 18H158C159 43 177 64 204 70V105C187 103 171 98 158 89V170C158 203 131 228 98 228C65 228 38 204 38 173C38 142 63 117 95 117C104 117 113 119 121 123V160C114 155 106 152 98 152C84 152 73 162 73 175C73 188 84 198 98 198C112 198 124 188 124 174L121 18Z";
 const OPENING_CURSOR_LOGO_URI = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="-14 -14 248 268"><path d="${NOTE_PATH}" fill="#25F4EE" transform="translate(-7 5)"/><path d="${NOTE_PATH}" fill="#FE2C55" transform="translate(7 -4)"/><path d="${NOTE_PATH}" fill="#F7F7F8"/></svg>`)}`;
 const USER_DESKTOP_WALLPAPER_URI = (require("./assets/user-desktop-wallpaper.jpg") as { uri: string }).uri;
-// ReactBits PixelTrail 演示页参数（maxAge 250 / interpolate 5）；网格密度按当前视觉反馈调整。
-const OPENING_PIXEL_TRAIL_GRID_SIZE = 42;
-const OPENING_PIXEL_TRAIL_INTERPOLATE = 5;
-// 演示页 trailSize 0.1 是对 650px 小画布调的（笔刷≈65px）；我们全屏 1280+ 同比例会到 128px，
-// 轨迹长度（手速×250ms）却不随视口变，显得短粗。取 0.05 让常规窗口下笔刷绝对尺寸与演示页一致。
-const OPENING_PIXEL_TRAIL_SIZE = 0.05;
-const OPENING_PIXEL_TRAIL_MAX_AGE = 250;
-const OPENING_PIXEL_TRAIL_INTENSITY = 0.2;
-// 方向分色：向左拖出红色、向右拖出青色（抖音色差）。
-const OPENING_PIXEL_TRAIL_LEFT_RGB = "217,14,32";
-const OPENING_PIXEL_TRAIL_RIGHT_RGB = "37,244,238";
-const OPENING_PIXEL_TRAIL_GOO_ID = "opening-pixel-trail-goo";
-// 演示页 goo strength 2 是对着 13px 格子调的；按格子尺寸等比换算，否则阈值会把大格子切出残块。
-const OPENING_PIXEL_TRAIL_GOO_RATIO = 2 / 13;
 // 液面几何：注意符 viewBox 坐标系里的采样跨度与封口边。
 const FLUID_FILL_SURFACE = {
   baselineY: 8,
@@ -278,27 +273,7 @@ const FLUID_CURTAIN_SURFACE = {
 } as const;
 // openingReveal 的满速约 0.3/s（easeInOut 峰值），映射到扰动强度 1。
 const FLUID_FULL_AGITATION_VELOCITY = 0.28;
-const LOGO_ENTRANCE_FRAGMENTS = [
-  { key: "cap", top: -12, height: 72, revealAt: 0.02, arriveAt: 0.42, fromX: -72, fromY: 16, fromRotation: -7, overshootX: 8, color: "#25F4EE" },
-  { key: "shoulder", top: 48, height: 70, revealAt: 0.07, arriveAt: 0.47, fromX: 64, fromY: -12, fromRotation: 6, overshootX: -7, color: "#FE2C55" },
-  { key: "joint", top: 106, height: 74, revealAt: 0.12, arriveAt: 0.51, fromX: -56, fromY: 10, fromRotation: -5, overshootX: 6, color: "#25F4EE" },
-  { key: "base", top: 168, height: 84, revealAt: 0.17, arriveAt: 0.55, fromX: 76, fromY: -14, fromRotation: 7, overshootX: -9, color: "#FE2C55" },
-] as const;
 const NOTE_WORD_MASK_URI = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${NOTE_VIEWBOX_WIDTH} ${NOTE_VIEWBOX_HEIGHT}"><path fill="white" d="${NOTE_PATH}"/></svg>`)}")`;
-const OPENING_LOGO_SPOTLIGHT = Platform.OS === "web"
-  ? ({
-      backgroundImage: "radial-gradient(circle 24vmin at var(--opening-spotlight-x, -999px) var(--opening-spotlight-y, -999px), rgba(255,255,255,0.38) 0%, rgba(255,255,255,0.18) 52%, transparent 78%)",
-      WebkitMaskImage: NOTE_WORD_MASK_URI,
-      WebkitMaskPosition: "center",
-      WebkitMaskRepeat: "no-repeat",
-      WebkitMaskSize: `${OPENING_LOGO_WIDTH}px ${OPENING_LOGO_HEIGHT}px`,
-      maskImage: NOTE_WORD_MASK_URI,
-      maskPosition: "center",
-      maskRepeat: "no-repeat",
-      maskSize: `${OPENING_LOGO_WIDTH}px ${OPENING_LOGO_HEIGHT}px`,
-      mixBlendMode: "screen",
-    } as unknown as ViewStyle)
-  : null;
 // ReactBits GradientBlinds 的光斑核心；移除底色和百叶，只保留中性光与黑幕揭示。
 const OPENING_SPOTLIGHT_VERTEX = `
 attribute vec2 position;
@@ -368,18 +343,6 @@ const WEB_POINTER = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : 
 const OPENING_LOGO_CURSOR = Platform.OS === "web"
   ? ({ cursor: `url("${OPENING_CURSOR_LOGO_URI}") 18 18, pointer` } as unknown as ViewStyle)
   : null;
-const DOM_CANVAS = "canvas" as unknown as React.ElementType;
-const OPENING_PIXEL_TRAIL_STYLE: React.CSSProperties = {
-  position: "absolute",
-  zIndex: 24,
-  // 铺满全屏：顶栏 zIndex 30 在画布之上，靠近顶部的方块会钻到顶栏下面而不是被画布上缘切成残块。
-  top: 0,
-  left: 0,
-  width: "100%",
-  height: "100%",
-  display: "block",
-  pointerEvents: "none",
-};
 const WEB_NO_WRAP = Platform.OS === "web" ? ({ whiteSpace: "nowrap" } as unknown as TextStyle) : null;
 const HIGHLIGHT_CARD_WEB = Platform.OS === "web"
   ? ({
@@ -512,14 +475,12 @@ interface OpeningWebglRevealProps {
 
 function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebglRevealProps) {
   const containerRef = useRef<View | null>(null);
-  const logoSpotlightRef = useRef<View | null>(null);
 
   useEffect(() => {
     if (Platform.OS !== "web") return undefined;
     const container = containerRef.current as unknown as HTMLElement | null;
-    const logoSpotlight = logoSpotlightRef.current as unknown as HTMLElement | null;
     const stage = container?.parentElement;
-    if (!container || !logoSpotlight || !stage) return undefined;
+    if (!container || !stage) return undefined;
 
     const renderer = new Renderer({
       dpr: window.devicePixelRatio || 1,
@@ -562,8 +523,6 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
 
     const hideReveal = () => {
       uniforms.iMouse.value = [-10_000, -10_000];
-      logoSpotlight.style.setProperty("--opening-spotlight-x", "-999px");
-      logoSpotlight.style.setProperty("--opening-spotlight-y", "-999px");
     };
     const resize = () => {
       const rect = container.getBoundingClientRect();
@@ -580,9 +539,6 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
       const x = (event.clientX - rect.left) * scale;
       const y = (rect.height - (event.clientY - rect.top)) * scale;
       uniforms.iMouse.value = [x, y];
-      const spotlightRect = logoSpotlight.getBoundingClientRect();
-      logoSpotlight.style.setProperty("--opening-spotlight-x", `${event.clientX - spotlightRect.left}px`);
-      logoSpotlight.style.setProperty("--opening-spotlight-y", `${event.clientY - spotlightRect.top}px`);
     };
 
     resize();
@@ -614,214 +570,16 @@ function OpeningWebglReveal({ disabledRef, height, reducedMotion }: OpeningWebgl
   }, [disabledRef, reducedMotion]);
 
   return (
-    <>
-      <View
-        accessibilityElementsHidden
-        aria-hidden
-        importantForAccessibility="no-hide-descendants"
-        pointerEvents="none"
-        ref={containerRef}
-        style={[styles.openingWebglReveal, { height }]}
-        testID="opening-webgl-reveal"
-      />
-      <View
-        accessibilityElementsHidden
-        aria-hidden
-        importantForAccessibility="no-hide-descendants"
-        pointerEvents="none"
-        ref={logoSpotlightRef}
-        style={[styles.openingLogoSpotlight, OPENING_LOGO_SPOTLIGHT]}
-        testID="opening-logo-spotlight"
-      />
-    </>
+    <View
+      accessibilityElementsHidden
+      aria-hidden
+      importantForAccessibility="no-hide-descendants"
+      pointerEvents="none"
+      ref={containerRef}
+      style={[styles.openingWebglReveal, { height }]}
+      testID="opening-webgl-reveal"
+    />
   );
-}
-
-interface OpeningPixelTrailPoint {
-  bornAt: number;
-  direction: OpeningPixelTrailDirection;
-  force: number;
-  x: number;
-  y: number;
-}
-
-function OpeningPixelTrail() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  useEffect(() => {
-    if (Platform.OS !== "web") return undefined;
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return undefined;
-
-    // 演示页的 gooey 滤镜：模糊 + alpha 阈值再把原图 atop 回来，相邻像素块之间会长出液态拖拽桥。
-    const goo = document.createElement("div");
-    goo.setAttribute("aria-hidden", "true");
-    goo.innerHTML = `<svg width="0" height="0" style="position:absolute"><defs><filter id="${OPENING_PIXEL_TRAIL_GOO_ID}"><feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/><feColorMatrix in="blur" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 19 -9" result="goo"/><feComposite in="SourceGraphic" in2="goo" operator="atop"/></filter></defs></svg>`;
-    document.body.appendChild(goo);
-    const gooBlur = goo.querySelector("feGaussianBlur");
-    canvas.style.filter = `url(#${OPENING_PIXEL_TRAIL_GOO_ID})`;
-
-    const opacity = {
-      left: new Float32Array(OPENING_PIXEL_TRAIL_GRID_SIZE ** 2),
-      right: new Float32Array(OPENING_PIXEL_TRAIL_GRID_SIZE ** 2),
-    };
-    let width = 1;
-    let height = 1;
-    let squareSize = 1;
-    let cellSize = 1;
-    let originX = 0;
-    let originY = 0;
-    let trail: OpeningPixelTrailPoint[] = [];
-    let lastPoint: { x: number; y: number } | null = null;
-    let direction: OpeningPixelTrailDirection | null = null;
-    let frame = 0;
-
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      width = Math.max(1, rect.width);
-      height = Math.max(1, rect.height);
-      squareSize = Math.max(width, height);
-      cellSize = squareSize / OPENING_PIXEL_TRAIL_GRID_SIZE;
-      gooBlur?.setAttribute("stdDeviation", (cellSize * OPENING_PIXEL_TRAIL_GOO_RATIO).toFixed(2));
-      originX = (width - squareSize) / 2;
-      originY = (height - squareSize) / 2;
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
-      context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      context.imageSmoothingEnabled = false;
-      trail = [];
-      lastPoint = null;
-    };
-
-    const followPointer = (event: PointerEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-      if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
-        lastPoint = null;
-        return;
-      }
-      if (!lastPoint) {
-        lastPoint = { x, y };
-        return;
-      }
-
-      const deltaX = x - lastPoint.x;
-      const deltaY = y - lastPoint.y;
-      if (!direction && Math.abs(deltaX) <= 0.5) {
-        lastPoint = { x, y };
-        return;
-      }
-      direction = openingPixelTrailDirection(deltaX, direction ?? "right");
-      const distanceSquared = (deltaX * deltaX + deltaY * deltaY) / (squareSize * squareSize);
-      if (distanceSquared <= 0) return;
-
-      const force = Math.max(0.3, Math.min(distanceSquared * 10_000, 1));
-      const interval = (OPENING_PIXEL_TRAIL_SIZE * 0.5 / OPENING_PIXEL_TRAIL_INTERPOLATE) ** 2;
-      const steps = Math.max(1, Math.ceil(distanceSquared / interval));
-      const bornAt = performance.now();
-      for (let step = 1; step <= steps; step += 1) {
-        const progress = step / steps;
-        trail.push({
-          bornAt,
-          direction,
-          force,
-          x: lastPoint.x + deltaX * progress,
-          y: lastPoint.y + deltaY * progress,
-        });
-      }
-      lastPoint = { x, y };
-    };
-
-    const render = (now: number) => {
-      context.clearRect(0, 0, width, height);
-      opacity.left.fill(0);
-      opacity.right.fill(0);
-      trail = trail.filter((point) => now - point.bornAt <= OPENING_PIXEL_TRAIL_MAX_AGE);
-
-      for (const point of trail) {
-        const age = now - point.bornAt;
-        const riseTime = OPENING_PIXEL_TRAIL_MAX_AGE * 0.3;
-        const life = age < riseTime
-          ? Math.sin((age / riseTime) * Math.PI / 2)
-          : 1 - (age - riseTime) / (OPENING_PIXEL_TRAIL_MAX_AGE - riseTime);
-        const brushRadius = squareSize * OPENING_PIXEL_TRAIL_SIZE * Math.max(0, life) * point.force;
-        if (brushRadius < 0.5) continue;
-
-        const firstColumn = Math.max(0, Math.floor((point.x - brushRadius - originX) / cellSize));
-        const lastColumn = Math.min(OPENING_PIXEL_TRAIL_GRID_SIZE - 1, Math.floor((point.x + brushRadius - originX) / cellSize));
-        const firstRow = Math.max(0, Math.floor((point.y - brushRadius - originY) / cellSize));
-        const lastRow = Math.min(OPENING_PIXEL_TRAIL_GRID_SIZE - 1, Math.floor((point.y + brushRadius - originY) / cellSize));
-        const target = opacity[point.direction];
-
-        for (let row = firstRow; row <= lastRow; row += 1) {
-          const centerY = originY + (row + 0.5) * cellSize;
-          for (let column = firstColumn; column <= lastColumn; column += 1) {
-            const centerX = originX + (column + 0.5) * cellSize;
-            const distance = Math.hypot(centerX - point.x, centerY - point.y) / brushRadius;
-            if (distance >= 1) continue;
-            const falloff = distance <= 0.25 ? 1 : 1 - (distance - 0.25) / 0.75;
-            const index = row * OPENING_PIXEL_TRAIL_GRID_SIZE + column;
-            const contribution = OPENING_PIXEL_TRAIL_INTENSITY * falloff;
-            target[index] = 1 - (1 - target[index]!) * (1 - contribution);
-          }
-        }
-      }
-
-      for (let row = 0; row < OPENING_PIXEL_TRAIL_GRID_SIZE; row += 1) {
-        const rowTop = Math.floor(originY + row * cellSize);
-        const rowBottom = Math.floor(originY + (row + 1) * cellSize);
-        if (rowBottom <= 0 || rowTop >= height) continue;
-        for (let column = 0; column < OPENING_PIXEL_TRAIL_GRID_SIZE; column += 1) {
-          const index = row * OPENING_PIXEL_TRAIL_GRID_SIZE + column;
-          const red = opacity.left[index]!;
-          const cyan = opacity.right[index]!;
-          if (red <= 0 && cyan <= 0) continue;
-          // 整数铺格：相邻格子共享边界，半透明填充不会因 +1px 重叠叠出亮缝。
-          const cellLeft = Math.floor(originX + column * cellSize);
-          const cellRight = Math.floor(originX + (column + 1) * cellSize);
-          if (red > 0) {
-            context.globalCompositeOperation = "source-over";
-            context.fillStyle = `rgba(${OPENING_PIXEL_TRAIL_LEFT_RGB},${red})`;
-            context.fillRect(cellLeft, rowTop, cellRight - cellLeft, rowBottom - rowTop);
-          }
-          if (cyan > 0) {
-            context.globalCompositeOperation = red > 0 ? "screen" : "source-over";
-            context.fillStyle = `rgba(${OPENING_PIXEL_TRAIL_RIGHT_RGB},${cyan})`;
-            context.fillRect(cellLeft, rowTop, cellRight - cellLeft, rowBottom - rowTop);
-          }
-        }
-      }
-      context.globalCompositeOperation = "source-over";
-
-      frame = requestAnimationFrame(render);
-    };
-
-    resize();
-    const resizeObserver = new ResizeObserver(resize);
-    resizeObserver.observe(canvas);
-    window.addEventListener("pointermove", followPointer, { passive: true });
-    frame = requestAnimationFrame(render);
-
-    return () => {
-      cancelAnimationFrame(frame);
-      resizeObserver.disconnect();
-      window.removeEventListener("pointermove", followPointer);
-      context.clearRect(0, 0, width, height);
-      canvas.style.filter = "";
-      goo.remove();
-    };
-  }, []);
-
-  if (Platform.OS !== "web") return null;
-  return React.createElement(DOM_CANVAS, {
-    "aria-hidden": true,
-    "data-testid": "opening-pixel-trail",
-    ref: canvasRef,
-    style: OPENING_PIXEL_TRAIL_STYLE,
-  });
 }
 
 interface OpeningFluidSurfaceProps {
@@ -998,6 +756,7 @@ export function AnnualScrollStory({
   const [openingContinued, setOpeningContinued] = useState(false);
   const [openingPixelSwapActive, setOpeningPixelSwapActive] = useState(false);
   const [desktopOpened, setDesktopOpened] = useState(false);
+  const [logoFocused, setLogoFocused] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(() => (
     Platform.OS === "web"
     && typeof window !== "undefined"
@@ -1012,8 +771,7 @@ export function AnnualScrollStory({
   const openingReveal = useRef(new Animated.Value(0)).current;
   const openingForegroundOpacity = useRef(new Animated.Value(1)).current;
   const openingTransition = useRef(new Animated.Value(0)).current;
-  const logoEntrance = useRef(new Animated.Value(0)).current;
-  const logoNeon = useRef(new Animated.Value(1)).current;
+  const logoNeon = useRef(new Animated.Value(0)).current;
   const storyProgress = useRef(new Animated.Value(0)).current;
   const rootRef = useRef<View | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
@@ -1100,6 +858,11 @@ export function AnnualScrollStory({
     outputRange: ["0%", "100%"],
     extrapolate: "clamp",
   });
+  // 装饰颗粒的颜色跟着当前章走：星丛用红、破晓用琥珀，其余留在青。
+  const pixelAccent = activeChapter === 4 ? color.accent : activeChapter === 6 ? color.amber : color.cyan;
+  const pixelAccentRef = useRef(pixelAccent);
+  pixelAccentRef.current = pixelAccent;
+  const pixelLayerRef = useRef<PixelLayer | null>(null);
   // Logo 液面和词条幕布共用 openingReveal（0..1）决定水位；波形扰动由 OpeningFluidSurface 按上升速度实时生成。
   const liquidTransform = openingReveal.interpolate({
     inputRange: [0, 1],
@@ -1124,59 +887,6 @@ export function AnnualScrollStory({
         maskSize: `100% 100%, ${OPENING_LOGO_WIDTH}px ${OPENING_LOGO_HEIGHT}px`,
       } as unknown as ViewStyle)
     : null;
-  const logoBodyOpacity = logoEntrance.interpolate({
-    inputRange: [0, 0.36, 0.56, 0.8, 1],
-    outputRange: [0, 0, 0.54, 1, 1],
-    extrapolate: "clamp",
-  });
-  const logoBodyScale = logoEntrance.interpolate({
-    inputRange: [0, 0.36, 0.56, 0.74, 0.9, 1],
-    outputRange: [0.78, 0.78, 1.08, 0.96, 1.025, 1],
-    extrapolate: "clamp",
-  });
-  const logoBodyTranslateY = logoEntrance.interpolate({
-    inputRange: [0, 0.36, 0.56, 0.74, 0.9, 1],
-    outputRange: [14, 14, -5, 3, -1, 0],
-    extrapolate: "clamp",
-  });
-  const logoBodyRotation = logoEntrance.interpolate({
-    inputRange: [0, 0.36, 0.56, 0.74, 0.9, 1],
-    outputRange: ["-4deg", "-4deg", "1.4deg", "-0.8deg", "0.25deg", "0deg"],
-    extrapolate: "clamp",
-  });
-  const logoLockFlash = logoEntrance.interpolate({
-    inputRange: [0, 0.5, 0.58, 0.76, 1],
-    outputRange: [0, 0, 0.92, 0, 0],
-    extrapolate: "clamp",
-  });
-  const logoFragmentMotions = LOGO_ENTRANCE_FRAGMENTS.map((fragment) => ({
-    opacity: logoEntrance.interpolate({
-      inputRange: [0, fragment.revealAt, fragment.arriveAt, 0.8, 1],
-      outputRange: [0, 0, 1, 0.18, 0],
-      extrapolate: "clamp",
-    }),
-    translateX: logoEntrance.interpolate({
-      inputRange: [0, fragment.arriveAt, 0.8, 1],
-      outputRange: [fragment.fromX, fragment.overshootX, 0, 0],
-      extrapolate: "clamp",
-    }),
-    translateY: logoEntrance.interpolate({
-      inputRange: [0, fragment.arriveAt, 0.8, 1],
-      outputRange: [fragment.fromY, -fragment.fromY * 0.18, 0, 0],
-      extrapolate: "clamp",
-    }),
-    rotation: logoEntrance.interpolate({
-      inputRange: [0, fragment.arriveAt, 0.8, 1],
-      outputRange: [`${fragment.fromRotation}deg`, `${-fragment.fromRotation * 0.18}deg`, "0deg", "0deg"],
-      extrapolate: "clamp",
-    }),
-    scale: logoEntrance.interpolate({
-      inputRange: [0, fragment.arriveAt, 0.8, 1],
-      outputRange: [0.86, 1.06, 1, 1],
-      extrapolate: "clamp",
-    }),
-  }));
-
   const stopOpeningSequence = useCallback(() => {
     openingReveal.stopAnimation();
     openingForegroundFade.current?.stop();
@@ -1222,66 +932,35 @@ export function AnnualScrollStory({
     setOpeningForegroundHidden(true);
   }, [openingForegroundOpacity, openingReveal, reducedMotion, stopOpeningSequence]);
 
+  // 指针余迹：整条故事线共用一层，颜色由 pixelAccentRef 随章切换，
+  // 所以这层只在挂载时建一次，不跟着章节重挂。
   useEffect(() => {
-    logoEntrance.stopAnimation();
-    if (reducedMotion) {
-      logoEntrance.setValue(1);
-      return undefined;
-    }
-    logoEntrance.setValue(0);
-    const animation = Animated.sequence([
-      Animated.delay(40),
-      Animated.timing(logoEntrance, {
-        toValue: 0.5,
-        duration: 560,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: Platform.OS !== "web",
-      }),
-      Animated.timing(logoEntrance, {
-        toValue: 0.68,
-        duration: 230,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: Platform.OS !== "web",
-      }),
-      Animated.delay(80),
-      Animated.timing(logoEntrance, {
-        toValue: 0.86,
-        duration: 460,
-        easing: Easing.inOut(Easing.cubic),
-        useNativeDriver: Platform.OS !== "web",
-      }),
-      Animated.timing(logoEntrance, {
-        toValue: 1,
-        duration: 420,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: Platform.OS !== "web",
-      }),
-    ]);
-    animation.start();
-    return () => animation.stop();
-  }, [logoEntrance, reducedMotion]);
+    if (Platform.OS !== "web" || reducedMotion) return undefined;
+    const layer = createPixelLayer(rootRef.current as unknown as HTMLElement | null);
+    if (!layer) return undefined;
+    pixelLayerRef.current = layer;
+    const detach = attachPixelTrail(layer, layer.element.parentElement!, () => pixelAccentRef.current);
+    return () => {
+      detach();
+      layer.destroy();
+      pixelLayerRef.current = null;
+    };
+  }, [reducedMotion]);
 
+  // 第六章的规则卡：悬停时沿卡缘冒暖色火花。
   useEffect(() => {
-    logoNeon.stopAnimation();
-    if (reducedMotion || activeChapter !== 1 || openingForegroundHidden) {
-      logoNeon.setValue(1);
-      return undefined;
-    }
-    const flash = (toValue: number, duration: number) => Animated.timing(logoNeon, {
-      toValue,
-      duration,
-      easing: Easing.linear,
-      useNativeDriver: Platform.OS !== "web",
-    });
-    const animation = Animated.loop(Animated.sequence([
-      Animated.delay(2_400),
-      flash(0.48, 55), flash(1, 85), flash(0.72, 45), flash(1, 95),
-      Animated.delay(2_300),
-      flash(0.62, 60), flash(1, 110),
-    ]));
-    animation.start();
-    return () => animation.stop();
-  }, [activeChapter, logoNeon, openingForegroundHidden, reducedMotion]);
+    if (Platform.OS !== "web" || reducedMotion || activeChapter !== 6) return undefined;
+    const layer = pixelLayerRef.current;
+    const root = rootRef.current as unknown as HTMLElement | null;
+    if (!layer || !root) return undefined;
+    const cards = Array.from(root.querySelectorAll<HTMLElement>("[data-highlight-card='true']"));
+    const detachers = cards.map((card) => attachPixelSparks(
+      layer,
+      card,
+      () => card.dataset.highlightAccent || pixelAccentRef.current,
+    ));
+    return () => detachers.forEach((detach) => detach());
+  }, [activeChapter, reducedMotion]);
 
   useEffect(() => {
     if (Platform.OS !== "web") return undefined;
@@ -1400,8 +1079,29 @@ export function AnnualScrollStory({
   const startOpeningSequence = useCallback(() => {
     if (openingSequenceStarted.current || openingStepRef.current > 0) return;
     openingSequenceStarted.current = true;
-    logoEntrance.stopAnimation();
-    logoEntrance.setValue(1);
+    logoNeon.stopAnimation();
+    if (reducedMotion) {
+      logoNeon.setValue(1);
+    } else {
+      const flicker = (toValue: number, duration: number) => Animated.timing(logoNeon, {
+        toValue,
+        duration,
+        easing: Easing.linear,
+        useNativeDriver: Platform.OS !== "web",
+      });
+      Animated.sequence([
+        flicker(1, 90),
+        Animated.delay(160),
+        flicker(0.72, 55),
+        flicker(0.96, 90),
+        Animated.delay(120),
+        flicker(0.8, 50),
+        flicker(1, 110),
+        Animated.delay(110),
+        flicker(0.9, 40),
+        flicker(1, 90),
+      ]).start();
+    }
     stopOpeningSequence();
     setOpeningMessageReady(false);
     openingTransition.setValue(0);
@@ -1452,7 +1152,7 @@ export function AnnualScrollStory({
     openingForegroundOpacity,
     openingReveal,
     openingTransition,
-    logoEntrance,
+    logoNeon,
     reducedMotion,
     stopOpeningSequence,
   ]);
@@ -1572,7 +1272,7 @@ export function AnnualScrollStory({
     const onPointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest("button, a, input, textarea, [role='button'], [data-testid='opening-reel-gallery']")) return;
+      if (target?.closest("button, a, input, textarea, [role='button'], [data-testid='opening-reel-gallery'], [data-story-dome-gallery='true']")) return;
       dragging = true;
       startY = event.clientY;
       startScrollTop = scroller.scrollTop;
@@ -1652,7 +1352,12 @@ export function AnnualScrollStory({
         </View>
         <View accessibilityLabel={`内容故事第 ${activeChapter} 章，共 ${CHAPTER_COUNT} 章`} accessibilityRole="progressbar" style={styles.progressWrap}>
           <View style={styles.progressTrack}>
-            <Animated.View style={[styles.progressFill, { width: progressWidth }]} />
+            {PROGRESS_SEGMENTS.map((chapter) => (
+              <View
+                key={chapter}
+                style={[styles.progressSeg, chapter <= activeChapter && styles.progressSegOn]}
+              />
+            ))}
           </View>
           <Text style={styles.progressText}>{String(activeChapter).padStart(2, "0")} / 06</Text>
         </View>
@@ -1904,9 +1609,15 @@ export function AnnualScrollStory({
                   accessibilityRole="button"
                   accessibilityState={{ disabled: openingStep > 0 }}
                   disabled={openingStep > 0}
-                  {...(Platform.OS === "web" ? { dataSet: { focusTreatment: "scale" } } : {})}
+                  onBlur={() => setLogoFocused(false)}
+                  onFocus={() => setLogoFocused(true)}
                   onPress={startOpeningSequence}
-                  style={({ pressed }) => [styles.logoButton, pressed && styles.logoButtonPressed, WEB_POINTER]}
+                  style={({ pressed }) => [
+                    styles.logoButton,
+                    logoFocused && styles.logoButtonFocused,
+                    pressed && styles.logoButtonPressed,
+                    WEB_POINTER,
+                  ]}
                   testID="opening-logo-button"
                 >
                   <View
@@ -1916,63 +1627,7 @@ export function AnnualScrollStory({
                     accessibilityValue={{ min: 0, max: 100, now: openingProgress }}
                     style={[styles.logoProgress, { transform: [{ scale: OPENING_LOGO_SCALE }] }]}
                   >
-                    {LOGO_ENTRANCE_FRAGMENTS.map((fragment, index) => {
-                      const motion = logoFragmentMotions[index]!;
-                      const glowId = `opening-logo-fragment-bloom-${fragment.key}`;
-                      return (
-                        <Animated.View
-                          accessibilityElementsHidden
-                          importantForAccessibility="no-hide-descendants"
-                          key={fragment.key}
-                          pointerEvents="none"
-                          style={[
-                            styles.logoFragment,
-                            {
-                              top: fragment.top,
-                              height: fragment.height,
-                              opacity: motion.opacity,
-                              transform: [
-                                { translateX: motion.translateX },
-                                { translateY: motion.translateY },
-                                { rotate: motion.rotation },
-                                { scale: motion.scale },
-                              ],
-                            },
-                          ]}
-                          testID={`opening-logo-fragment-${fragment.key}`}
-                        >
-                          <Svg
-                            height={300}
-                            pointerEvents="none"
-                            style={[styles.logoFragmentArtwork, { top: -30 - fragment.top }]}
-                            viewBox="-30 -30 280 300"
-                            width={280}
-                          >
-                            <Defs>
-                              <Filter height="180%" id={glowId} width="180%" x="-40%" y="-40%">
-                                <FeGaussianBlur stdDeviation={6} />
-                              </Filter>
-                            </Defs>
-                            <Path d={NOTE_PATH} fill="#080B10" opacity={0.9} stroke={fragment.color} strokeLinejoin="round" strokeWidth={18} />
-                            <Path d={NOTE_PATH} fill="none" filter={`url(#${glowId})`} opacity={0.42} stroke={fragment.color} strokeLinejoin="round" strokeWidth={24} />
-                            <Path d={NOTE_PATH} fill="none" opacity={0.82} stroke="#F4F6FA" strokeLinejoin="round" strokeWidth={4} />
-                          </Svg>
-                        </Animated.View>
-                      );
-                    })}
-                    <Animated.View
-                      style={[
-                        styles.logoEntryBody,
-                        {
-                          opacity: logoBodyOpacity,
-                          transform: [
-                            { translateY: logoBodyTranslateY },
-                            { rotate: logoBodyRotation },
-                            { scale: logoBodyScale },
-                          ],
-                        },
-                      ]}
-                    >
+                    <View style={styles.logoBody}>
                       <Svg
                         accessibilityLabel="抖音音符标志"
                         height={300}
@@ -2012,9 +1667,9 @@ export function AnnualScrollStory({
                         <G mask="url(#opening-logo-outer-mask)">
                           <Path d={NOTE_PATH} fill="#0A0D12" opacity={0.96} stroke="#030406" strokeLinejoin="round" strokeWidth={8} transform="translate(10 12)" />
                           <Path d={NOTE_PATH} fill="none" opacity={0.72} stroke="#53616B" strokeLinejoin="round" strokeWidth={4} transform="translate(7 8)" />
-                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(-7 5)" />
-                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(7 -4)" />
                           <AnimatedSvgGroup opacity={logoNeon}>
+                            <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(-7 5)" />
+                            <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.24} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(7 -4)" />
                             <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.46} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(-7 5)" />
                             <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" opacity={0.46} stroke="#62F8FF" strokeLinejoin="round" strokeWidth={24} transform="translate(7 -4)" />
                             <Path d={NOTE_PATH} fill="none" opacity={0.94} stroke="#D2FEFF" strokeLinejoin="round" strokeWidth={18} transform="translate(-7 5)" />
@@ -2024,12 +1679,8 @@ export function AnnualScrollStory({
                         <Path d={NOTE_PATH} fill="none" stroke="#25F4EE" strokeLinejoin="round" strokeWidth={14} transform="translate(-7 5)" />
                         <Path d={NOTE_PATH} fill="none" stroke="#FE2C55" strokeLinejoin="round" strokeWidth={14} transform="translate(7 -4)" />
                         <Rect fill="#F4F6FA" height={NOTE_VIEWBOX_HEIGHT} mask="url(#opening-logo-fill-mask)" width={NOTE_VIEWBOX_WIDTH} />
-                        <AnimatedSvgGroup opacity={logoLockFlash}>
-                          <Path d={NOTE_PATH} fill="none" filter="url(#opening-logo-edge-bloom)" stroke="#F4F6FA" strokeLinejoin="round" strokeWidth={28} />
-                          <Path d={NOTE_PATH} fill="none" stroke="#FFFFFF" strokeLinejoin="round" strokeWidth={4} />
-                        </AnimatedSvgGroup>
                       </Svg>
-                    </Animated.View>
+                    </View>
                   </View>
                 </Pressable>
               </View>
@@ -2330,7 +1981,7 @@ export function AnnualScrollStory({
         </SceneSection>
         <View style={[styles.finale, atmosphereStyle("finale")]}>
             <FinaleEqualizer active={activeChapter === 6} reducedMotion={reducedMotion} />
-            <Text style={styles.finaleEyebrow}>YOUR CONTENT, STILL UNFOLDING</Text>
+            <DecodedText style={styles.finaleEyebrow} text="YOUR CONTENT, STILL UNFOLDING" />
             <View style={styles.finaleTitleWrap} {...revealDataSet()}>
               <Text
                 accessibilityElementsHidden
@@ -2368,8 +2019,6 @@ export function AnnualScrollStory({
             </Pressable>
         </View>
       </ScrollView>
-
-      {openingStacked && !desktopOpened && !reducedMotion ? <OpeningPixelTrail /> : null}
 
       {openingPixelSwapActive ? (
         <View pointerEvents="none" style={styles.openingTransitionOverlay} testID="opening-transition-overlay">
@@ -2435,6 +2084,41 @@ function FinaleEqualizer({ active, reducedMotion }: { active: boolean; reducedMo
 }
 
 // 章节舞台：与第二章同一套版式——满屏黑底、左侧叙事列、右半屏一个可点的主物件。
+/**
+ * 章节眉的解码进场：自己拿 state 重渲染，不去写别人的 DOM——
+ * 直接改 textContent 会被父组件的下一次重渲染抹掉。
+ */
+function DecodedText({ style, testID, text }: { style?: StyleProp<TextStyle>; testID?: string; text: string }) {
+  const [frame, setFrame] = useState(text);
+
+  useEffect(() => {
+    const reduced = Platform.OS === "web"
+      && typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (Platform.OS !== "web" || reduced) {
+      setFrame(text);
+      return undefined;
+    }
+    const glyphs = Array.from(text);
+    const pool = decodePool(text);
+    let revealed = 0;
+    setFrame(decodeFrame(glyphs, 0, pool, Math.random));
+    const timer = window.setInterval(() => {
+      revealed += 1;
+      if (revealed >= glyphs.length) {
+        window.clearInterval(timer);
+        setFrame(text);
+        return;
+      }
+      setFrame(decodeFrame(glyphs, revealed, pool, Math.random));
+    }, DECODE_STEP_MS);
+    return () => window.clearInterval(timer);
+  }, [text]);
+
+  return <Text style={style} testID={testID}>{frame}</Text>;
+}
+
 function ChapterStage({
   accent,
   atmosphere,
@@ -2466,7 +2150,7 @@ function ChapterStage({
         {...revealDataSet()}
         {...(Platform.OS === "web" ? { dataSet: { sceneCopy: "true", storyReveal: "true" } } : {})}
       >
-        <Text style={[styles.stageEyebrow, { color: accent }]}>{eyebrow}</Text>
+        <DecodedText style={[styles.stageEyebrow, { color: accent }]} testID="stage-eyebrow" text={eyebrow} />
         <Text style={[styles.stageTitle, narrow && styles.stageTitleNarrow]}>{title}</Text>
         <Text style={styles.stageLead}>{copy}</Text>
         {detail ? <View style={styles.stageDetail}>{detail}</View> : null}
@@ -2738,7 +2422,9 @@ function StoryHighlightCard({
       accessibilityRole={item ? "button" : undefined}
       disabled={!item}
       onPress={() => onOpen(item)}
-      {...(Platform.OS === "web" ? { dataSet: { storyCascade: "true", tiltCard: "true" } } : {})}
+      {...(Platform.OS === "web"
+        ? { dataSet: { storyCascade: "true", tiltCard: "true", highlightCard: "true", highlightAccent: accent } }
+        : {})}
       style={({ pressed }) => [
         styles.highlightCard,
         { borderTopColor: accent },
@@ -3103,8 +2789,11 @@ const styles = StyleSheet.create({
   brandTitle: { color: color.text, fontSize: 13, fontWeight: "900" },
   brandMeta: { color: color.textMuted, fontSize: 9, marginTop: 2 },
   progressWrap: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12 },
-  progressTrack: { width: 197, height: 3, overflow: "hidden", backgroundColor: color.border },
-  progressFill: { height: 3, backgroundColor: color.cyan },
+  // 进度条也按像素语言走：6 段方块代替连续条，走过的段点亮。
+  // ponytail: 当前段不做闪烁——RN 没有 steps() 动画，为一个呼吸注入 CSS 不值。
+  progressTrack: { width: 196, flexDirection: "row", alignItems: "center", gap: 8 },
+  progressSeg: { width: 26, height: 6, backgroundColor: color.border },
+  progressSegOn: { backgroundColor: color.cyan },
   progressText: { width: 44, color: color.textMuted, fontSize: 10, fontWeight: "800", fontVariant: ["tabular-nums"] },
   skipButton: { minWidth: 140, minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 15, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surface },
   skipButtonText: { color: color.text, fontSize: 12, fontWeight: "900" },
@@ -3126,7 +2815,6 @@ const styles = StyleSheet.create({
   openingWordLayer: { ...ABSOLUTE_FILL },
   openingWordCurtain: { position: "absolute", zIndex: 6, top: 0, left: 0, width: "100%" },
   openingWebglReveal: { position: "absolute", zIndex: 7, top: 10, left: 0, width: "100%", overflow: "hidden" },
-  openingLogoSpotlight: { ...ABSOLUTE_FILL, zIndex: 11 },
   openingContinue: { ...ABSOLUTE_FILL, zIndex: 12 },
   openingTransitionOverlay: { position: "absolute", top: 68, right: 0, bottom: 0, left: 0, zIndex: 25 },
   openingTransitionPixels: { ...ABSOLUTE_FILL, zIndex: 25 },
@@ -3140,12 +2828,11 @@ const styles = StyleSheet.create({
   floatingTitle: { color: "rgba(255,255,255,0.9)", fontWeight: "900", lineHeight: 29 * OPENING_PARTICLE_SCALE },
   floatingCreator: { color: "rgba(255,255,255,0.78)", fontWeight: "800", lineHeight: 23 * OPENING_PARTICLE_SCALE },
   floatingCount: { color: "rgba(255,255,255,0.62)", fontSize: 10 * OPENING_PARTICLE_SCALE, fontWeight: "900" },
-  logoButton: { zIndex: 10, width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
+  logoButton: { zIndex: 6, width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
+  logoButtonFocused: { zIndex: 8 },
   logoButtonPressed: { opacity: 0.86, transform: [{ scale: 0.97 }] },
   logoProgress: { width: NOTE_WIDTH, height: NOTE_HEIGHT, alignItems: "center", justifyContent: "center" },
-  logoFragment: { position: "absolute", zIndex: 2, left: -30, width: 280, overflow: "hidden" },
-  logoFragmentArtwork: { position: "absolute", left: 0 },
-  logoEntryBody: { ...ABSOLUTE_FILL, zIndex: 3, alignItems: "center", justifyContent: "center" },
+  logoBody: { ...ABSOLUTE_FILL, zIndex: 3, alignItems: "center", justifyContent: "center" },
   logoArtwork: { position: "absolute", left: -30, top: -30 },
   chapter: { minHeight: 820, justifyContent: "center", paddingHorizontal: 52, paddingVertical: 92, borderTopWidth: 1, borderTopColor: color.borderSoft, backgroundColor: color.canvas },
   desktopChapter: { paddingHorizontal: 0, paddingVertical: 0, borderTopWidth: 0 },
