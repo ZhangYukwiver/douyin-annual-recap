@@ -1,18 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { buildDomeSlots, cardLocalPointerDelta } from "./DomeGallery";
+import { buildDomeSlots, buildDomeWindow } from "./DomeGallery";
 
 describe("Dome Gallery", () => {
-  it("fills the ReactBits 35 by 5 sphere layout", () => {
+  it("fills the ReactBits demo's 34 by 5 sphere layout", () => {
     const slots = buildDomeSlots(["a", "b", "c"]);
-    expect(slots).toHaveLength(175);
+    expect(slots).toHaveLength(170);
     expect(slots.slice(0, 4).map((slot) => slot.item)).toEqual(["a", "b", "c", "a"]);
   });
 
-  it("maps a skewed screen drag back onto the card's local horizontal axis", () => {
-    const skew = 6;
-    const local = cardLocalPointerDelta(120, Math.tan(skew * Math.PI / 180) * 120, skew);
-    expect(local.x).toBe(120);
-    expect(local.y).toBeCloseTo(0, 10);
+  it("makes every cover reachable through the fixed five-row horizontal window", () => {
+    const covers = Array.from({ length: 398 }, (_, index) => index);
+    const totalColumns = Math.ceil(covers.length / 5);
+    const windows = Array.from(
+      { length: totalColumns },
+      (_, centerColumn) => buildDomeWindow(covers.length, centerColumn),
+    );
+    const reachable = new Set(windows.flat().map(({ entryIndex }) => entryIndex));
+    const before = new Set(buildDomeWindow(covers.length, 0).map(({ slotKey }) => slotKey));
+    const retainedAfterTwoColumns = buildDomeWindow(covers.length, 2)
+      .filter(({ slotKey }) => before.has(slotKey));
+    expect(windows[0]).toHaveLength(170);
+    expect(reachable.size).toBe(covers.length);
+    expect(retainedAfterTwoColumns).toHaveLength(160);
+    expect(new Set(buildDomeWindow(3, 0).map(({ slotKey }) => slotKey)).size).toBe(170);
   });
 });
