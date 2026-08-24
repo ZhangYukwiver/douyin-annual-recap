@@ -15,7 +15,7 @@ import React, {
 import gsap from "gsap";
 
 import { DESKTOP_FALL, createFallRng, seedFallBodies, stepFallBodies } from "./desktopFallPhysics";
-import { DomeGallery } from "./DomeGallery";
+import { DomeGallery, type DomeGalleryEntry } from "./DomeGallery";
 import type { StoryContentItem } from "./storyModel";
 
 export interface DesktopStoryStream {
@@ -428,16 +428,9 @@ function DesktopDock() {
 
 const CSS = [
   ".desktop-card-swap-root * { box-sizing: border-box; }",
-  ".desktop-cover-tile { transition: transform 180ms ease, border-color 180ms ease; }",
-  ".desktop-cover-tile img { transition: transform 260ms cubic-bezier(.16,1,.3,1); }",
-  ".desktop-cover-tile:hover { border-color: rgba(255,255,255,.5) !important; }",
-  ".desktop-cover-tile:hover img { transform: scale(1.045); }",
-  ".desktop-cover-tile:active { transform: scale(.98); }",
-  ".desktop-cover-tile:focus-visible, .desktop-app-button:focus-visible, .desktop-swap-header:focus-visible { outline: 3px solid #25F4EE; outline-offset: 4px; }",
-  ".desktop-swap-header { cursor: pointer; transition: filter 160ms ease; }",
-  ".desktop-swap-header:hover { filter: brightness(1.22); }",
-  // 宽屏沿用户标注横向铺到 1250px 并让右缘出血；窄屏仍使用 925px 宽度。
-  ".desktop-card-swap-root .card-swap-container { position: absolute; bottom: 0; right: 0; transform: translate(4%, 20%); transform-origin: bottom right; perspective: 1665px; overflow: visible; }",
+  ".desktop-app-button:focus-visible { outline: 3px solid #25F4EE; outline-offset: 4px; }",
+  // 宽屏沿用户标注向左上出血；窄屏仍使用 925px 宽度。
+  ".desktop-card-swap-root .card-swap-container { position: absolute; bottom: 0; right: 0; transform: translate(-1%, 4%); transform-origin: bottom right; perspective: 1665px; overflow: visible; }",
   ".desktop-card-swap-root .card { position: absolute; top: 50%; left: 50%; border-radius: 20px; border: 1px solid #fff; background: #000; transform-style: preserve-3d; will-change: transform; backface-visibility: hidden; -webkit-backface-visibility: hidden; }",
   "@media (max-width: 768px) {",
   "  .desktop-card-swap-root .card-swap-container { transform: scale(.75) translate(25%, 25%); }",
@@ -463,7 +456,6 @@ const CSS = [
   "  100% { opacity: 1; transform: translateY(0); }",
   "}",
   "@media (prefers-reduced-motion: reduce) {",
-  "  .desktop-cover-tile, .desktop-cover-tile img { transition: none; }",
   "  .desktop-app-drop, .desktop-app-label { animation: none !important; }",
   "}",
 ].join("\n");
@@ -634,7 +626,7 @@ function CardSwap({
   return (
     <div
       ref={container}
-      aria-label="观看、喜欢和收藏内容页轮换"
+      aria-label="全部内容封面卡片"
       className="card-swap-container"
       style={{ width, height }}
     >
@@ -643,94 +635,25 @@ function CardSwap({
   );
 }
 
-function CoverTile({
-  accent,
-  index,
-  item,
-  onOpen,
-  privacy,
-}: {
-  accent: string;
-  index: number;
-  item: StoryContentItem;
-  onOpen: (item: StoryContentItem) => void;
-  privacy: boolean;
-}) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [item.record.coverUrl]);
-  const showImage = Boolean(item.record.coverUrl && !privacy && !failed);
-
-  return (
-    <button
-      aria-label={(privacy ? "内容封面已隐藏" : item.record.title) + "，打开详情"}
-      className="desktop-cover-tile"
-      onClick={(event) => {
-        event.stopPropagation();
-        onOpen(item);
-      }}
-      style={{
-        position: "relative",
-        minWidth: 0,
-        minHeight: 0,
-        overflow: "hidden",
-        padding: 0,
-        border: "1px solid rgba(255,255,255,0.12)",
-        borderRadius: 10,
-        background: "linear-gradient(145deg, " + accent + "44, #171B23)",
-        cursor: "pointer",
-      }}
-      title={privacy ? "内容封面已隐藏" : item.record.title}
-      type="button"
-    >
-      {showImage ? (
-        <img
-          alt=""
-          loading={index < 6 ? "eager" : "lazy"}
-          onError={() => setFailed(true)}
-          src={item.record.coverUrl ?? undefined}
-          style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }}
-        />
-      ) : (
-        <span
-          aria-hidden
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "grid",
-            placeItems: "center",
-            color: "rgba(255,255,255,0.72)",
-            fontSize: 15,
-            fontWeight: 800,
-          }}
-        >
-          {String(index + 1).padStart(2, "0")}
-        </span>
-      )}
-    </button>
-  );
-}
-
 function ContentPage({
   description,
+  entries,
   galleryInteractive = true,
-  onActivate,
-  onOpen,
+  onSelect,
   privacy,
   reducedMotion,
-  skewYDeg = 0,
+  selectedEntry,
   stream,
 }: {
   description?: ReactNode;
+  entries: readonly DomeGalleryEntry[];
   galleryInteractive?: boolean;
-  onActivate?: () => void;
-  onOpen: (item: StoryContentItem) => void;
+  onSelect: (entry: DomeGalleryEntry) => void;
   privacy: boolean;
   reducedMotion: boolean;
-  skewYDeg?: number;
+  selectedEntry: DomeGalleryEntry | null;
   stream: DesktopStoryStream;
 }) {
-  const useDomeGallery = stream.key === "watch_history";
-  const covers = stream.records.slice(0, 18);
   return (
     <div
       aria-label={stream.label + "，" + stream.count.toLocaleString("zh-CN") + " 个视频"}
@@ -738,18 +661,7 @@ function ContentPage({
       style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column" }}
     >
       <header
-        aria-label={onActivate ? "把" + stream.label + "页切换到最前" : undefined}
-        className={onActivate ? "desktop-swap-header" : undefined}
-        onClick={onActivate}
-        onKeyDown={onActivate
-          ? (event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onActivate();
-              }
-            }
-          : undefined}
-        role={onActivate ? "button" : undefined}
+        aria-label={`${stream.label}，${stream.count.toLocaleString("zh-CN")} 个视频`}
         style={{
           height: 72,
           flex: "0 0 72px",
@@ -761,14 +673,30 @@ function ContentPage({
           borderBottom: "1px solid rgba(255,255,255,0.12)",
           background: "rgba(12,14,18,0.94)",
         }}
-        tabIndex={onActivate ? 0 : undefined}
       >
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-          <strong style={{ color: "#F4F6FA", fontSize: 20 }}>{stream.label}</strong>
-          <span style={{ color: "rgba(244,246,250,0.5)", fontSize: 11 }}>视频封面</span>
+        <div style={{ minWidth: 0, display: "flex", alignItems: "baseline", gap: 12 }}>
+          <strong style={{ flex: "0 0 auto", color: "#F4F6FA", fontSize: 20 }}>{stream.label}</strong>
+          <span style={{ flex: "0 0 auto", color: "rgba(244,246,250,0.5)", fontSize: 11 }}>视频封面</span>
+          {description ? (
+            <p
+              style={{
+                minWidth: 0,
+                margin: 0,
+                overflow: "hidden",
+                color: "rgba(244,246,250,0.66)",
+                fontSize: 13,
+                lineHeight: 1.5,
+                whiteSpace: "nowrap",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {description}
+            </p>
+          ) : null}
         </div>
         <strong
           style={{
+            flex: "0 0 auto",
             color: "#F4F6FA",
             fontSize: 25,
             fontVariantNumeric: "tabular-nums",
@@ -777,71 +705,19 @@ function ContentPage({
           {stream.count.toLocaleString("zh-CN")}
         </strong>
       </header>
-      {description ? (
-        <div
-          style={{
-            flex: "0 0 44px",
-            height: 44,
-            display: "flex",
-            alignItems: "center",
-            padding: "0 22px",
-            borderBottom: "1px solid rgba(255,255,255,0.12)",
-            background: "rgba(16,19,26,0.94)",
-          }}
-        >
-          <p
-            style={{
-              margin: 0,
-              overflow: "hidden",
-              color: "rgba(244,246,250,0.66)",
-              fontSize: 14,
-              lineHeight: 1.6,
-              whiteSpace: "nowrap",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {description}
-          </p>
-        </div>
-      ) : null}
       <div
-        style={useDomeGallery
-          ? { flex: 1, minHeight: 0, position: "relative", background: "#151820" }
-          : {
-              flex: 1,
-              minHeight: 0,
-              display: "grid",
-              gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
-              gridAutoRows: "minmax(0, 1fr)",
-              gap: 8,
-              padding: 12,
-              background: "#151820",
-            }}
+        style={{ flex: 1, minHeight: 0, position: "relative", background: "#120F17" }}
       >
-        {useDomeGallery ? (
-          <DomeGallery
-            accent={stream.accent}
-            interactive={galleryInteractive}
-            onOpen={onOpen}
-            privacy={privacy}
-            records={stream.records}
-            reducedMotion={reducedMotion}
-            skewYDeg={skewYDeg}
-          />
-        ) : covers.length ? covers.map((item, index) => (
-          <CoverTile
-            accent={stream.accent}
-            index={index}
-            item={item}
-            key={item.key}
-            onOpen={onOpen}
-            privacy={privacy}
-          />
-        )) : (
-          <p style={{ gridColumn: "1 / -1", alignSelf: "center", color: "rgba(244,246,250,0.56)", textAlign: "center" }}>
-            当前列表没有可展示的封面
-          </p>
-        )}
+        <DomeGallery
+          accent={stream.accent}
+          entries={entries}
+          grayscale={false}
+          interactive={galleryInteractive}
+          onSelect={onSelect}
+          privacy={privacy}
+          reducedMotion={reducedMotion}
+          selectedEntryId={selectedEntry?.id ?? null}
+        />
       </div>
     </div>
   );
@@ -880,6 +756,16 @@ function narrativeDescription(stream: DesktopStoryStream, privacy: boolean): Rea
   return <><strong style={strongStyle}>{count} 个视频</strong>进入过你的视野{term ? <>，{term} 是你最常靠近的内容线索</> : null}。</>;
 }
 
+export function buildDomeGalleryEntries(streams: readonly DesktopStoryStream[]): DomeGalleryEntry[] {
+  return streams.flatMap((stream) => stream.records.map((item, index) => ({
+    accent: stream.accent,
+    id: `${stream.key}:${item.key}:${index}`,
+    item,
+    sourceKey: stream.key,
+    sourceLabel: stream.label,
+  })));
+}
+
 export function DesktopCardSwap({
   active,
   appIcon,
@@ -898,8 +784,17 @@ export function DesktopCardSwap({
 }: DesktopCardSwapProps) {
   const [opened, setOpened] = useState(false);
   const [ready, setReady] = useState(false);
-  const [frontIndex, setFrontIndex] = useState(0);
-  const swapControllerRef = useRef<CardSwapController | null>(null);
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+  const galleryEntries = useMemo(() => buildDomeGalleryEntries(streams), [streams]);
+  const selectedEntry = galleryEntries.find((entry) => entry.id === selectedEntryId) ?? galleryEntries[0] ?? null;
+  const selectedStream = streams.find((stream) => stream.key === selectedEntry?.sourceKey) ?? streams[0] ?? null;
+  const selectEntry = useCallback((entry: DomeGalleryEntry) => {
+    if (selectedEntryId === entry.id) {
+      onOpenRecord(entry.item);
+      return;
+    }
+    setSelectedEntryId(entry.id);
+  }, [onOpenRecord, selectedEntryId]);
   // 卡片组按 1600×900 设计稿等比缩放到当前视口
   const stageScale = Math.min(1.15, Math.max(0.55, Math.min(viewportWidth / 1600, viewportHeight / 900)));
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -1003,65 +898,45 @@ export function DesktopCardSwap({
           },
         });
         let spawned = 0;
-        cards.forEach((card, cardIndex) => {
-          const stream = streams[cardIndex];
-          if (!stream) return;
-          const dome = stream.key === "watch_history";
-          const records = stream.records.slice(0, 18);
-          const cardRect = card.getBoundingClientRect();
-          const tiles = dome
-            ? Array.from(card.querySelectorAll<HTMLElement>(".story-dome-media"))
-              .map((tile) => ({ tile, rect: tile.getBoundingClientRect() }))
-              .filter(({ rect }) => rect.width > 10 && rect.height > 10
-                && rect.right > cardRect.left && rect.left < cardRect.right
-                && rect.bottom > cardRect.top && rect.top < cardRect.bottom)
-              .sort((left, right) => {
-                const centerX = cardRect.left + cardRect.width / 2;
-                const centerY = cardRect.top + cardRect.height / 2;
-                const leftDistance = Math.hypot(left.rect.left + left.rect.width / 2 - centerX, left.rect.top + left.rect.height / 2 - centerY);
-                const rightDistance = Math.hypot(right.rect.left + right.rect.width / 2 - centerX, right.rect.top + right.rect.height / 2 - centerY);
-                return leftDistance - rightDistance;
-              })
-              .map(({ tile }) => tile)
-            : Array.from(card.querySelectorAll<HTMLElement>(".desktop-cover-tile"));
-          if (!records.length || !tiles.length) return;
+        const card = cards[0]!;
+        const cardRect = card.getBoundingClientRect();
+        const tiles = Array.from(card.querySelectorAll<HTMLElement>(".story-dome-media"))
+          .map((tile) => ({ tile, rect: tile.getBoundingClientRect() }))
+          .filter(({ rect }) => rect.width > 10 && rect.height > 10
+            && rect.right > cardRect.left && rect.left < cardRect.right
+            && rect.bottom > cardRect.top && rect.top < cardRect.bottom)
+          .sort((left, right) => {
+            const centerX = cardRect.left + cardRect.width / 2;
+            const centerY = cardRect.top + cardRect.height / 2;
+            const leftDistance = Math.hypot(left.rect.left + left.rect.width / 2 - centerX, left.rect.top + left.rect.height / 2 - centerY);
+            const rightDistance = Math.hypot(right.rect.left + right.rect.width / 2 - centerX, right.rect.top + right.rect.height / 2 - centerY);
+            return leftDistance - rightDistance;
+          })
+          .map(({ tile }) => tile);
+        if (galleryEntries.length && tiles.length) {
           const scaleX = cardRect.width / Math.max(1, card.offsetWidth);
           const scaleY = cardRect.height / Math.max(1, card.offsetHeight);
-          // 点击点换算到各卡片本地坐标（忽略 skew 的近似，只决定出发方向）
           const localClickX = (clientX - cardRect.left) / scaleX;
           const localClickY = (clientY - cardRect.top) / scaleY;
-          const localPos = (element: HTMLElement) => {
-            let x = 0;
-            let y = 0;
-            let node: HTMLElement | null = element;
-            while (node && node !== card) {
-              x += node.offsetLeft;
-              y += node.offsetTop;
-              node = node.offsetParent as HTMLElement | null;
-            }
-            return { x, y };
-          };
           const container = document.createElement("div");
           container.className = "desktop-cover-fliers";
           container.setAttribute("aria-hidden", "true");
           Object.assign(container.style, { position: "absolute", inset: "0", pointerEvents: "none", zIndex: "30" });
           card.appendChild(container);
           containers.push(container);
-          let order = 0;
-          for (let index = 0; index < tiles.length && order < 8; index += dome ? 1 : 2, order += 1) {
+          for (let index = 0; index < Math.min(8, tiles.length); index += 1) {
             const tile = tiles[index]!;
             const tileRect = tile.getBoundingClientRect();
-            const pos = dome
-              ? {
-                  x: (tileRect.left - cardRect.left) / scaleX,
-                  y: (tileRect.top - cardRect.top) / scaleY,
-                }
-              : localPos(tile);
-            const tileWidth = dome ? tileRect.width / scaleX : tile.offsetWidth;
-            const tileHeight = dome ? tileRect.height / scaleY : tile.offsetHeight;
-            const domeIndex = Number(tile.dataset.domePoolIndex);
-            const sourceIndex = dome && Number.isFinite(domeIndex) ? domeIndex % records.length : index;
-            const record = records[sourceIndex]?.record;
+            const pos = {
+              x: (tileRect.left - cardRect.left) / scaleX,
+              y: (tileRect.top - cardRect.top) / scaleY,
+            };
+            const tileWidth = tileRect.width / scaleX;
+            const tileHeight = tileRect.height / scaleY;
+            const entryIndex = Number(tile.dataset.domeEntryIndex);
+            const entry = Number.isFinite(entryIndex) ? galleryEntries[entryIndex] : undefined;
+            if (!entry) continue;
+            const record = entry.item.record;
             const flier = document.createElement("div");
             flier.className = "desktop-cover-flier";
             Object.assign(flier.style, {
@@ -1072,8 +947,8 @@ export function DesktopCardSwap({
               height: `${tileHeight}px`,
               overflow: "hidden",
               border: "1px solid rgba(255,255,255,0.22)",
-              borderRadius: dome ? "30px" : "10px",
-              background: `linear-gradient(145deg, ${stream.accent}44, #171B23)`,
+              borderRadius: "30px",
+              background: `linear-gradient(145deg, ${entry.accent}44, #171B23)`,
               boxShadow: "0 10px 28px rgba(0,0,0,0.45)",
               display: "grid",
               placeItems: "center",
@@ -1081,7 +956,7 @@ export function DesktopCardSwap({
               fontSize: "15px",
               fontWeight: "800",
             });
-            flier.textContent = String(sourceIndex + 1).padStart(2, "0");
+            flier.textContent = String(entryIndex + 1).padStart(2, "0");
             if (record?.coverUrl && !privacy) {
               const img = document.createElement("img");
               img.src = record.coverUrl;
@@ -1092,7 +967,7 @@ export function DesktopCardSwap({
                 width: "100%",
                 height: "100%",
                 objectFit: "cover",
-                filter: dome ? "grayscale(1)" : "none",
+                filter: "none",
               });
               img.onerror = () => img.remove();
               flier.appendChild(img);
@@ -1100,13 +975,12 @@ export function DesktopCardSwap({
             container.appendChild(flier);
             const dx = localClickX - (pos.x + tileWidth / 2);
             const dy = localClickY - (pos.y + tileHeight / 2);
-            // 三张卡的批次交错起飞，读作一次同时撒向三叠卡片
-            const delay = (order * cards.length + cardIndex) * 0.03;
+            const delay = index * 0.03;
             timeline.fromTo(flier, {
               x: dx,
               y: dy,
               scale: 0.22,
-              rotation: ((order + cardIndex) % 2 ? -1 : 1) * (8 + order * 1.4 + cardIndex * 2),
+              rotation: (index % 2 ? -1 : 1) * (8 + index * 1.4),
               autoAlpha: 0.5,
             }, {
               x: 0,
@@ -1120,7 +994,7 @@ export function DesktopCardSwap({
             timeline.to(flier, { autoAlpha: 0, duration: 0.24, ease: "power1.out" }, delay + 0.8);
             spawned += 1;
           }
-        });
+        }
         if (!spawned) {
           containers.forEach((node) => node.remove());
           return;
@@ -1132,7 +1006,7 @@ export function DesktopCardSwap({
         };
       });
     });
-  }, [privacy, streams]);
+  }, [galleryEntries, privacy]);
 
   const openApp = useCallback((event?: React.MouseEvent<HTMLButtonElement>) => {
     if (!ready || opened || !desktopRef.current || !reportRef.current) return;
@@ -1163,6 +1037,10 @@ export function DesktopCardSwap({
         ease: "power3.out",
       }, "-=0.18");
   }, [onOpenApp, opened, ready, reducedMotion, spawnCoverFliers]);
+
+  const selectedHeading = selectedStream
+    ? narrativeTitle(selectedStream, privacy, recentDays, title)
+    : title;
 
   return (
     <div
@@ -1333,9 +1211,7 @@ export function DesktopCardSwap({
               letterSpacing: "-0.04em",
             }}
           >
-            {reducedMotion || !streams.length
-              ? title
-              : narrativeTitle(streams[frontIndex] ?? streams[0]!, privacy, recentDays, title)}
+            {selectedHeading}
           </h1>
           {reducedMotion ? (
             <p style={{ maxWidth: 520, margin: "12px 0 0", color: "rgba(244,246,250,0.62)", fontSize: 14, lineHeight: 1.75 }}>
@@ -1344,7 +1220,7 @@ export function DesktopCardSwap({
           ) : null}
         </section>
 
-        {opened && reducedMotion ? (
+        {opened && reducedMotion && selectedStream ? (
           <div
             style={{
               position: "absolute",
@@ -1352,23 +1228,22 @@ export function DesktopCardSwap({
               right: 24,
               bottom: 24,
               left: 34,
-              display: "grid",
-              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-              gap: 12,
+              overflow: "hidden",
+              border: "1px solid rgba(255,255,255,0.18)",
+              borderRadius: 18,
             }}
           >
-            {streams.map((stream) => (
-              <div key={stream.key} style={{ minWidth: 0, overflow: "hidden", borderRadius: 18, border: "1px solid rgba(255,255,255,0.18)" }}>
-                <ContentPage
-                  onOpen={onOpenRecord}
-                  privacy={privacy}
-                  reducedMotion
-                  stream={stream}
-                />
-              </div>
-            ))}
+            <ContentPage
+              description={narrativeDescription(selectedStream, privacy)}
+              entries={galleryEntries}
+              onSelect={selectEntry}
+              privacy={privacy}
+              reducedMotion
+              selectedEntry={selectedEntry}
+              stream={selectedStream}
+            />
           </div>
-        ) : opened ? (
+        ) : opened && selectedStream ? (
           <div
             className="desktop-card-swap-stage"
             style={{ position: "absolute", top: 0, right: 0, width: "50%", height: "100%", zIndex: 2 }}
@@ -1382,32 +1257,22 @@ export function DesktopCardSwap({
               }}
             >
               <CardSwap
-                cardDistance={111}
-                controllerRef={swapControllerRef}
                 easing="elastic"
                 height={740}
-                onFrontChange={setFrontIndex}
                 skewAmount={6}
-                verticalDistance={130}
                 width={viewportWidth < 1250 ? 925 : 1250}
               >
-                {streams.map((stream, index) => (
-                  <Card
-                    key={stream.key}
-                    style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
-                  >
-                    <ContentPage
-                      description={narrativeDescription(stream, privacy)}
-                      galleryInteractive={index === frontIndex}
-                      onActivate={() => swapControllerRef.current?.bringToFront(index)}
-                      onOpen={onOpenRecord}
-                      privacy={privacy}
-                      reducedMotion={false}
-                      skewYDeg={6}
-                      stream={stream}
-                    />
-                  </Card>
-                ))}
+                <Card key="all-content" style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                  <ContentPage
+                    description={narrativeDescription(selectedStream, privacy)}
+                    entries={galleryEntries}
+                    onSelect={selectEntry}
+                    privacy={privacy}
+                    reducedMotion={false}
+                    selectedEntry={selectedEntry}
+                    stream={selectedStream}
+                  />
+                </Card>
               </CardSwap>
             </div>
           </div>
