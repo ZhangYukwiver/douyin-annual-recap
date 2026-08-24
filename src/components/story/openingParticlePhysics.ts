@@ -58,8 +58,6 @@ export interface OpeningParticleExitPlan extends OpeningPhysicsPose {
   radialProgress: number;
 }
 
-export type OpeningPixelTrailDirection = "left" | "right";
-
 interface TrackedParticle {
   body: Matter.Body;
   targetX: number;
@@ -128,15 +126,6 @@ export function openingBorderGlowPose(
   if (deltaX === 0 && deltaY === 0) return { edgeProximity, angle: 0 };
   const angle = (Math.atan2(deltaY, deltaX) * 180 / Math.PI + 450) % 360;
   return { edgeProximity, angle };
-}
-
-export function openingPixelTrailDirection(
-  deltaX: number,
-  current: OpeningPixelTrailDirection,
-): OpeningPixelTrailDirection {
-  if (deltaX < -0.5) return "left";
-  if (deltaX > 0.5) return "right";
-  return current;
 }
 
 // ponytail: fixed-step accumulator so a 120Hz display doesn't run the flight at double speed.
