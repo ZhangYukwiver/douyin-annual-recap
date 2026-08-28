@@ -155,11 +155,27 @@ const chatTypes: Array<{ id: ChatMessageType; label: string }> = [
 // Keep the five visual rows from the reference page while folding newer
 // message types into their closest interaction family.
 const chatDisplayTypes: Array<{ id: ChatMessageType; label: string }> = chatTypes.slice(0, 5);
-const chatDisplayType = (type: ChatMessageType): ChatMessageType => (
-  type === "image" || type === "sticker" || type === "share" || type === "text" || type === "call"
-    ? type
-    : type === "voice" ? "call" : type === "video" ? "share" : "text"
-);
+function chatDisplayType(type: ChatMessageType): ChatMessageType | null {
+  switch (type) {
+    case "text":
+    case "image":
+    case "sticker":
+    case "share":
+    case "call":
+      return type;
+    case "voice":
+      return "call";
+    case "video":
+      return "share";
+    // System notices are text-like; unknown payloads stay out of the chart.
+    // New message types must be assigned here explicitly instead of falling
+    // through into a misleading visual bucket.
+    case "system":
+      return "text";
+    case "unknown":
+      return null;
+  }
+}
 const pointer = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
 
 interface Ranked { name: string; count: number; share: number }
@@ -1696,6 +1712,12 @@ function TailChart({ tail }: { tail: number[] }) {
 
 function ChatPage({ mobile, model }: PageArgs) {
   const slotIcons: Record<string, Icon> = { text: MessageCircle, image: ImageIcon, sticker: Sticker, share: Send, call: Phone, voice: Radio, video: Play, system: Info, unknown: MessageCircle };
+  const privacyCn = model.chatGroups.length
+    ? "隐私保护：时间与类型仅覆盖好友对话；群聊只计总量。"
+    : "隐私保护：本页仅展示对话活动的时间与类型分布，不展示任何消息内容、具体信息或身份标识。";
+  const privacyEn = model.chatGroups.length
+    ? "Privacy first: Group chats are totals only; no content or identifiers are shown."
+    : "Privacy first: No message content, details, or identifiers are shown.";
   return (
     <View style={styles.lpPageCol}>
       <PageHeader en="CHAT ECHO" no="09" title="聊天回声" yearValue={model.year} />
@@ -1755,8 +1777,8 @@ function ChatPage({ mobile, model }: PageArgs) {
         <View style={styles.chPrivacy}>
           <View style={styles.chLockRing}><Lock color="#3A342A" size={13} strokeWidth={1.6} /></View>
           <View style={styles.flex}>
-            <Text style={styles.chPrivacyCn}>隐私保护：本页仅展示对话活动的时间与类型分布，不展示任何消息内容、具体信息或身份标识。</Text>
-            <Text style={styles.chPrivacyEn}>Privacy first: No message content, details, or identifiers are shown.</Text>
+            <Text style={styles.chPrivacyCn}>{privacyCn}</Text>
+            <Text style={styles.chPrivacyEn}>{privacyEn}</Text>
           </View>
           <View style={styles.chPrivacyRule} />
           <CompassRose color="#6B5F49" size={22} />
