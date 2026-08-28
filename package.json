@@ -13,6 +13,7 @@
     "direct:check": "node collector/directHistory.mjs --check-signer",
     "app:mac": "osacompile -s -o '抖音年度回顾.app' scripts/macos-launcher.applescript && plutil -replace CFBundleIdentifier -string local.douyin.annual-recap '抖音年度回顾.app/Contents/Info.plist' && plutil -replace NSDocumentsFolderUsageDescription -string '读取同目录中的本地应用代码与年度回顾数据。' '抖音年度回顾.app/Contents/Info.plist' && codesign --force --deep --sign - '抖音年度回顾.app'",
     "build:icons": "node scripts/build-icons.mjs",
+    "watch:process": "node scripts/process-watchdog.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prebuild:web": "npm run build:icons",
