@@ -16,6 +16,7 @@
     "watch:process": "node scripts/process-watchdog.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "check:story-frames": "node scripts/story-visual-regression.mjs",
     "prebuild:web": "npm run build:icons",
     "build:web": "expo export --platform web",
     "desktop": "npm run build:web && electron desktop/main.mjs",
