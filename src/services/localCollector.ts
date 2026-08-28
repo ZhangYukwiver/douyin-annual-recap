@@ -9,6 +9,7 @@ import {
   type PersonalVideoProgress,
   type PersonalVideoStats,
 } from "../domain/personalRecords";
+import type { ChatConversationKind, ChatConversationSummary, ChatMessage, ChatMessageType, ChatShare } from "../domain/chatRecords";
 
 export type CollectorState =
   | "idle"
@@ -20,11 +21,17 @@ export type CollectorState =
   | "partial"
   | "error";
 
+export interface CollectorProgress {
+  current: number;
+  total: number;
+}
+
 export interface CollectorStatus {
   state: CollectorState;
-  phase: PersonalRecordType | null;
+  phase: PersonalRecordType | "chat_messages" | null;
   message: string;
-  counts: Record<PersonalRecordType, number>;
+  counts: Record<PersonalRecordType, number> & { chat_messages: number };
+  progress: CollectorProgress | null;
   updatedAt: string | null;
   browserOpen: boolean;
 }
@@ -33,6 +40,8 @@ export interface CollectorSnapshot {
   schemaVersion: 2;
   updatedAt: string | null;
   records: PersonalRecordCollection;
+  chatMessages: ChatMessage[];
+  chatConversations: ChatConversationSummary[];
   warnings: string[];
 }
 
@@ -100,6 +109,7 @@ const IMAGE_HOST_SUFFIXES = [
   "ibytedtos.com",
   "snssdk.com",
 ] as const;
+const CHAT_TYPES: ChatMessageType[] = ["text", "image", "sticker", "share", "call", "system", "voice", "video", "unknown"];
 
 function cleanRecordString(value: unknown, limit = MAX_RECORD_STRING): string | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
@@ -280,6 +290,90 @@ function parseRecord(value: unknown, defaultSource: PersonalEventTimeSource = "u
   return record;
 }
 
+function parseChatType(value: unknown): ChatMessageType {
+  return typeof value === "string" && CHAT_TYPES.includes(value as ChatMessageType)
+    ? value as ChatMessageType
+    : "unknown";
+}
+
+function parseChatConversationKind(value: unknown): ChatConversationKind {
+  const text = typeof value === "string" || typeof value === "number" ? String(value).toLowerCase() : "";
+  if (text === "1" || text === "friend" || text === "private" || text === "one_to_one" || text === "one_to_one_chat" || text === "好友" || text === "私聊") return "friend";
+  if (text === "2" || text === "group" || text === "group_chat" || text === "群聊") return "group";
+  return "unknown";
+}
+
+function parseChatShare(value: unknown): ChatShare | null {
+  if (!isObject(value)) return null;
+  const share: ChatShare = {
+    title: cleanRecordString(value.title),
+    author: cleanRecordString(value.author),
+    coverUrl: parseImageUrl(value.coverUrl ?? value.cover),
+    url: parseDouyinUrl(value.url),
+  };
+  return Object.values(share).some(Boolean) ? share : null;
+}
+
+function parseChatMessage(value: unknown): ChatMessage | null {
+  if (!isObject(value)) return null;
+  const id = cleanRecordString(value.id, 300);
+  if (!id) return null;
+  const rawDuration = value.callDurationSeconds;
+  const numericDuration = typeof rawDuration === "number"
+    ? rawDuration
+    : typeof rawDuration === "string" && /^\d+(?:\.\d+)?$/u.test(rawDuration.trim())
+      ? Number(rawDuration)
+      : Number.NaN;
+  const duration = Number.isFinite(numericDuration) && numericDuration >= 0 && numericDuration <= 86_400
+    ? Math.round(numericDuration)
+    : null;
+  return {
+    id,
+    conversationId: cleanRecordString(value.conversationId, 300),
+    conversationType: parseChatConversationKind(value.conversationType),
+    conversationName: cleanRecordString(value.conversationName),
+    senderId: cleanRecordString(value.senderId, 300),
+    senderName: cleanRecordString(value.senderName),
+    sentAt: parseDate(value.sentAt),
+    type: parseChatType(value.type),
+    text: cleanRecordString(value.text),
+    mediaUrl: parseImageUrl(value.mediaUrl),
+    share: parseChatShare(value.share),
+    callDurationSeconds: duration,
+  };
+}
+
+function parseChatMessages(value: unknown): ChatMessage[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((item) => {
+    const message = parseChatMessage(item);
+    if (!message || seen.has(message.id)) return [];
+    seen.add(message.id);
+    return [message];
+  });
+}
+
+function parseChatConversations(value: unknown): ChatConversationSummary[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((item) => {
+    if (!isObject(item)) return [];
+    const id = cleanRecordString(item.id, 300);
+    const messageCount = parseCount(item.messageCount);
+    const ownMessageCount = parseCount(item.ownMessageCount);
+    if (!id || seen.has(id) || messageCount === null || ownMessageCount === null || ownMessageCount > messageCount) return [];
+    seen.add(id);
+    return [{
+      id,
+      kind: parseChatConversationKind(item.kind),
+      name: cleanRecordString(item.name ?? item.conversationName),
+      messageCount,
+      ownMessageCount,
+    }];
+  });
+}
+
 function parseRecords(value: unknown, defaultSource: PersonalEventTimeSource = "unknown"): PersonalRecordCollection {
   if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务返回了无效记录。");
   const result = createEmptyPersonalRecords();
@@ -297,10 +391,14 @@ function parseSnapshot(value: unknown): CollectorSnapshot {
   if (!isObject(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) {
     throw new LocalCollectorError("invalid_response", "采集服务版本不兼容。");
   }
+  const chatConversations = parseChatConversations(value.chatConversations);
+  const groupIds = new Set(chatConversations.filter((conversation) => conversation.kind === "group").map((conversation) => conversation.id));
   return {
     schemaVersion: 2,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null,
     records: parseRecords(value.records, value.schemaVersion === 1 ? "platform_action" : "unknown"),
+    chatMessages: parseChatMessages(value.chatMessages).filter((message) => message.conversationType !== "group" && (!message.conversationId || !groupIds.has(message.conversationId))),
+    chatConversations,
     warnings: Array.isArray(value.warnings)
       ? value.warnings.filter((item): item is string => typeof item === "string")
       : [],
@@ -331,7 +429,7 @@ function parseStatus(value: unknown): CollectorStatus {
   if (!state || typeof value.message !== "string") {
     throw new LocalCollectorError("invalid_response", "采集服务状态字段不完整。");
   }
-  const phases: Array<PersonalRecordType | null> = ["watch_history", "liked_videos", "favorite_videos", null];
+  const phases: Array<PersonalRecordType | "chat_messages" | null> = ["watch_history", "liked_videos", "favorite_videos", "chat_messages", null];
   const phase = phases.find((item) => item === value.phase) ?? null;
   return {
     state,
@@ -341,10 +439,37 @@ function parseStatus(value: unknown): CollectorStatus {
       watch_history: countFor("watch_history"),
       liked_videos: countFor("liked_videos"),
       favorite_videos: countFor("favorite_videos"),
+      chat_messages: (() => {
+        const count = rawCounts?.chat_messages;
+        return count === undefined ? 0 : countForChat(count);
+      })(),
     },
+    progress: parseCollectorProgress(value.progress),
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null,
     browserOpen: value.browserOpen === true,
   };
+}
+
+function parseCollectorProgress(value: unknown): CollectorProgress | null {
+  if (value === undefined || value === null) return null;
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务进度字段无效。");
+  const current = value.current;
+  const total = value.total;
+  if (
+    typeof current !== "number" || !Number.isSafeInteger(current) || current < 0 || current > 100_000
+    || typeof total !== "number" || !Number.isSafeInteger(total) || total < 0 || total > 100_000
+    || current > total
+  ) {
+    throw new LocalCollectorError("invalid_response", "采集服务进度字段无效。");
+  }
+  return { current, total };
+}
+
+function countForChat(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 100_000) {
+    throw new LocalCollectorError("invalid_response", "采集服务聊天数量字段无效。");
+  }
+  return value;
 }
 
 async function requestJson(
@@ -449,9 +574,21 @@ export async function startCollectorObservation(baseUrl: string, token: string):
   return parseStatus(value.status);
 }
 
+export async function startCollectorChatObservation(baseUrl: string, token: string): Promise<CollectorStatus> {
+  const value = await requestJson(baseUrl, "/v1/chat/observe", { method: "POST" }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回聊天读取状态。");
+  return parseStatus(value.status);
+}
+
 export async function stopCollectorObservation(baseUrl: string, token: string): Promise<CollectorStatus> {
   const value = await requestJson(baseUrl, "/v1/observe/stop", { method: "POST" }, token);
   if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回监听状态。");
+  return parseStatus(value.status);
+}
+
+export async function stopCollectorChatObservation(baseUrl: string, token: string): Promise<CollectorStatus> {
+  const value = await requestJson(baseUrl, "/v1/chat/observe/stop", { method: "POST" }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回聊天读取状态。");
   return parseStatus(value.status);
 }
 

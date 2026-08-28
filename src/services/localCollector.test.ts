@@ -12,8 +12,10 @@ import {
   startCollectorSync,
   startDirectRecordsSync,
   startCollectorObservation,
+  startCollectorChatObservation,
   stopCollectorSync,
   stopCollectorObservation,
+  stopCollectorChatObservation,
 } from "./localCollector";
 
 afterEach(() => {
@@ -76,6 +78,7 @@ describe("local collector client", () => {
       phase: null,
       message: "完成",
       counts: { watch_history: 1, liked_videos: 2, favorite_videos: 3 },
+      progress: { current: 2, total: 5 },
       updatedAt: "2026-08-08T00:00:00.000Z",
       browserOpen: true,
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -83,6 +86,7 @@ describe("local collector client", () => {
 
     const status = await getCollectorStatus("http://127.0.0.1:4765", "session-secret");
     expect(status.counts.favorite_videos).toBe(3);
+    expect(status.progress).toEqual({ current: 2, total: 5 });
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:4765/v1/status",
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer session-secret" }) }),
@@ -133,6 +137,30 @@ describe("local collector client", () => {
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "http://127.0.0.1:4765/v1/observe",
       "http://127.0.0.1:4765/v1/observe/stop",
+    ]);
+  });
+
+  it("starts and stops chat observation through dedicated endpoints", async () => {
+    const statusPayload = {
+      state: "observing",
+      phase: "chat_messages",
+      message: "聊天监听中",
+      counts: { watch_history: 0, liked_videos: 0, favorite_videos: 2 },
+      updatedAt: null,
+      browserOpen: true,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ started: true, status: statusPayload }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ stopped: true, status: { ...statusPayload, state: "idle", phase: null } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startCollectorChatObservation("http://127.0.0.1:4765", "session-secret"))
+      .resolves.toMatchObject({ state: "observing", phase: "chat_messages" });
+    await expect(stopCollectorChatObservation("http://127.0.0.1:4765", "session-secret"))
+      .resolves.toMatchObject({ state: "idle" });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:4765/v1/chat/observe",
+      "http://127.0.0.1:4765/v1/chat/observe/stop",
     ]);
   });
 
@@ -277,6 +305,42 @@ describe("local collector client", () => {
     });
     expect(snapshot.records.watch_history[1]).not.toHaveProperty("authorAvatarUrl");
     expect(snapshot.records.watch_history[1]).not.toHaveProperty("coverUrl");
+  });
+
+  it("accepts chat messages and preserves call duration/share metadata", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      schemaVersion: 2,
+      updatedAt: "2026-08-20T00:00:00.000Z",
+      records: { watch_history: [], liked_videos: [], favorite_videos: [] },
+      chatMessages: [{
+        id: "chat-1",
+        conversationId: "conv-1",
+        conversationName: "会话",
+        senderId: "user-1",
+        senderName: "联系人",
+        sentAt: "2026-08-20T00:00:00.000Z",
+        type: "call",
+        text: "通话",
+        mediaUrl: "https://evil.example/image.jpg",
+        share: {
+          title: "标题",
+          author: "作者",
+          coverUrl: "https://p3.douyinpic.com/cover.jpg",
+          url: "https://www.douyin.com/video/123?token=secret",
+        },
+        callDurationSeconds: 208,
+      }],
+      warnings: [],
+    }), { status: 200 })));
+
+    const snapshot = await getCollectorRecords("http://127.0.0.1:4765", "session-secret");
+    expect(snapshot.chatMessages[0]).toMatchObject({
+      id: "chat-1",
+      type: "call",
+      callDurationSeconds: 208,
+      mediaUrl: null,
+      share: { coverUrl: "https://p3.douyinpic.com/cover.jpg", url: "https://www.douyin.com/video/123" },
+    });
   });
 
   it("drops lookalike and non-HTTPS video links", async () => {

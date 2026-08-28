@@ -1,0 +1,45 @@
+{
+  "kind": "story-page-reference",
+  "version": 1,
+  "source": "用户提供的最终静态效果预览图",
+  "pixelFormat": "RGB 8-bit",
+  "dimensions": { "width": 1536, "height": 1024 },
+  "webCanvas": { "maxWidth": 768, "maxHeight": 542, "sourceScale": 2, "slice": "individual page bounds, white gutters removed where present" },
+  "pageAssets": {
+    "directory": "src/components/workspace/assets/reference/pages/",
+    "suffix": "-hi.png",
+    "displayScale": 2,
+    "sourceRectangles": {
+      "01": [0, 0, 768, 482], "02": [768, 0, 768, 482],
+      "03": [0, 482, 768, 542], "04": [768, 482, 768, 542],
+      "05": [0, 0, 768, 484], "06": [768, 0, 768, 484],
+      "07": [0, 484, 768, 540], "08": [768, 484, 768, 540],
+      "09": [0, 0, 760, 505], "10": [775, 0, 761, 505],
+      "11": [0, 519, 760, 505], "12": [775, 519, 761, 505]
+    },
+    "displayDimensions": {
+      "01": [768, 482], "02": [768, 482], "03": [768, 542], "04": [768, 542],
+      "05": [768, 484], "06": [768, 484], "07": [768, 540], "08": [768, 540],
+      "09": [760, 505], "10": [761, 505], "11": [760, 505], "12": [761, 505]
+    }
+  },
+  "pages": {
+    "01-04": "pages-01-04.png",
+    "05-08": "pages-05-08.png",
+    "09-12": "pages-09-12.png"
+  },
+  "files": {
+    "pages-01-04.png": {
+      "sha256": "289fed9c7fe4a065955ec930b182b5c30b5e6518031e5b3da7401fc8312a5447",
+      "bytes": 2170646
+    },
+    "pages-05-08.png": {
+      "sha256": "f9767a1ecfe3c4ab0b740177550fe956d79a82c4904c264a62c97d2f8f5826d8",
+      "bytes": 2279905
+    },
+    "pages-09-12.png": {
+      "sha256": "2e17c859629a683b0c4ea4085d35285ef49f0387edf1a547ecb01f9f8d10a034",
+      "bytes": 2477550
+    }
+  }
+}

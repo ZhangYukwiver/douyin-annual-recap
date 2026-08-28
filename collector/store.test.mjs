@@ -24,6 +24,44 @@ describe("CollectorStore", () => {
       await store.save(records, ["第一次"]);
       await store.save(records, ["第二次"], {
         directSync: { watch_history: true, liked_videos: false, favorite_videos: true },
+        chatMessages: [{
+          id: "chat-1",
+          conversationId: "conv-1",
+          conversationName: "会话",
+          senderId: "user-1",
+          senderName: "联系人",
+          sentAt: "2026-08-20T00:00:00.000Z",
+          type: "call",
+          text: "通话",
+          mediaUrl: "https://evil.example/image.jpg",
+          share: {
+            title: "视频标题",
+            author: "作者",
+            coverUrl: "https://p3.douyinpic.com/cover.jpg",
+            url: "https://www.douyin.com/video/123?token=secret",
+          },
+          callDurationSeconds: 208,
+        }, {
+          id: "group-body-1",
+          conversationId: "group-1",
+          conversationType: "group",
+          conversationName: "群聊",
+          senderId: "user-1",
+          senderName: "成员",
+          sentAt: "2026-08-20T00:01:00.000Z",
+          type: "text",
+          text: "不应落盘",
+          mediaUrl: null,
+          share: null,
+          callDurationSeconds: null,
+        }],
+        chatConversations: [{
+          id: "group-1",
+          kind: "group",
+          name: "测试群",
+          messageCount: 12,
+          ownMessageCount: 3,
+        }],
       });
 
       const loaded = await store.load();
@@ -36,6 +74,30 @@ describe("CollectorStore", () => {
         liked_videos: false,
         favorite_videos: true,
       });
+      expect(loaded.chatMessages).toMatchObject([{
+        id: "chat-1",
+        callDurationSeconds: 208,
+        mediaUrl: null,
+        share: {
+          coverUrl: "https://p3.douyinpic.com/cover.jpg",
+          url: "https://www.douyin.com/video/123",
+        },
+      }]);
+      expect(loaded.chatMessages).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "group-body-1" })]));
+      expect(loaded.chatConversations).toEqual([expect.objectContaining({
+        id: "group-1",
+        kind: "group",
+        name: "测试群",
+        messageCount: 12,
+        ownMessageCount: 3,
+      })]);
+      expect(Object.keys(loaded.chatConversations[0])).toEqual([
+        "id",
+        "kind",
+        "name",
+        "messageCount",
+        "ownMessageCount",
+      ]);
       expect(raw).not.toMatch(/cookie|msToken|a_bogus|x-bogus/iu);
     } finally {
       await rm(directory, { recursive: true, force: true });

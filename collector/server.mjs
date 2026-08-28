@@ -284,7 +284,13 @@ export async function startCollectorServer({
     } else if (request.method === "POST" && url.pathname === "/v1/observe") {
       const started = collector.startObservation();
       sendJson(response, started ? 202 : 200, { started, status: collector.getStatus() });
+    } else if (request.method === "POST" && url.pathname === "/v1/chat/observe") {
+      const started = collector.startChatObservation();
+      sendJson(response, started ? 202 : 200, { started, status: collector.getStatus() });
     } else if (request.method === "POST" && url.pathname === "/v1/observe/stop") {
+      const stopped = await collector.stopObservation();
+      sendJson(response, 200, { stopped, status: collector.getStatus() });
+    } else if (request.method === "POST" && url.pathname === "/v1/chat/observe/stop") {
       const stopped = await collector.stopObservation();
       sendJson(response, 200, { stopped, status: collector.getStatus() });
     } else if (request.method === "POST" && url.pathname === "/v1/account/switch") {

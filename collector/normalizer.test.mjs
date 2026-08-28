@@ -276,7 +276,7 @@ describe("normalizeDouyinResponse", () => {
 });
 
 describe("RecordAccumulator", () => {
-  it("drops collected watch records below twenty percent while keeping the boundary and unknown progress", () => {
+  it("keeps watch records at and below twenty percent, zero progress, and unknown progress", () => {
     const endpoint = matchDouyinEndpoint("https://www.douyin.com/aweme/v1/web/history/read/");
     const accumulator = new RecordAccumulator();
     const result = accumulator.addResponse(endpoint, {
@@ -284,6 +284,10 @@ describe("RecordAccumulator", () => {
       aweme_list: [{
         aweme_id: "below-twenty",
         play_progress: { play_progress: 1_999 },
+        video: { duration: 10_000 },
+      }, {
+        aweme_id: "zero-progress",
+        history_info: { play_progress: 0 },
         video: { duration: 10_000 },
       }, {
         aweme_id: "exactly-twenty",
@@ -296,17 +300,29 @@ describe("RecordAccumulator", () => {
       has_more: false,
     });
 
-    expect(result.pageSize).toBe(3);
-    expect(result.rejectedRecordIds).toEqual(["watch_history:below-twenty"]);
+    expect(result.pageSize).toBe(4);
+    expect(result.rejectedRecordIds).toEqual([]);
     expect(result.acceptedRecordIds).toEqual([
+      "watch_history:below-twenty",
+      "watch_history:zero-progress",
       "watch_history:exactly-twenty",
       "watch_history:unknown-progress",
     ]);
     expect(accumulator.snapshot().records.watch_history.map((record) => record.videoId)).toEqual([
+      "below-twenty",
+      "zero-progress",
       "exactly-twenty",
       "unknown-progress",
     ]);
     expect(accumulator.snapshot().records.watch_history[0]?.watchProgress).toEqual({
+      watchedSeconds: 2,
+      percent: 19.99,
+    });
+    expect(accumulator.snapshot().records.watch_history[1]?.watchProgress).toEqual({
+      watchedSeconds: 0,
+      percent: 0,
+    });
+    expect(accumulator.snapshot().records.watch_history[2]?.watchProgress).toEqual({
       watchedSeconds: 2,
       percent: 20,
     });
