@@ -43,7 +43,7 @@ export interface ChatConversationSummary {
   ownMessageCount: number;
 }
 
-export function countChatMessages(messages: ChatMessage[], conversations: ChatConversationSummary[] = []): number {
+export function countChatMessages(messages: readonly ChatMessage[], conversations: readonly ChatConversationSummary[] = []): number {
   const groupIds = new Set(conversations.filter((conversation) => conversation.kind === "group").map((conversation) => conversation.id));
   const groupCount = conversations
     .filter((conversation) => conversation.kind === "group")

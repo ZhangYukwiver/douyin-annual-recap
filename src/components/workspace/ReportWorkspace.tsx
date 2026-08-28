@@ -72,6 +72,7 @@ import type {
 import { countChatMessages } from "../../domain/chatRecords";
 import type { ChatConversationSummary, ChatMessage, ChatMessageType } from "../../domain/chatRecords";
 import type { LivingReport } from "../../domain/livingReport";
+import { deriveSurpriseInsights } from "../../domain/surpriseInsights";
 import type {
   PersonalRecordCollection,
   PersonalRecordType,
@@ -149,17 +150,17 @@ const monthAbbr = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP"
 const chatTypes: Array<{ id: ChatMessageType; label: string }> = [
   { id: "text", label: "文字" }, { id: "image", label: "图片" }, { id: "sticker", label: "表情" },
   { id: "share", label: "分享" }, { id: "call", label: "通话" }, { id: "voice", label: "语音" }, { id: "video", label: "视频" },
+  { id: "system", label: "系统" }, { id: "unknown", label: "其他" },
 ];
+// Keep the five visual rows from the reference page while folding newer
+// message types into their closest interaction family.
+const chatDisplayTypes: Array<{ id: ChatMessageType; label: string }> = chatTypes.slice(0, 5);
+const chatDisplayType = (type: ChatMessageType): ChatMessageType => (
+  type === "image" || type === "sticker" || type === "share" || type === "text" || type === "call"
+    ? type
+    : type === "voice" ? "call" : type === "video" ? "share" : "text"
+);
 const pointer = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
-
-const milestoneDefs = [
-  { title: "观察启动", sub: "pattern emerging" },
-  { title: "内容偏好变化显著", sub: "pattern found" },
-  { title: "互动频次阶段性上升", sub: "pattern found" },
-  { title: "探索多样化增加", sub: "pattern found" },
-  { title: "创作者关注提升", sub: "pattern found" },
-  { title: "年末回顾", sub: "pattern reviewed" },
-];
 
 interface Ranked { name: string; count: number; share: number }
 interface EvidenceRow {
@@ -177,6 +178,7 @@ interface CrossData {
   days: number;
 }
 interface Model {
+  year: number;
   period: string;
   total: number;
   unique: number;
@@ -214,19 +216,23 @@ interface Model {
   profile: string;
   attentionSeconds: number;
   evidence: Record<"watch" | "chat" | "kept" | "creators", EvidenceRow>;
-  events: Array<{ kind: "watch" | "chat" | "kept"; label: string; time: string }>;
+  events: Array<{ kind: "watch" | "chat" | "kept"; label: string; time: string; url: string | null }>;
   calendar: number[][];
   seasons: Array<{ title: string; sub: string[] }>;
+  milestones: Array<{ title: string; sub: string }>;
   progressPercents: number[];
   durationBands: Array<{ label: string; en: string; share: number | null }>;
   chatSlots: Array<{ id: string; label: string; en: string; slots: number[] }>;
   cross: CrossData;
   creatorFocus: { concentration: number | null; discovery: number | null; tail: number[] };
+  surprises: ReturnType<typeof deriveSurpriseInsights>;
 }
 
 export function ContentWorkspace(props: ContentWorkspaceProps) {
   const { width, height } = useWindowDimensions();
-  const mobile = width < 900;
+  // The story reference canvas is 768px wide; keep tablet-sized web windows
+  // in the editorial two-column layout and reserve stacking for phones.
+  const mobile = width < 720;
   const [page, setPage] = useState(() => initialPage(props.activeView));
   const [gate, setGate] = useState<"book" | "seal" | "done">(() => Platform.OS === "web" && initialPage(props.activeView) === 0 ? "book" : "done");
   const [sealStart, setSealStart] = useState<SealStart | null>(null);
@@ -266,21 +272,26 @@ export function ContentWorkspace(props: ContentWorkspaceProps) {
 
   const def = pages[page]!;
   const late = page >= 4;
-  if (Platform.OS === "web") {
-    // ponytail: raster reference is the exact web source of truth; restore the
-    // dynamic renderer when the final copy/data contract is locked.
-    // Fit the current page to the available viewport while preserving its ratio.
-    const reference = referencePages()[page];
-    const scale = reference ? Math.min(width / reference.width, height / reference.height) : 1;
-    return (
-      <View testID="content-workspace" style={styles.referenceRoot}>
-        <ReferencePage scale={scale} current={def.id} onNext={() => select(page + 1)} onRestart={restart} />
-        {gate === "book" ? <BookGate covers={bookCoverUris} onDone={(start) => { setSealStart(start); setGate("seal"); }} privacy={props.privacy} /> : null}
-        {gate === "seal" ? <SealIntro auto onDone={() => setGate("done")} scale={scale} start={sealStart} /> : null}
-      </View>
-    );
-  }
+  const compactNav = Platform.OS === "web" && width < 900;
+  const webGateScale = Platform.OS === "web" ? Math.min(width / 768, height / 482) : 1;
+  // Dynamic pages use a 620px design height.  Fit that canvas into short web
+  // viewports so the real components stay visible instead of being clipped by
+  // the outer stage header/padding.  Wide desktop layouts remain at 1×.
+  const webMobilePadding = !late && mobile ? 56 : 0;
+  const webFrameWidth = Math.max(1, width - 52 - (late ? 0 : 92) - webMobilePadding);
+  const webFrameHeight = Math.max(1, height - 42 - (late ? 0 : 44) - webMobilePadding);
+  const webPageScale = Platform.OS === "web" ? Math.min(1, webFrameWidth / 768, webFrameHeight / 620) : 1;
+  const pageContent = (
+    <Page current={def.id} mobile={mobile} model={model} onNext={() => select(page + 1)} onOpen={props.onOpenRecord} onRestart={restart} onSettings={props.onOpenSettings} privacy={props.privacy} source={props.sourceLabel} updatedAt={props.updatedAt} />
+  );
+  const renderedPage = Platform.OS === "web"
+    ? <WebPageTransition pageKey={def.id}>{pageContent}</WebPageTransition>
+    : pageContent;
+  const fittedPage = Platform.OS === "web"
+    ? <WebPageFit height={webFrameHeight} scale={webPageScale} width={webFrameWidth}>{renderedPage}</WebPageFit>
+    : renderedPage;
   return (
+    <>
     <View testID="content-workspace" style={styles.root}>
       {late ? null : (
         <View style={styles.stageHead}>
@@ -292,13 +303,13 @@ export function ContentWorkspace(props: ContentWorkspaceProps) {
       <View style={styles.frame}>
         {late ? (
           <ScrollView contentContainerStyle={styles.lateScroll} showsVerticalScrollIndicator={false} style={styles.flex}>
-            <Page current={def.id} mobile={mobile} model={model} onNext={() => select(page + 1)} onOpen={props.onOpenRecord} onRestart={restart} onSettings={props.onOpenSettings} privacy={props.privacy} source={props.sourceLabel} updatedAt={props.updatedAt} />
+            {fittedPage}
           </ScrollView>
         ) : (
         <>
         <View style={styles.strip}>
           <View style={styles.stripTop}>
-            <Text style={styles.stripYear}>{year()}</Text>
+            <Text style={styles.stripYear}>{model.year}</Text>
             <Text style={styles.stripDossier}>{def.dossier}</Text>
             <Text style={styles.stripDossier}>DOSSIER</Text>
             <View style={styles.stripDash} />
@@ -310,23 +321,26 @@ export function ContentWorkspace(props: ContentWorkspaceProps) {
         </View>
         {mobile ? (
           <ScrollView contentContainerStyle={styles.stageScroll} showsVerticalScrollIndicator={false} style={styles.flex}>
-            <Page current={def.id} mobile={mobile} model={model} onNext={() => select(page + 1)} onOpen={props.onOpenRecord} onRestart={restart} onSettings={props.onOpenSettings} privacy={props.privacy} source={props.sourceLabel} updatedAt={props.updatedAt} />
+            {fittedPage}
           </ScrollView>
         ) : (
           <View style={styles.flex}>
-            <Page current={def.id} mobile={mobile} model={model} onNext={() => select(page + 1)} onOpen={props.onOpenRecord} onRestart={restart} onSettings={props.onOpenSettings} privacy={props.privacy} source={props.sourceLabel} updatedAt={props.updatedAt} />
+            {fittedPage}
           </View>
         )}
         </>
         )}
       </View>
-      <View style={styles.nav}>
-        <Pressable accessibilityLabel="上一章" accessibilityRole="button" disabled={page === 0} onPress={() => select(page - 1)} style={({ pressed }) => [styles.navButton, page === 0 && styles.disabled, pressed && styles.pressed, pointer]}><ChevronLeft color="#9A9184" size={15} /></Pressable>
-        <Text style={styles.navCount}>{String(page + 1).padStart(2, "0")} / {String(pages.length).padStart(2, "0")}</Text>
-        <Pressable accessibilityLabel="下一章" accessibilityRole="button" disabled={page === pages.length - 1} onPress={() => select(page + 1)} style={({ pressed }) => [styles.navButton, page === pages.length - 1 && styles.disabled, pressed && styles.pressed, pointer]}><ChevronRight color="#9A9184" size={15} /></Pressable>
-        <Pressable accessibilityLabel="连接与采集" accessibilityRole="button" onPress={props.onOpenSettings} style={({ pressed }) => [styles.navButton, pressed && styles.pressed, pointer]}><Settings2 color="#6F675B" size={13} /></Pressable>
+      <View style={[styles.nav, compactNav && styles.navCompact]}>
+        <Pressable accessibilityLabel="上一章" accessibilityRole="button" disabled={page === 0} onPress={() => select(page - 1)} style={({ pressed }) => [styles.navButton, compactNav && styles.navButtonCompact, page === 0 && styles.disabled, pressed && styles.pressed, pointer]}><ChevronLeft color="#9A9184" size={15} /></Pressable>
+        <Text style={[styles.navCount, compactNav && styles.navCountCompact]}>{String(page + 1).padStart(2, "0")} / {String(pages.length).padStart(2, "0")}</Text>
+        <Pressable accessibilityLabel="下一章" accessibilityRole="button" disabled={page === pages.length - 1} onPress={() => select(page + 1)} style={({ pressed }) => [styles.navButton, compactNav && styles.navButtonCompact, page === pages.length - 1 && styles.disabled, pressed && styles.pressed, pointer]}><ChevronRight color="#9A9184" size={15} /></Pressable>
+        <Pressable accessibilityLabel="连接与采集" accessibilityRole="button" onPress={props.onOpenSettings} style={({ pressed }) => [styles.navButton, compactNav && styles.navButtonCompact, pressed && styles.pressed, pointer]}><Settings2 color="#6F675B" size={13} /></Pressable>
       </View>
     </View>
+    {Platform.OS === "web" && gate === "book" ? <BookGate covers={bookCoverUris} onDone={(start) => { setSealStart(start); setGate("seal"); }} privacy={props.privacy} /> : null}
+    {Platform.OS === "web" && gate === "seal" ? <SealIntro auto onDone={() => setGate("done")} scale={webGateScale} start={sealStart} /> : null}
+    </>
   );
 }
 
@@ -347,6 +361,65 @@ function Page(args: PageArgs & { current: PageId }) {
   }
 }
 
+function WebPageTransition({ children, pageKey }: { children: React.ReactNode; pageKey: PageId }) {
+  const progress = useRef(new Animated.Value(1)).current;
+  const [settled, setSettled] = useState(true);
+  const staticFrameData = { dataSet: { staticFrame: "true" } } as unknown as { dataSet: Record<string, string> };
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return undefined;
+    const reducedMotion = typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    progress.stopAnimation();
+    if (reducedMotion) {
+      progress.setValue(1);
+      setSettled(true);
+      return undefined;
+    }
+    setSettled(false);
+    progress.setValue(0);
+    const animation = Animated.timing(progress, {
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      toValue: 1,
+      useNativeDriver: false,
+    });
+    animation.start(({ finished }) => {
+      if (finished) setSettled(true);
+    });
+    return () => animation.stop();
+  }, [pageKey, progress]);
+
+  return (
+    <Animated.View
+      {...staticFrameData}
+      style={[
+        styles.flex,
+        settled
+          ? { opacity: 1 }
+          : {
+              opacity: progress,
+              transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }],
+            },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+function WebPageFit({ children, height, scale, width }: { children: React.ReactNode; height: number; scale: number; width: number }) {
+  if (scale >= 0.999) return <View style={styles.flex}>{children}</View>;
+  return (
+    <View style={[styles.webFitViewport, { height, width }]}>
+      <View style={{ height: height / scale, transform: [{ scale }], transformOrigin: "top left", width: width / scale }}>
+        {children}
+      </View>
+    </View>
+  );
+}
+
 function referenceSheets() {
   if (Platform.OS !== "web" || typeof document === "undefined") return [] as const;
   return [
@@ -354,54 +427,6 @@ function referenceSheets() {
     require("./assets/reference/pages-05-08.png"),
     require("./assets/reference/pages-09-12.png"),
   ] as const;
-}
-
-function referencePages() {
-  if (Platform.OS !== "web" || typeof document === "undefined") return [] as const;
-  // Each source is a 2x export of the real page bounds. Pages 09–12 omit the
-  // white gutter present in the four-page contact sheet.
-  return [
-    { source: require("./assets/reference/pages/page-01-hi.png"), width: 768, height: 482 },
-    { source: require("./assets/reference/pages/page-02-hi.png"), width: 768, height: 482 },
-    { source: require("./assets/reference/pages/page-03-hi.png"), width: 768, height: 542 },
-    { source: require("./assets/reference/pages/page-04-hi.png"), width: 768, height: 542 },
-    { source: require("./assets/reference/pages/page-05-hi.png"), width: 768, height: 484 },
-    { source: require("./assets/reference/pages/page-06-hi.png"), width: 768, height: 484 },
-    { source: require("./assets/reference/pages/page-07-hi.png"), width: 768, height: 540 },
-    { source: require("./assets/reference/pages/page-08-hi.png"), width: 768, height: 540 },
-    { source: require("./assets/reference/pages/page-09-hi.png"), width: 760, height: 505 },
-    { source: require("./assets/reference/pages/page-10-hi.png"), width: 761, height: 505 },
-    { source: require("./assets/reference/pages/page-11-hi.png"), width: 760, height: 505 },
-    { source: require("./assets/reference/pages/page-12-hi.png"), width: 761, height: 505 },
-  ] as const;
-}
-
-function ReferencePage({ current, onNext, onRestart, scale }: { current: PageId; onNext: () => void; onRestart: () => void; scale: number }) {
-  const index = pages.findIndex((item) => item.id === current);
-  const page = referencePages()[index];
-  if (!page) return null;
-  const canvasWidth = page.width * scale;
-  const canvasHeight = page.height * scale;
-  return (
-    <View accessibilityLabel={`故事页 ${String(index + 1).padStart(2, "0")}`} accessibilityRole="image" style={[styles.referenceCanvas, { width: canvasWidth, height: canvasHeight }]}>
-      <Image
-        accessibilityIgnoresInvertColors
-        resizeMode="stretch"
-        source={page.source}
-        style={[styles.referenceSheet, { width: page.width * scale, height: page.height * scale, left: 0, top: 0 }]}
-      />
-      {index === 0 ? (
-        <Pressable focusable={false} accessibilityLabel="开始观测" accessibilityRole="button" onPress={onNext} style={[styles.referenceOpenHotspot, { left: 340 * scale, top: 368 * scale, width: 178 * scale, height: 48 * scale }]} />
-      ) : index === pages.length - 1 ? (
-        <>
-          <Pressable focusable={false} accessibilityLabel="保存报告" accessibilityRole="button" onPress={() => window.print()} style={[styles.referenceSaveHotspot, { left: 446 * scale, top: 408 * scale, width: 138 * scale, height: 70 * scale }]} />
-          <Pressable focusable={false} accessibilityLabel="重新观测" accessibilityRole="button" onPress={onRestart} style={[styles.referenceRestartHotspot, { left: 588 * scale, top: 408 * scale, width: 142 * scale, height: 70 * scale }]} />
-        </>
-      ) : (
-        <Pressable focusable={false} accessibilityLabel="下一章" accessibilityRole="button" onPress={onNext} style={[styles.referenceAdvanceHotspot, { left: 0, right: 0, top: 0, bottom: 0 }]} />
-      )}
-    </View>
-  );
 }
 
 /* ---------- 印章开场: 手绘印章逐渐落成第一页 ---------- */
@@ -452,10 +477,9 @@ function SealIntro({ auto, onDone, scale, start }: { auto?: boolean; onDone: () 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const pageAsset = referencePages()[0];
-  const sheet = pageAsset?.source ?? referenceSheets()[0];
-  const pageWidth = pageAsset?.width ?? 768;
-  const pageHeight = pageAsset?.height ?? 512;
+  const sheet = referenceSheets()[0];
+  const pageWidth = 768;
+  const pageHeight = 482;
   const box = SEAL_BOX.size * scale;
   let body: React.ReactNode = null;
   if (layout && sheet) {
@@ -496,11 +520,11 @@ function SealIntro({ auto, onDone, scale, start }: { auto?: boolean; onDone: () 
               resizeMode="stretch"
               source={sheet}
               style={{
-                height: (pageAsset?.height ?? 1024) * scale,
+                height: 1024 * scale,
                 left: -(SEAL_CENTER.x - SEAL_DISC / 2) * scale,
                 position: "absolute",
                 top: -(SEAL_CENTER.y - SEAL_DISC / 2) * scale,
-                width: (pageAsset?.width ?? 1536) * scale,
+                width: 1536 * scale,
               }}
             />
           </View>
@@ -525,22 +549,22 @@ function SealIntro({ auto, onDone, scale, start }: { auto?: boolean; onDone: () 
 
 /* ---------- 01 入口 / OPEN THE REPORT ---------- */
 
-function OpenPage({ onNext }: PageArgs) {
+function OpenPage({ model, onNext }: PageArgs) {
   return (
     <View style={styles.openRoot}>
       <StarField />
       <View style={styles.openCenter}>
         <Text style={styles.openSpark}>✦</Text>
         <Text style={styles.openTitle}>个人内容宇宙报告</Text>
-        <Text style={styles.openYear}>{year()}</Text>
+        <Text style={styles.openYear}>{model.year}</Text>
         <View style={styles.openSealRow}>
           <View style={styles.openRule} />
           <Text style={styles.openSealLabel}>OBSERVATION SEAL</Text>
           <View style={styles.openRule} />
         </View>
         <View style={styles.openBand}>
-          <Constellation />
-          <ObservationSeal />
+          <Constellation months={model.months} />
+          <ObservationSeal yearValue={model.year} />
         </View>
         <Pressable accessibilityRole="button" onPress={onNext} testID="story-begin" style={({ pressed }) => [styles.plaque, pressed && styles.pressed, pointer]}>
           <View style={styles.plaqueInner}><Text style={styles.plaqueText}>开始观测</Text></View>
@@ -575,7 +599,7 @@ function StarField() {
   );
 }
 
-function ObservationSeal() {
+function ObservationSeal({ yearValue = year() }: { yearValue?: number }) {
   return (
     <View style={styles.sealWrap}>
       <Svg height={196} viewBox="0 0 200 200" width={196}>
@@ -590,7 +614,7 @@ function ObservationSeal() {
           <TextPath href="#sealTop" startOffset="26%">OBSERVED</TextPath>
         </SvgText>
         <SvgText fill="#C9AA6C" fontSize={11} letterSpacing={4}>
-          <TextPath href="#sealBottom" startOffset="40%">· {year()} ·</TextPath>
+          <TextPath href="#sealBottom" startOffset="40%">· {yearValue} ·</TextPath>
         </SvgText>
         <Circle cx={63} cy={74} fill="#C5A161" opacity={0.75} r={1.4} />
         <Circle cx={139} cy={70} fill="#C5A161" opacity={0.6} r={1.2} />
@@ -602,12 +626,18 @@ function ObservationSeal() {
   );
 }
 
-function Constellation() {
+function Constellation({ months = [] }: { months?: number[] }) {
   const [size, setSize] = useState({ w: 0, h: 0 });
-  const pts: Array<[number, number, boolean]> = [
+  const max = Math.max(0, ...months);
+  const basePts: Array<[number, number, boolean]> = ([
     [0.02, 0.64, false], [0.09, 0.46, true], [0.17, 0.66, false], [0.26, 0.5, false], [0.35, 0.6, true],
     [0.5, 0.54, false], [0.65, 0.58, false], [0.74, 0.44, true], [0.83, 0.62, false], [0.92, 0.48, false], [0.985, 0.56, false],
-  ];
+  ] as Array<[number, number, boolean]>).map(([x, fallback, highlighted], index) => {
+    const value = months[index] ?? 0;
+    const y = max ? 0.72 - value / max * 0.4 : fallback;
+    return [x, Math.max(0.3, Math.min(0.78, y)), highlighted || value === max && max > 0] as [number, number, boolean];
+  });
+  const pts: Array<[number, number, boolean]> = basePts;
   return (
     <View onLayout={(event) => setSize({ w: event.nativeEvent.layout.width, h: event.nativeEvent.layout.height })} pointerEvents="none" style={StyleSheet.absoluteFill}>
       {size.w > 0 ? (
@@ -655,7 +685,7 @@ function EvidencePage({ model }: PageArgs) {
             <Text style={[styles.evHead, styles.evColCaveat]}>CAVEAT</Text>
             <View style={styles.evColCoverage}>
               <Text style={styles.evCoverageTitle}>COVERAGE</Text>
-              <Text style={styles.evCoverageYear}>{year()}</Text>
+              <Text style={styles.evCoverageYear}>{model.year}</Text>
               <View style={styles.evLetterRow}>{["J", "F", "M", "A", "M", "J"].map((letter, index) => <Text key={index} style={styles.evLetter}>{letter}</Text>)}</View>
             </View>
           </View>
@@ -696,7 +726,7 @@ function EvidencePage({ model }: PageArgs) {
 
 /* ---------- 03 内容足迹 / FOOTPRINT ---------- */
 
-function FootprintPage({ mobile, model }: PageArgs) {
+function FootprintPage({ mobile, model, onOpen }: PageArgs) {
   const stats: Array<{ icon: Icon; label: string; value: string; sub: string }> = [
     { icon: CalendarDays, label: "活跃天数", value: model.activeDays ? String(model.activeDays) : "—", sub: "/ 365" },
     { icon: Signature, label: "观测事件", value: model.total + model.chat ? (model.total + model.chat).toLocaleString("en-US") : "—", sub: "observed" },
@@ -717,7 +747,7 @@ function FootprintPage({ mobile, model }: PageArgs) {
       </View>
       <View style={[styles.fpBody, mobile && styles.stack]}>
         <View style={styles.fpCol}>
-          <ColHead cn="活动日历" en={`/ ${year()}`} />
+          <ColHead cn="活动日历" en={`/ ${model.year}`} />
           <View style={styles.fpWeekRow}>{weekLetters.map((letter, index) => <Text key={index} style={styles.fpWeekLetter}>{letter}</Text>)}</View>
           {model.calendar.map((cells, month) => (
             <View key={month} style={styles.fpCalRow}>
@@ -735,8 +765,8 @@ function FootprintPage({ mobile, model }: PageArgs) {
           <View style={styles.fpEvents}>
             {model.events.length ? model.events.map((event, index) => {
               const EventIcon = event.kind === "watch" ? Play : event.kind === "chat" ? MessageCircle : Star;
-              return (
-                <View key={index} style={styles.fpEvent}>
+              const eventBody = (
+                <View style={styles.fpEvent}>
                   <View style={styles.fpEventIcon}><EventIcon color="#C9B685" size={12} strokeWidth={1.6} /></View>
                   <View style={styles.flex}>
                     <Text style={styles.fpEventTag}>observed</Text>
@@ -745,6 +775,7 @@ function FootprintPage({ mobile, model }: PageArgs) {
                   <Text style={styles.fpEventTime}>{event.time}</Text>
                 </View>
               );
+              return event.url ? <Pressable accessibilityRole="link" key={index} onPress={() => void onOpen(event.url!)} style={({ pressed }) => [pressed && styles.pressed, pointer]}>{eventBody}</Pressable> : <View key={index}>{eventBody}</View>;
             }) : <Text style={styles.fpEmpty}>等待可定位时间的观测事件</Text>}
           </View>
         </View>
@@ -816,7 +847,7 @@ function TimelinePage({ mobile, model }: PageArgs) {
         <View style={styles.tlRule} />
         <Text style={styles.tlStar}>✦</Text>
         <View style={styles.tlRuleShort} />
-        <Text style={styles.tlYear}>{year()}</Text>
+        <Text style={styles.tlYear}>{model.year}</Text>
         <View style={styles.tlRuleShort} />
         <Text style={styles.tlStar}>✦</Text>
         <View style={styles.tlRule} />
@@ -830,10 +861,10 @@ function TimelinePage({ mobile, model }: PageArgs) {
         {model.dated ? (
           <View style={styles.tlMilestones}>
             <View style={styles.tlBaseline} />
-            {milestoneDefs.map((milestone) => (
+            {model.milestones.map((milestone) => (
               <View key={milestone.title} style={styles.tlMilestone}>
                 <View style={styles.tlNode} />
-                <Text style={styles.tlMilestoneTitle}>{milestone.title}</Text>
+                <Text numberOfLines={2} style={styles.tlMilestoneTitle}>{milestone.title}</Text>
                 <Text style={styles.tlMilestoneSub}>{milestone.sub}</Text>
               </View>
             ))}
@@ -949,12 +980,12 @@ function CompassRose({ color = "#4A4234", size = 30 }: { color?: string; size?: 
   );
 }
 
-function ChapterRail({ desc, en, mobile, no, title }: { desc: string; en: string; mobile: boolean; no: string; title: string }) {
+function ChapterRail({ desc, en, mobile, no, title, yearValue }: { desc: string; en: string; mobile: boolean; no: string; title: string; yearValue?: number }) {
   return (
     <View style={[styles.lpRail, mobile && styles.lpRailMobile]}>
       <View>
         <Text style={styles.lpRailNo}>{no}</Text>
-        <Text style={styles.lpRailYear}>{year()}</Text>
+        <Text style={styles.lpRailYear}>{displayYear(yearValue)}</Text>
         <Text style={styles.lpRailSpark}>✦</Text>
         <Text style={styles.lpRailTitle}>{title}</Text>
         <Text style={styles.lpRailEn}>{en}</Text>
@@ -990,14 +1021,14 @@ function PatternFooter({ dots, text }: { dots: number; text: string }) {
   );
 }
 
-function PageHeader({ en, no, title }: { en: string; no: string; title: string }) {
+function PageHeader({ en, no, title, yearValue }: { en: string; no: string; title: string; yearValue?: number }) {
   return (
     <View style={styles.lpHead}>
       <View style={styles.lpHeadTop}>
         <Text style={styles.lpHeadPage}>PAGE {no}</Text>
         <View style={styles.lpHeadRight}>
           <Text style={styles.lpHeadObserved}>observed</Text>
-          <Text style={styles.lpHeadYear}>{year()}</Text>
+          <Text style={styles.lpHeadYear}>{displayYear(yearValue)}</Text>
         </View>
       </View>
       <Text style={styles.lpHeadTitle}>{title}</Text>
@@ -1059,7 +1090,7 @@ function RhythmPage({ mobile, model }: PageArgs) {
   ];
   return (
     <View style={[styles.lpPage, mobile && styles.stack]}>
-      <ChapterRail desc="你的时间心跳图谱，在日常与周期中呈现规律与偏好。" en="RHYTHM" mobile={mobile} no="05" title="你的节拍" />
+      <ChapterRail desc="你的时间心跳图谱，在日常与周期中呈现规律与偏好。" en="RHYTHM" mobile={mobile} no="05" title="你的节拍" yearValue={model.year} />
       <View style={styles.flex}>
         <View style={[styles.rhTop, mobile && styles.stack]}>
           <View style={[styles.rhHeatBlock, !mobile && styles.lpBorderRight]}>
@@ -1210,7 +1241,7 @@ function AttentionPage({ mobile, model }: PageArgs) {
   ];
   return (
     <View style={[styles.lpPage, mobile && styles.stack]}>
-      <ChapterRail desc="从开始到完成，观察注意力的流动与分布。" en="ATTENTION" mobile={mobile} no="06" title="你如何停留" />
+      <ChapterRail desc="从开始到完成，观察注意力的流动与分布。" en="ATTENTION" mobile={mobile} no="06" title="你如何停留" yearValue={model.year} />
       <View style={styles.flex}>
         <View style={[styles.atBody, mobile && styles.stack]}>
           <View style={styles.atMain}>
@@ -1229,7 +1260,7 @@ function AttentionPage({ mobile, model }: PageArgs) {
                 ))}
               </View>
               <View style={styles.atFunnelWrap}>
-                <AttentionFunnel />
+                <AttentionFunnel density={pcts.length ? Math.min(1, pcts.length / 200) : 0} />
                 <Text style={styles.atDone}>完成</Text>
               </View>
               <View style={styles.atStages}>
@@ -1291,13 +1322,13 @@ function funnelWidth(y: number): number {
   return 13;
 }
 
-function AttentionFunnel() {
+function AttentionFunnel({ density }: { density: number }) {
   const leftPts = funnelLevels.map(([y, w]) => [190 - w, y] as [number, number]);
   const rightPts = funnelLevels.slice().reverse().map(([y, w]) => [190 + w, y] as [number, number]);
   const leftPath = smoothPath(leftPts);
   const rightPath = smoothPath(rightPts);
   const silhouette = `${leftPath} L ${rightPts[0]![0]} ${rightPts[0]![1]} ${rightPath.slice(rightPath.indexOf("C"))} Z`;
-  const dots = Array.from({ length: 128 }, (_, index) => {
+  const dots = Array.from({ length: Math.max(24, Math.min(128, 24 + Math.round(density * 104))) }, (_, index) => {
     const t = ((index * 47) % 113) / 113;
     const y = 40 + t * 384;
     const x = 190 + Math.sin(index * 12.9898 + 4.1) * funnelWidth(y) * 0.86;
@@ -1353,7 +1384,7 @@ function ContentPage({ mobile, model }: PageArgs) {
   const topics = model.topics.slice(0, 4);
   return (
     <View style={[styles.lpPage, mobile && styles.stack]}>
-      <ChapterRail desc="你与内容的共振，在主题、形式与互动中形成回声。" en="CONTENT ECHO" mobile={mobile} no="07" title="内容回声" />
+      <ChapterRail desc="你与内容的共振，在主题、形式与互动中形成回声。" en="CONTENT ECHO" mobile={mobile} no="07" title="内容回声" yearValue={model.year} />
       <View style={styles.flex}>
         <View style={[styles.ceBody, mobile && styles.stack]}>
           <View style={[styles.ceCol1, !mobile && styles.lpBorderRight]}>
@@ -1363,7 +1394,7 @@ function ContentPage({ mobile, model }: PageArgs) {
             </View>
             <View style={[styles.ceBlock, styles.lpBorderTop]}>
               <Text style={styles.lpBlockCn}>观看 × 点赞 × 收藏 交集</Text>
-              <KeptVenn />
+              <KeptVenn intersection={model.intersection} totals={{ watch: model.watch, liked: model.liked, favorite: model.favorite }} />
             </View>
           </View>
           <View style={styles.ceCol2}>
@@ -1466,11 +1497,11 @@ function TopicConstellation({ topics }: { topics: Ranked[] }) {
   );
 }
 
-function KeptVenn() {
-  const circles: Array<{ cx: number; cy: number; stroke: string; icon: Icon; label: string; ix: number; iy: number }> = [
-    { cx: 105, cy: 55, stroke: "#7FB0B4", icon: Eye, label: "观看", ix: 97, iy: 30 },
-    { cx: 76, cy: 102, stroke: "#C9A05B", icon: Heart, label: "点赞", ix: 42, iy: 106 },
-    { cx: 134, cy: 102, stroke: "#A8894F", icon: Star, label: "收藏", ix: 138, iy: 106 },
+function KeptVenn({ intersection, totals }: { intersection: Model["intersection"]; totals: { watch: number; liked: number; favorite: number } }) {
+  const circles: Array<{ cx: number; cy: number; stroke: string; icon: Icon; label: string; count: number; ix: number; iy: number }> = [
+    { cx: 105, cy: 55, stroke: "#7FB0B4", icon: Eye, label: "观看", count: totals.watch, ix: 97, iy: 30 },
+    { cx: 76, cy: 102, stroke: "#C9A05B", icon: Heart, label: "点赞", count: totals.liked, ix: 42, iy: 106 },
+    { cx: 134, cy: 102, stroke: "#A8894F", icon: Star, label: "收藏", count: totals.favorite, ix: 138, iy: 106 },
   ];
   const scale = 1.3;
   return (
@@ -1481,12 +1512,16 @@ function KeptVenn() {
         ))}
         <Circle cx={105} cy={88} fill="#E7C687" opacity={0.85} r={2} />
       </Svg>
-      {circles.map(({ icon: VennIcon, ix, iy, label, stroke }) => (
+      {circles.map(({ count, icon: VennIcon, ix, iy, label, stroke }) => (
         <View key={label} pointerEvents="none" style={[styles.ceVennTag, { left: ix * scale, top: iy * scale }]}>
           <VennIcon color={stroke} size={14} strokeWidth={1.5} />
           <Text style={styles.ceVennLabel}>{label}</Text>
+          <Text style={styles.ceVennCount}>{count || "—"}</Text>
         </View>
       ))}
+      <View pointerEvents="none" style={[styles.ceVennCenter, { left: 105 * scale - 13, top: 88 * scale - 10 }]}>
+        <Text style={styles.ceVennCount}>{intersection.allThree || "—"}</Text>
+      </View>
     </View>
   );
 }
@@ -1507,7 +1542,7 @@ function CreatorsPage({ mobile, model, privacy }: PageArgs) {
   const focus = model.creatorFocus;
   return (
     <View style={[styles.lpPage, mobile && styles.stack]}>
-      <ChapterRail desc="你关注的创作者构成，勾勒出一个广度与深度并存的宇宙。" en="CREATOR UNIVERSE" mobile={mobile} no="08" title="创作者宇宙" />
+      <ChapterRail desc="你关注的创作者构成，勾勒出一个广度与深度并存的宇宙。" en="CREATOR UNIVERSE" mobile={mobile} no="08" title="创作者宇宙" yearValue={model.year} />
       <View style={styles.flex}>
         <View style={[styles.cuBody, mobile && styles.stack]}>
           <View style={styles.cuMap}>
@@ -1660,10 +1695,10 @@ function TailChart({ tail }: { tail: number[] }) {
 /* ---------- 09 聊天回声 / CHAT ECHO ---------- */
 
 function ChatPage({ mobile, model }: PageArgs) {
-  const slotIcons: Record<string, Icon> = { text: MessageCircle, image: ImageIcon, sticker: Sticker, share: Send, call: Phone };
+  const slotIcons: Record<string, Icon> = { text: MessageCircle, image: ImageIcon, sticker: Sticker, share: Send, call: Phone, voice: Radio, video: Play, system: Info, unknown: MessageCircle };
   return (
     <View style={styles.lpPageCol}>
-      <PageHeader en="CHAT ECHO" no="09" title="聊天回声" />
+      <PageHeader en="CHAT ECHO" no="09" title="聊天回声" yearValue={model.year} />
       <View style={styles.chBody}>
         <View>
           <BlockTitle cn="对话活动波形" en="ACTIVITY OVER TIME" />
@@ -1810,7 +1845,7 @@ function CrossPage({ mobile, model }: PageArgs) {
   const { days, labels, matrix, patterns } = model.cross;
   return (
     <View style={styles.lpPageCol}>
-      <PageHeader en="CROSS PATTERNS" no="10" title="交叉洞察" />
+      <PageHeader en="CROSS PATTERNS" no="10" title="交叉洞察" yearValue={model.year} />
       <View style={styles.chBody}>
         <BlockTitle cn="证据到模式" en="EVIDENCE → PATTERN" />
         <View style={[styles.cxRow, mobile && styles.stack]}>
@@ -1885,29 +1920,31 @@ function CrossPage({ mobile, model }: PageArgs) {
 
 /* ---------- 11 意外发现 / SURPRISES ---------- */
 
-function SurprisesPage({ mobile }: PageArgs) {
-  const cards = [
-    { no: "01", title: "看得多 ≠ 留得久", text: "浏览广度高时，单次停留时长未必更长，注意力更分散。", art: <ArtWaves /> },
-    { no: "02", title: "收藏少但回访深", text: "收藏行为偏低，却在少数内容上形成强回访与反复探索。", art: <ArtOrbit /> },
-    { no: "03", title: "夜间更容易探索", text: "夜间时段，探索广度与内容深度同时提升，尝试更多新内容。", art: <ArtNight /> },
-  ];
+function SurprisesPage({ mobile, model }: PageArgs) {
+  const cards = model.surprises.map((insight, index) => ({
+    no: String(index + 1).padStart(2, "0"),
+    title: insight.title,
+    text: insight.text,
+    status: insight.status,
+    art: [<ArtWaves key="waves" />, <ArtOrbit key="orbit" />, <ArtNight key="night" />][index],
+  }));
   return (
     <View style={styles.lpPageCol}>
-      <PageHeader en="SURPRISES" no="11" title="意外发现" />
+      <PageHeader en="SURPRISES" no="11" title="意外发现" yearValue={model.year} />
       <View style={styles.chBody}>
         <BlockTitle cn="观察到的有趣对比" en="OBSERVED CONTRASTS" />
         <View style={[styles.spRow, mobile && styles.stack]}>
           {cards.map((card) => (
             <View key={card.no} style={styles.spCard}>
               <View style={styles.spBadge}><Text style={styles.spBadgeText}>{card.no}</Text></View>
-              <Text style={styles.spTitle}>{card.title}</Text>
+              <Text accessibilityLabel={card.status === "pending" ? "待观测" : undefined} numberOfLines={2} style={styles.spTitle}>{card.title}</Text>
               <View style={styles.spArt}>{card.art}</View>
               <View style={styles.spObsRow}>
                 <View style={styles.spObsRule} />
                 <Text style={styles.spObsLabel}>观察</Text>
                 <View style={styles.spObsRule} />
               </View>
-              <Text style={styles.spText}>{card.text}</Text>
+              <Text numberOfLines={4} style={styles.spText}>{card.text}</Text>
               <Text style={styles.spCardSpark}>✦</Text>
             </View>
           ))}
@@ -1980,7 +2017,7 @@ function ProfilePage({ mobile, model, onRestart }: PageArgs) {
   const confEn: Record<string, string> = { 高: "High", 中高: "Solid", 中: "Moderate", 低: "Low", 待定: "Pending" };
   return (
     <View style={styles.lpPageCol}>
-      <PageHeader en="HABIT PROFILE" no="12" title="习惯印章" />
+      <PageHeader en="HABIT PROFILE" no="12" title="习惯印章" yearValue={model.year} />
       <View style={[styles.hpBody, mobile && styles.stack]}>
         <View style={[styles.hpEmblemCol, !mobile && styles.lpBorderRight]}>
           <EmblemBadge en={profileEn[model.profile] ?? "Observed Profile"} profile={model.profile} />
@@ -2132,6 +2169,10 @@ export function buildReportModel(
   for (const message of friendChats) if (validDate(message.sentAt)) { const hour = new Date(message.sentAt!).getHours(); chatHours[hour] = (chatHours[hour] ?? 0) + 1; }
 
   const annual = isAnnual(report) ? report : null;
+  const modelYear = annual?.year
+    ?? report?.coverage.year
+    ?? inferYear(reliable.map(({ record }) => record.occurredAt))
+    ?? new Date().getFullYear();
   const overview = annual?.overview.data as AnnualOverviewData | undefined;
   const rhythm = annual?.rhythm.data as AnnualRhythmData | undefined;
   const monthly = annual?.monthly.data as AnnualMonthlyData | undefined;
@@ -2180,16 +2221,10 @@ export function buildReportModel(
     { label: "超长", en: "> 30 min", test: (value: number) => value >= 1800 },
   ].map(({ en, label, test }) => ({ label, en, share: durationsAll.length ? durationsAll.filter(test).length / durationsAll.length : null }));
 
-  const chatSlots = [
-    { id: "text", label: "文字", en: "Text" },
-    { id: "image", label: "图片", en: "Image" },
-    { id: "sticker", label: "表情", en: "Sticker" },
-    { id: "share", label: "分享", en: "Share" },
-    { id: "call", label: "通话", en: "Call" },
-  ].map((def) => ({ ...def, slots: Array.from({ length: 12 }, () => 0) }));
+  const chatSlots = chatDisplayTypes.map((def) => ({ id: def.id, label: def.label, en: def.label === "文字" ? "Text" : def.label === "图片" ? "Image" : def.label === "表情" ? "Sticker" : def.label === "分享" ? "Share" : "Call", slots: Array.from({ length: 12 }, () => 0) }));
   for (const message of friendChats) {
     if (!validDate(message.sentAt)) continue;
-    const slotRow = chatSlots.find((slot) => slot.id === message.type);
+    const slotRow = chatSlots.find((slot) => slot.id === chatDisplayType(message.type));
     if (!slotRow) continue;
     const slot = Math.floor(new Date(message.sentAt!).getHours() / 2);
     slotRow.slots[slot] = (slotRow.slots[slot] ?? 0) + 1;
@@ -2273,11 +2308,11 @@ export function buildReportModel(
   };
 
   const events = [
-    ...records.watch_history.map((record) => ({ kind: "watch" as const, label: "短视频观看", at: record.occurredAt })),
-    ...[...records.liked_videos, ...records.favorite_videos].map((record) => ({ kind: "kept" as const, label: "收藏与点赞", at: record.occurredAt })),
-    ...friendChats.map((message) => ({ kind: "chat" as const, label: "聊天互动", at: message.sentAt })),
+    ...records.watch_history.map((record) => ({ kind: "watch" as const, label: "短视频观看", at: record.occurredAt, url: record.url })),
+    ...[...records.liked_videos, ...records.favorite_videos].map((record) => ({ kind: "kept" as const, label: "收藏与点赞", at: record.occurredAt, url: record.url })),
+    ...friendChats.map((message) => ({ kind: "chat" as const, label: "聊天互动", at: message.sentAt, url: message.share?.url ?? null })),
   ].filter((event) => validDate(event.at)).sort((a, b) => time(b.at) - time(a.at)).slice(0, 8)
-    .map(({ at, kind, label }) => ({ kind, label, time: new Date(at!).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }) }));
+    .map(({ at, kind, label, url }) => ({ kind, label, url, time: new Date(at!).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }) }));
 
   const calendar = dayCounts.map((days) => {
     const cells = Array.from({ length: 14 }, (_, cell) => {
@@ -2298,8 +2333,34 @@ export function buildReportModel(
     const title = sum > monthAvg * 3 * 1.15 ? `${name}内容探索增强` : sum < monthAvg * 3 * 0.85 ? `${name}节奏放缓` : `${name}节奏平稳`;
     return { title, sub: ["pattern found", "observed"] };
   });
+  const reliableTimes = reliable.map(({ record }) => time(record.occurredAt));
+  const firstTime = reliableTimes.length ? Math.min(...reliableTimes) : null;
+  const lastTime = reliableTimes.length ? Math.max(...reliableTimes) : null;
+  const peakMonthValue = maxIndex(months);
+  const peakHourValue = maxIndex(hours);
+  const milestones: Model["milestones"] = [
+    firstTime === null
+      ? { title: "观察启动待定位", sub: "awaiting" }
+      : { title: `${new Date(firstTime).getMonth() + 1}月观察启动`, sub: "observed" },
+    peakMonthValue === null
+      ? { title: "内容强度待观测", sub: "awaiting" }
+      : { title: `${peakMonthValue + 1}月内容强度最高`, sub: "pattern found" },
+    chatTotal > 0
+      ? { title: `聊天互动 ${chatTotal.toLocaleString("en-US")} 条`, sub: "observed" }
+      : { title: "互动频次待观测", sub: "awaiting" },
+    topics.length
+      ? { title: `探索 ${topics.length} 个主题`, sub: "pattern found" }
+      : { title: "探索多样性待观测", sub: "awaiting" },
+    creators.length
+      ? { title: `关注 ${creators.length} 位创作者`, sub: "observed" }
+      : { title: "创作者关注待观测", sub: "awaiting" },
+    lastTime === null
+      ? { title: "回顾时间待补充", sub: "awaiting" }
+      : { title: `${new Date(lastTime).getFullYear()}年${new Date(lastTime).getMonth() + 1}月回顾`, sub: peakHourValue === null ? "pattern reviewed" : `${timePhrase(peakHourValue)} peak` },
+  ];
 
   return {
+    year: modelYear,
     period: annual?.periodLabel ?? (report && "currentWindow" in report ? report.currentWindow.label : "当前样本"),
     total: rows.length,
     unique: overview?.counts.total ?? unique,
@@ -2346,11 +2407,13 @@ export function buildReportModel(
     events,
     calendar,
     seasons,
+    milestones,
     progressPercents: progress,
     durationBands,
     chatSlots,
     cross: { labels: crossLabels, matrix: crossMatrix, patterns: crossPatterns, days: dayRows.length },
     creatorFocus,
+    surprises: deriveSurpriseInsights(records, chats, { chatConversations }),
   };
 }
 
@@ -2400,6 +2463,17 @@ function evidenceRow(total: number, dates: Array<string | null | undefined>, rel
 function isAnnual(report: AnnualReport | LivingReport | null): report is AnnualReport { return Boolean(report && "cards" in report); }
 function initialPage(view: WorkspaceViewKey): number { return view === "chat" ? 8 : view === "highlights" ? 10 : view === "summary" ? 0 : 2; }
 function year(): number { return new Date().getFullYear(); }
+function displayYear(value: number | null | undefined): number { return value ?? year(); }
+function inferYear(values: Array<string | null | undefined>): number | null {
+  const years: number[] = [];
+  for (const value of values) {
+    if (!value) continue;
+    const date = new Date(value);
+    const parsedYear = date.getFullYear();
+    if (Number.isFinite(date.getTime()) && parsedYear >= 1970 && parsedYear <= 2200) years.push(parsedYear);
+  }
+  return years.length ? years.sort((a, b) => b - a)[0]! : null;
+}
 function attentionLabel(seconds: number): string { if (seconds >= 3600) return `${Math.round(seconds / 3600)}h`; if (seconds > 0) return `${Math.max(1, Math.round(seconds / 60))}m`; return "—"; }
 function isoDay(date: Date): string { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
 function validDate(value: string | null): boolean { return Boolean(value && Number.isFinite(new Date(value).getTime())); }
@@ -2424,18 +2498,12 @@ function profileName(exploration: number | null, completion: number | null): str
 const serif = Platform.OS === "web" ? "Georgia, 'Songti SC', 'STSong', 'SimSun', serif" : undefined;
 
 const styles = StyleSheet.create({
-  referenceRoot: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#0A0A0B" },
   sealIntroBackdrop: { backgroundColor: "#0A0A0B" },
   sealIntroGlow: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, shadowColor: "#C9A45F", shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.55, shadowRadius: 46 },
   sealIntroHint: { position: "absolute", left: 0, right: 0, textAlign: "center", color: "#B9AE9C", fontSize: 12, letterSpacing: 4, fontFamily: "Songti SC, Noto Serif SC, Georgia, serif" },
-  referenceCanvas: { width: 768, height: 512, position: "relative", overflow: Platform.OS === "web" ? ("clip" as never) : "hidden", backgroundColor: "#0A0A0B" },
-  referenceSheet: { position: "absolute", width: 1536, height: 1024 },
-  referenceOpenHotspot: { position: "absolute", left: 340, top: 368, width: 178, height: 48, backgroundColor: "transparent" },
-  referenceAdvanceHotspot: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "transparent" },
-  referenceSaveHotspot: { position: "absolute", left: 446, top: 408, width: 138, height: 70, backgroundColor: "transparent" },
-  referenceRestartHotspot: { position: "absolute", left: 588, top: 408, width: 142, height: 70, backgroundColor: "transparent" },
   root: { flex: 1, minHeight: "100%", backgroundColor: "#0A0A0B", paddingHorizontal: 26, paddingTop: 16, paddingBottom: 24 },
   flex: { flex: 1, minWidth: 0 },
+  webFitViewport: { flex: 1, minWidth: 0, overflow: "hidden" },
   stack: { flexDirection: "column" },
   lateScroll: { flexGrow: 1 },
 
@@ -2454,8 +2522,11 @@ const styles = StyleSheet.create({
   stripWord: { color: "#5E594E", fontSize: 9, letterSpacing: 0.6 },
   stageScroll: { flexGrow: 1, padding: 28 },
   nav: { position: "absolute", right: 34, bottom: 32, flexDirection: "row", alignItems: "center", gap: 8 },
+  navCompact: { right: 8, bottom: 8, gap: 4 },
   navButton: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#3A3428", backgroundColor: "rgba(10,10,11,0.82)" },
+  navButtonCompact: { width: 24, height: 24 },
   navCount: { color: "#9A8B67", fontSize: 9, letterSpacing: 1.6, paddingHorizontal: 4 },
+  navCountCompact: { fontSize: 8, letterSpacing: 1.1, paddingHorizontal: 2 },
 
   /* 01 入口 */
   openRoot: { flex: 1 },
@@ -2723,6 +2794,8 @@ const styles = StyleSheet.create({
   ceVennWrap: { height: 214, alignItems: "center", justifyContent: "flex-start", alignSelf: "center", width: 273 },
   ceVennTag: { position: "absolute", alignItems: "center" },
   ceVennLabel: { color: "#CFC5B0", fontSize: 9, marginTop: 3 },
+  ceVennCount: { color: "#E7C687", fontSize: 8, fontVariant: ["tabular-nums"] },
+  ceVennCenter: { position: "absolute", alignItems: "center", justifyContent: "center", width: 26, height: 20 },
 
   /* 08 创作者宇宙 */
   cuBody: { flex: 1, flexDirection: "row" },

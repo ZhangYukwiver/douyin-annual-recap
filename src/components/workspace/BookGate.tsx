@@ -187,7 +187,7 @@ export function BookGate({ onDone, covers = [], privacy = false }: BookGateProps
   const timerRef = useRef(0);
   const flipFrameRef = useRef(0);
   const [opening, setOpening] = useState(false);
-  const [readyCovers, setReadyCovers] = useState<string[]>([]);
+  const [readyCovers, setReadyCovers] = useState<Array<string | undefined>>([]);
   const coverUri = (require("./assets/book-cover.png") as { uri: string }).uri;
   const sheetUri = (require("./assets/reference/pages-01-04.png") as { uri: string }).uri;
 
@@ -199,7 +199,7 @@ export function BookGate({ onDone, covers = [], privacy = false }: BookGateProps
     let active = true;
     const loaded = new Set<string>();
     const update = () => {
-      if (active) setReadyCovers(requested.filter((uri) => loaded.has(uri)));
+      if (active) setReadyCovers(requested.map((uri) => loaded.has(uri) ? uri : undefined));
     };
     setReadyCovers([]);
     const images = requested.map((uri) => {
@@ -377,7 +377,7 @@ export function BookGate({ onDone, covers = [], privacy = false }: BookGateProps
             </div>
             {LEAVES.map((leaf, index) => (
               <div className="gate-bleaf" data-testid={`book-page-${index + 1}`} key={index} style={{ transform: `translateZ(${leaf.z}px)` }}>
-                <Segs k={0} coverUri={readyCovers[index]} />
+                <Segs k={0} coverUri={privacy ? undefined : readyCovers[index]} />
               </div>
             ))}
             <div className="gate-leaf gate-cover">
