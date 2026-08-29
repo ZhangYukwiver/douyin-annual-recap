@@ -58,13 +58,18 @@ function coverSliceStyle(k: number, uri: string) {
     backgroundPosition: position,
     backgroundRepeat: "no-repeat",
     backgroundSize: `${SEGS * 100}% 100%`,
+    bottom: "1.8%",
     clipPath,
+    left: k === 0 ? "6px" : 0,
+    right: k === SEGS - 1 ? "6px" : 0,
+    top: "1.8%",
     WebkitClipPath: clipPath,
   };
 }
 
 function Segs({ k, coverUri }: { k: number; coverUri?: string }) {
   if (k >= SEGS) return null;
+  // 书页是整张直边纸；撕纸裁剪只属于底下的封面层。
   return (
     <div
       className="gate-seg"
@@ -74,9 +79,10 @@ function Segs({ k, coverUri }: { k: number; coverUri?: string }) {
         borderRadius: k === SEGS - 1 ? "0 6px 6px 0" : 0,
       }}
     >
+      <div aria-hidden className="gate-seg-sheet" />
       {coverUri ? <div aria-hidden className="gate-seg-cover" style={coverSliceStyle(k, coverUri)} /> : null}
-      <div aria-hidden className="gate-seg-paper" style={{ background: segPaperTone(k), opacity: pageVeilOpacity(k), clipPath: segmentEdgeClip(k), WebkitClipPath: segmentEdgeClip(k) }} />
-      <div aria-hidden className="gate-seg-edge" style={{ clipPath: segmentEdgeClip(k), WebkitClipPath: segmentEdgeClip(k) }} />
+      <div aria-hidden className="gate-seg-paper" style={{ background: segPaperTone(k), opacity: pageVeilOpacity(k) }} />
+      <div aria-hidden className="gate-seg-edge" />
       <Segs k={k + 1} coverUri={coverUri} />
     </div>
   );
@@ -426,15 +432,18 @@ const css = `
 .gate-leaf { position: absolute; inset: 0; transform-origin: left center; transform-style: preserve-3d; border-radius: 4px 6px 6px 4px; }
 .gate-bleaf { position: absolute; inset: 0; transform-style: preserve-3d; pointer-events: none; }
 .gate-seg { position: absolute; top: 0; height: 100%; transform-origin: left center; transform-style: preserve-3d; backface-visibility: visible; }
-.gate-seg-cover, .gate-seg-paper { position: absolute; inset: 0; pointer-events: none; }
-.gate-seg-cover { z-index: 0; background-color: #E8E0CB; }
-.gate-seg-paper { z-index: 1; }
-.gate-seg-edge { position: absolute; inset: 0; z-index: 1.5; pointer-events: none; background:
+.gate-seg-sheet, .gate-seg-cover, .gate-seg-paper { position: absolute; inset: 0; pointer-events: none; }
+.gate-seg-sheet { z-index: 0; background:
+  repeating-linear-gradient(0deg, rgba(255,250,235,.7) 0 1px, rgba(138,113,76,.22) 1px 2px, rgba(232,222,199,.86) 2px 4px),
+  linear-gradient(105deg, #F1E9D6, #DDD1B7 55%, #F0E5CF); }
+.gate-seg-cover { z-index: 1; background-color: #E8E0CB; }
+.gate-seg-paper { z-index: 2; }
+.gate-seg-edge { position: absolute; inset: 0; z-index: 3; pointer-events: none; background:
   linear-gradient(180deg, rgba(82,63,39,.24), rgba(82,63,39,0) 7%, rgba(82,63,39,0) 93%, rgba(82,63,39,.3)),
   linear-gradient(90deg, rgba(82,63,39,.18), rgba(82,63,39,0) 9%, rgba(82,63,39,0) 91%, rgba(82,63,39,.28)),
   repeating-linear-gradient(0deg, rgba(255,249,229,.16) 0 1px, transparent 1px 4px);
   mix-blend-mode: multiply; opacity: .7; }
-.gate-seg > .gate-seg { z-index: 2; }
+.gate-seg > .gate-seg { z-index: 4; }
 .gate-face { position: absolute; inset: 0; backface-visibility: hidden; border-radius: 4px 6px 6px 4px; overflow: hidden; transform: translateZ(.2px); }
 .gate-face.gate-back { transform: rotateY(180deg) translateZ(.2px); border-radius: 6px 4px 4px 6px; }
 .gate-paper { background:
