@@ -177,6 +177,35 @@ function chatDisplayType(type: ChatMessageType): ChatMessageType | null {
   }
 }
 const pointer = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
+const motionData = (motion: "frame" | "sparkle-group" | "twinkle", index = 0) => ({
+  dataSet: { loopMotion: motion, loopIndex: String(index % 6) },
+} as unknown as { dataSet: Record<string, string> });
+const LOOP_MOTION_CSS = `
+@keyframes contentFrameGlow {
+  0%, 100% { box-shadow: inset 0 0 0 0 rgba(201,161,91,0), 0 0 0 rgba(112,195,191,0); }
+  50% { box-shadow: inset 0 0 0 1px rgba(201,161,91,.16), 0 0 18px rgba(112,195,191,.055); }
+}
+@keyframes contentSparkleGroup {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .72; transform: scale(1.015); }
+}
+@keyframes contentTwinkle {
+  0%, 100% { filter: brightness(1); transform: scale(1); }
+  45% { filter: brightness(1.42); transform: scale(1.14); }
+  65% { filter: brightness(1.04); transform: scale(.96); }
+}
+[data-loop-motion="frame"] { animation: contentFrameGlow 8s ease-in-out infinite; }
+[data-loop-motion="sparkle-group"] { animation: contentSparkleGroup 5.6s ease-in-out infinite; transform-origin: center; will-change: opacity, transform; }
+[data-loop-motion="twinkle"] { animation: contentTwinkle 4.8s ease-in-out infinite; transform-origin: center; will-change: filter, transform; }
+[data-loop-motion="twinkle"][data-loop-index="1"] { animation-delay: 0.7s; }
+[data-loop-motion="twinkle"][data-loop-index="2"] { animation-delay: 1.4s; }
+[data-loop-motion="twinkle"][data-loop-index="3"] { animation-delay: 2.1s; }
+[data-loop-motion="twinkle"][data-loop-index="4"] { animation-delay: 2.8s; }
+[data-loop-motion="twinkle"][data-loop-index="5"] { animation-delay: 3.5s; }
+@media (prefers-reduced-motion: reduce) {
+  [data-loop-motion] { animation: none !important; filter: none !important; transform: none !important; box-shadow: none !important; }
+}
+`;
 
 interface Ranked { name: string; count: number; share: number }
 interface EvidenceRow {
@@ -261,6 +290,17 @@ export function ContentWorkspace(props: ContentWorkspaceProps) {
     if (props.activeView === "highlights") setPage(10);
   }, [props.activeView]);
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return undefined;
+    const styleId = "content-workspace-loop-motion";
+    if (document.getElementById(styleId)) return undefined;
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.textContent = LOOP_MOTION_CSS;
+    document.head.appendChild(style);
+    return () => style.remove();
+  }, []);
+
   const select = (next: number) => setPage(Math.max(0, Math.min(pages.length - 1, next)));
   const restart = () => select(0);
 
@@ -316,7 +356,7 @@ export function ContentWorkspace(props: ContentWorkspaceProps) {
           <Text style={styles.stageEn}>/ {def.en}</Text>
         </View>
       )}
-      <View style={styles.frame}>
+      <View {...motionData("frame")} style={styles.frame}>
         {late ? (
           <ScrollView contentContainerStyle={styles.lateScroll} showsVerticalScrollIndicator={false} style={styles.flex}>
             {fittedPage}
@@ -570,7 +610,7 @@ function OpenPage({ model, onNext }: PageArgs) {
     <View style={styles.openRoot}>
       <StarField />
       <View style={styles.openCenter}>
-        <Text style={styles.openSpark}>✦</Text>
+        <Text {...motionData("twinkle")} style={styles.openSpark}>✦</Text>
         <Text style={styles.openTitle}>个人内容宇宙报告</Text>
         <Text style={styles.openYear}>{model.year}</Text>
         <View style={styles.openSealRow}>
@@ -608,9 +648,11 @@ function StarField() {
       {stars.map((star, index) => (
         <View key={index} style={{ position: "absolute", left: `${star.left}%`, top: `${star.top}%`, width: star.size, height: star.size, borderRadius: star.size, backgroundColor: star.gold ? "#C5A161" : "#D8D2C4", opacity: star.opacity }} />
       ))}
-      {sparkles.map(([left, top, size, opacity], index) => (
-        <Text key={`s${index}`} style={{ position: "absolute", left: `${left}%`, top: `${top}%`, color: "#C5A161", fontSize: size, opacity }}>✦</Text>
-      ))}
+      <View {...motionData("sparkle-group")} pointerEvents="none" style={StyleSheet.absoluteFill}>
+        {sparkles.map(([left, top, size, opacity], index) => (
+          <Text key={`s${index}`} style={{ position: "absolute", left: `${left}%`, top: `${top}%`, color: "#C5A161", fontSize: size, opacity }}>✦</Text>
+        ))}
+      </View>
     </View>
   );
 }
@@ -637,7 +679,7 @@ function ObservationSeal({ yearValue = year() }: { yearValue?: number }) {
         <Circle cx={58} cy={124} fill="#C5A161" opacity={0.5} r={1.1} />
         <Circle cx={143} cy={128} fill="#C5A161" opacity={0.7} r={1.4} />
       </Svg>
-      <View style={styles.sealIcon}><Telescope color="#CBA05F" size={54} strokeWidth={1.1} /></View>
+      <View {...motionData("twinkle", 1)} style={styles.sealIcon}><Telescope color="#CBA05F" size={54} strokeWidth={1.1} /></View>
     </View>
   );
 }
@@ -841,7 +883,7 @@ function AttentionTriangle({ model }: { model: Model }) {
           const NodeIcon = node.icon;
           return <View key={index} pointerEvents="none" style={{ position: "absolute", left: node.x * size.w - 8, top: node.y * size.h - 8 }}><NodeIcon color="#D9C089" size={16} strokeWidth={1.5} /></View>;
         }) : null}
-        {size.w > 0 ? <Text style={[styles.triSpark, { left: 0.52 * size.w - 6, top: 0.55 * size.h - 8 }]}>✦</Text> : null}
+        {size.w > 0 ? <Text {...motionData("twinkle", 2)} style={[styles.triSpark, { left: 0.52 * size.w - 6, top: 0.55 * size.h - 8 }]}>✦</Text> : null}
         {size.w > 0 ? (
           <>
             <View style={[styles.triLabel, { left: 0.52 * size.w + 26, top: 0.16 * size.h - 14 }]}><Text style={styles.triName}>观看</Text><Text style={styles.triValue}>{share(model.watch)}</Text></View>
@@ -861,11 +903,11 @@ function TimelinePage({ mobile, model }: PageArgs) {
     <View style={styles.tlRoot}>
       <View style={styles.tlTitleRow}>
         <View style={styles.tlRule} />
-        <Text style={styles.tlStar}>✦</Text>
+        <Text {...motionData("twinkle", 3)} style={styles.tlStar}>✦</Text>
         <View style={styles.tlRuleShort} />
         <Text style={styles.tlYear}>{model.year}</Text>
         <View style={styles.tlRuleShort} />
-        <Text style={styles.tlStar}>✦</Text>
+        <Text {...motionData("twinkle", 4)} style={styles.tlStar}>✦</Text>
         <View style={styles.tlRule} />
       </View>
       <View style={[styles.tlBand, styles.tlBandChart]}>
@@ -892,7 +934,7 @@ function TimelinePage({ mobile, model }: PageArgs) {
         <View style={[styles.tlPatterns, mobile && styles.stack]}>
           {model.seasons.map((season) => (
             <View key={season.title} style={styles.tlPattern}>
-              <Text style={styles.tlPatternStar}>✦</Text>
+              <Text {...motionData("twinkle", 5)} style={styles.tlPatternStar}>✦</Text>
               <Text style={styles.tlPatternTitle}>{season.title}</Text>
               {season.sub.map((line) => <Text key={line} style={styles.tlPatternSub}>{line}</Text>)}
             </View>
@@ -1002,7 +1044,7 @@ function ChapterRail({ desc, en, mobile, no, title, yearValue }: { desc: string;
       <View>
         <Text style={styles.lpRailNo}>{no}</Text>
         <Text style={styles.lpRailYear}>{displayYear(yearValue)}</Text>
-        <Text style={styles.lpRailSpark}>✦</Text>
+        <Text {...motionData("twinkle", 0)} style={styles.lpRailSpark}>✦</Text>
         <Text style={styles.lpRailTitle}>{title}</Text>
         <Text style={styles.lpRailEn}>{en}</Text>
         <View style={styles.lpRailDash} />
@@ -1020,7 +1062,7 @@ function ChapterRail({ desc, en, mobile, no, title, yearValue }: { desc: string;
 function PatternFooter({ dots, text }: { dots: number; text: string }) {
   return (
     <View style={styles.lpFooter}>
-      <Text style={styles.lpFooterStar}>✦</Text>
+      <Text {...motionData("twinkle", 1)} style={styles.lpFooterStar}>✦</Text>
       <View style={styles.flex}>
         <Text style={styles.lpFooterLabel}>PATTERN</Text>
         <Text style={styles.lpFooterText}>{text}</Text>
@@ -1578,7 +1620,7 @@ function CreatorsPage({ mobile, model, privacy }: PageArgs) {
               <Text style={styles.lpBlockCn}>发现 vs 重复访问</Text>
               <DiscoveryGauge discovery={focus.discovery} />
               <View style={styles.cuLegendRow}>
-                <Text style={styles.cuLegendSpark}>✦</Text>
+                <Text {...motionData("twinkle", 2)} style={styles.cuLegendSpark}>✦</Text>
                 <Text style={styles.lpMuted}>发现</Text>
                 <View style={styles.cuLegendDot} />
                 <Text style={styles.lpMuted}>重复访问</Text>
@@ -1781,7 +1823,7 @@ function ChatPage({ mobile, model }: PageArgs) {
             <Text style={styles.chPrivacyEn}>{privacyEn}</Text>
           </View>
           <View style={styles.chPrivacyRule} />
-          <CompassRose color="#6B5F49" size={22} />
+          <View {...motionData("twinkle", 0)}><CompassRose color="#6B5F49" size={22} /></View>
         </View>
       </View>
     </View>
@@ -1898,7 +1940,7 @@ function CrossPage({ mobile, model }: PageArgs) {
             <BlockTitle cn="模式观察" en="PATTERN FOUND" />
             {patterns.map((pattern, index) => (
               <View key={index} style={styles.cxCard}>
-                <View style={styles.cxCardRose}><CompassRose color="#8A7E66" size={22} /></View>
+                <View {...motionData("twinkle", index)} style={styles.cxCardRose}><CompassRose color="#8A7E66" size={22} /></View>
                 <View style={styles.flex}>
                   <Text style={styles.cxCardTitle}>{pattern.title}</Text>
                   <Text style={styles.cxCardText}>{pattern.text}</Text>
@@ -1920,7 +1962,7 @@ function CrossPage({ mobile, model }: PageArgs) {
             </View>
           </View>
           <View style={[styles.cxFact, styles.cxFactMid]}>
-            <Text style={styles.cxFactSpark}>✦</Text>
+            <Text {...motionData("twinkle", 3)} style={styles.cxFactSpark}>✦</Text>
             <View style={styles.flex}>
               <Text style={styles.cxFactLabel}>置信度 / CONFIDENCE</Text>
               <Text style={styles.cxFactValue}>{days >= 14 ? "中等 / Moderate" : "低 / Low"}</Text>
@@ -1967,14 +2009,14 @@ function SurprisesPage({ mobile, model }: PageArgs) {
                 <View style={styles.spObsRule} />
               </View>
               <Text numberOfLines={4} style={styles.spText}>{card.text}</Text>
-              <Text style={styles.spCardSpark}>✦</Text>
+              <Text {...motionData("twinkle", 4)} style={styles.spCardSpark}>✦</Text>
             </View>
           ))}
           <View style={[styles.spCard, styles.spSealCard]}>
             <WaxSeal />
             <Text style={styles.spSealTitle}>好奇心，是你最稳定的引擎。</Text>
             <Text style={styles.spSealText}>继续探索，世界在回应你。</Text>
-            <Text style={styles.spSealSpark}>✦</Text>
+            <Text {...motionData("twinkle", 5)} style={styles.spSealSpark}>✦</Text>
           </View>
         </View>
         <View style={styles.spFoot}>
@@ -2105,7 +2147,7 @@ function ProfilePage({ mobile, model, onRestart }: PageArgs) {
 
 function EmblemBadge({ en, profile }: { en: string; profile: string }) {
   return (
-    <View style={styles.hpEmblemWrap}>
+    <View {...motionData("twinkle", 2)} style={styles.hpEmblemWrap}>
       <Image resizeMode="contain" source={require("./assets/habit-emblem.png")} style={styles.hpEmblemImg} />
       <Text style={styles.hpEmblemCn}>{profile}</Text>
       <Text style={styles.hpEmblemEn}>{en}</Text>
