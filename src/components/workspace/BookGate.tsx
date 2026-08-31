@@ -1,17 +1,53 @@
 import React, { useEffect, useRef, useState } from "react";
 
 // ponytail: web-only DOM overlay(原生 CSS preserve-3d 翻页, RNW 样式做不了); 非 web 平台由调用方跳过
-// 软纸翻页: 每页切 SEGS 条嵌套铰接竖片, rAF 逐帧驱动; 铰链角全落贴脊第一条 => 终态平贴
+// 软纸翻页: 每页切 SEGS 条嵌套铰接竖片, rAF 逐帧驱动; 终态所有片平贴
 // 尾声: 翻完露出末页上的印章线稿 -> 线稿渐变成真实金印 -> 黑场以印章为心虹膜收拢,
 //       onDone 把印章屏幕矩形交给 SealIntro 从原位起飞落成第一页(旧燃烧转场已移除)
-const SEGS = 12;
-const LEAVES = [
-  { delay: 500, dur: 1450, end: 176.8, z: 1.35 },
-  { delay: 820, dur: 1450, end: 175.4, z: 1.1 },
-  { delay: 1140, dur: 1450, end: 174, z: 0.85 },
-  { delay: 1460, dur: 1450, end: 172.6, z: 0.6 },
-  { delay: 1780, dur: 1450, end: 171.2, z: 0.35 },
-];
+// 8 片足够画出 ≤40° 的拱度(每片 5°); 页数翻到 14 之后, 12 片的元素总量没必要
+const SEGS = 8;
+// 相邻片必须重叠，否则每片各自是一个 preserve-3d 合成层，层边界的抗锯齿会留下 1.5px 的亮缝。
+// 但重叠区里半透明的层（veil / edge）会叠两遍、图会被 backgroundSize 放大 —— 所以这些层各自内缩一个重叠量，
+// 只留不透明的 sheet 铺满去盖缝。
+const SEG_OVERLAP = 1.5;
+// 翻书要像"哗啦一下捻过去"而不是一页一页翻: 单页快(950ms)、间隔密(105ms),
+// 于是任意时刻空中有 ~9 页、彼此差 ~20°, 连成一把扇面。5 页 / 320ms 间隔时页与页
+// 差 40° 以上, 看着是"轮流各翻一页", 不是翻书。
+const LEAF_COUNT = 14;
+export const BOOK_PAGE_COUNT = LEAF_COUNT;
+const LEAVES = Array.from({ length: LEAF_COUNT }, (_, i) => ({
+  delay: 460 + i * 105,
+  dur: 950,
+  end: 177 - i * 0.5,
+  z: 1.4 - i * 0.09,
+}));
+// 纸的弯曲集中在自由缘: 靠书脊几乎不弯, 越往外每片吃到的增量越大。
+// 平均分(旧写法)出来的是一段圆弧, 看着像卷起来的铁皮; 加权后才是纸。
+const BEND_W = (() => {
+  const raw = Array.from({ length: SEGS - 1 }, (_, i) => i + 1);
+  const sum = raw.reduce((a, b) => a + b, 0);
+  return raw.map((v) => v / sum);
+})();
+// 竖片的受光: 这一层是"看起来像纸在转"的全部来源 —— 少了它, 一页转开只是被横向压扁, 读作擦除。
+// 漫反射按面朝视线的程度(|cos|): 正对最亮, 侧到 90° 最暗, 过 90° 露出背面纸又亮回来。
+// 高光是固定在世界里的一盏斜光, 页转过去时它自己从纸的外缘扫向书脊 —— 只有暗部的话,
+// 立起来的页读成一块平的灰卡片, 有这道扫光才看得出纸是弯的。
+const KEY_LIGHT = 34;
+function shadeAt(deg: number): { dark: string; hi: string } {
+  const lit = Math.abs(Math.cos((deg * Math.PI) / 180));
+  // 纸是哑光: 高光要窄要淡, 宽一点整页就发灰发糊(0.42/^14 试过, 未翻的页都被洗白了)
+  const spec = Math.max(0, Math.cos(((deg - KEY_LIGHT) * Math.PI) / 180)) ** 26;
+  return {
+    // 同时有 ~9 页在飞、影子会层层叠加, 单层再按 0.44 给整把扇面就压成灰的了
+    dark: `rgba(22,15,7,${(0.3 * (1 - lit) ** 1.2).toFixed(3)})`,
+    hi: spec < 0.01 ? "" : `rgba(255,249,233,${(0.17 * spec).toFixed(3)})`,
+  };
+}
+// ponytail: 开场动效(翻页 + 印章飞入)暂时藏起来 —— 平板滑动/空白内页/黑屏断层, 见 2026-08-30 录屏。
+// 点封面直接进报告 01。重做好把这里改回 false, 动画代码原样留着。
+export const SKIP_INTRO = true;
+// ponytail: 连书本本身也一起藏了 —— 打开报告直接落 01 章。想找回整套开场把这里改回 false。
+export const SKIP_BOOK = true;
 const MORPH_START = 3350;
 const MORPH_DUR = 900;
 const IRIS_START = 4450;
@@ -21,70 +57,254 @@ const TOTAL_MS = 5250;
 export interface SealStart { cx: number; cy: number; d: number }
 
 const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+// 翻页用近似匀角速: easeInOutQuad 会让每页把大半时间耗在 0° 和 180° 附近,
+// 于是同时在飞的 9 页全挤在两头、中间是空的 —— 扇面散不开。只在收尾留一点缓冲。
+const flipEase = (t: number) => 1 - (1 - t) ** 1.25;
 
-// 纸页遮罩: 只覆盖封面，不改变底下封面的透明度；片间步进不足 1 个色阶
+// 片段本身必须带有纸面，否则没有封面图时 rotateY 只会旋转一组透明 div，
+// 用户看到的就只剩封面移动。各片段的色阶只做很小的渐变，避免接缝变成明显竖纹。
+// 每片一个固定不透明度会在缝上留 12 级阶跃 —— 改成片内横向渐变，边界处两片取同一个值就接上了。
+const veilAlpha = (u: number) => (0.08 - u * 0.05).toFixed(3);
+
 function segPaperTone(k: number): string {
   const mix = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
-  const t = (k + 0.5) / SEGS;
+  const stop = (u: number) => `rgba(${mix(233, 242, u)}, ${mix(226, 235, u)}, ${mix(208, 221, u)}, ${veilAlpha(u)})`;
   return [
-    "linear-gradient(180deg, rgba(96,78,48,.03), rgba(96,78,48,0) 4%, rgba(96,78,48,0) 96%, rgba(96,78,48,.04))",
-    "repeating-linear-gradient(0deg, rgba(118,98,64,.026) 0 1px, rgba(255,255,255,0) 1px 3.6px)",
-    "radial-gradient(150% 90% at 50% 10%, rgba(255,250,236,.05), rgba(255,250,236,0) 60%)",
-    `linear-gradient(0deg, rgba(${mix(233, 242, t)}, ${mix(226, 235, t)}, ${mix(208, 221, t)}, .76), rgba(${mix(233, 242, t)}, ${mix(226, 235, t)}, ${mix(208, 221, t)}, .76))`,
+    "linear-gradient(180deg, rgba(96,78,48,.01), rgba(96,78,48,0) 4%, rgba(96,78,48,0) 96%, rgba(96,78,48,.014))",
+    `linear-gradient(90deg, ${stop(k / SEGS)}, ${stop((k + 1) / SEGS)})`,
   ].join(", ");
 }
 
-function pageVeilOpacity(k: number): number {
-  // 从贴脊侧到页尖侧逐渐变透明，封面层始终保持不透明。
-  return Number((0.8 - ((k + 0.5) / SEGS) * 0.46).toFixed(3));
-}
+// 只给每片的外缘加轻微不规则边；不要把 mask 放到 preserve-3d 的父层上。
+// 噪声按"整页横向位置"取样, 相邻片在交界处落到同一个 u -> 同一个 y, 毛边才连得上;
+// 按片索引取样(旧写法)会让每条缝两侧各取一个无关值, 缝上留台阶, 幅度一大就露馅。
+// 双频: 低频给整页 7 个大起伏, 高频给 23 个细齿, 合起来像手工纸毛边而不是锯齿。
+const EDGE_XS = [0, 12.5, 25, 37.5, 50, 62.5, 75, 87.5, 100];
+const edgeWave = (u: number, phase: number) => Math.sin(u * 44 + phase) * 0.64 + Math.sin(u * 145 + phase * 1.7) * 0.36;
 
-// ponytail: 用确定性多边形近似撕纸边，避免给 preserve-3d 父层加 mask 导致翻页被压平；
-// 若以后需要逐像素艺术化边缘，再换成一张带 alpha 的统一遮罩素材。
-function segmentEdgeClip(k: number): string {
-  const jitter = (n: number, amount: number) => Math.sin((k + 1) * (n + 1) * 1.73) * amount;
-  const top = [0, 24, 52, 78, 100].map((_, i) => 2.1 + jitter(i, 1.15));
-  const bottom = [0, 24, 52, 78, 100].map((_, i) => 97.9 + jitter(i + 5, 1.05));
-  const left = k === 0 ? 1.7 + jitter(11, 0.75) : 0;
-  const right = k === SEGS - 1 ? 98.3 + jitter(12, 0.75) : 100;
-  return `polygon(${left.toFixed(2)}% ${top[0]!.toFixed(2)}%, 24% ${top[1]!.toFixed(2)}%, 52% ${top[2]!.toFixed(2)}%, 78% ${top[3]!.toFixed(2)}%, ${right.toFixed(2)}% ${top[4]!.toFixed(2)}%, ${right.toFixed(2)}% ${bottom[4]!.toFixed(2)}%, 78% ${bottom[3]!.toFixed(2)}%, 52% ${bottom[2]!.toFixed(2)}%, 24% ${bottom[1]!.toFixed(2)}%, ${left.toFixed(2)}% ${bottom[0]!.toFixed(2)}%)`;
+export function segmentEdgeClip(k: number): string {
+  const at = (x: number) => (k + x / 100) / SEGS;
+  const top = EDGE_XS.map((x) => 2.1 + edgeWave(at(x), 0) * 0.55);
+  const bottom = EDGE_XS.map((x) => 97.9 + edgeWave(at(x), 3.4) * 0.5);
+  // 中间片的左右边要伸到片外：正好落在片边缘的话，clip-path 的抗锯齿会留下一条半透明边，
+  // 12 片叠起来就是 11 条亮竖线（底下的纸透出来）。只有首末片才真的需要裁左右。
+  const left = k === 0 ? 1.7 + edgeWave(0.5, 1.1) * 0.8 : -4;
+  const right = k === SEGS - 1 ? 98.3 + edgeWave(0.5, 5.2) * 0.8 : 104;
+  const px = (x: number) => (x === 0 ? left.toFixed(2) : x === 100 ? right.toFixed(2) : x.toFixed(1));
+  const edge = (ys: number[]) => EDGE_XS.map((x, i) => `${px(x)}% ${ys[i]!.toFixed(2)}%`);
+  return `polygon(${[...edge(top), ...edge(bottom).reverse()].join(", ")})`;
 }
 
 function coverSliceStyle(k: number, uri: string) {
-  const position = `${((k / Math.max(1, SEGS - 1)) * 100).toFixed(3)}% 0`;
   const clipPath = segmentEdgeClip(k);
   return {
     backgroundImage: `url(${JSON.stringify(uri)})`,
-    backgroundPosition: position,
+    backgroundPosition: `${((k / Math.max(1, SEGS - 1)) * 100).toFixed(3)}% 0`,
     backgroundRepeat: "no-repeat",
-    backgroundSize: `${SEGS * 100}% 100%`,
+    // 尺寸要按"没有重叠时的片宽"算：直接写 1200% 是相对含重叠的元素宽，图会被撑大 SEGS*OVERLAP，
+    // 片间内容逐格错开就是可见的接缝。position 仍用 k/(SEGS-1)，由此带来的累积偏移全页不到 1.5px。
+    backgroundSize: `calc((100% - ${SEG_OVERLAP + 2}px) * ${SEGS}) 100%`,
     bottom: "1.8%",
     clipPath,
-    left: k === 0 ? "6px" : 0,
-    right: k === SEGS - 1 ? "6px" : 0,
+    // 左右各外扩 1px：元素边界的抗锯齿只要落在片边界上就会露出底下的亮纸，
+    // 挪进邻片的覆盖范围里就看不见了。外扩量一并从 backgroundSize 里扣掉，图才不被撑大。
+    left: k === 0 ? "6px" : "-1px",
+    right: k === SEGS - 1 ? "6px" : "-1px",
     top: "1.8%",
     WebkitClipPath: clipPath,
   };
 }
 
-function Segs({ k, coverUri }: { k: number; coverUri?: string }) {
-  if (k >= SEGS) return null;
-  // 书页是整张直边纸；撕纸裁剪只属于底下的封面层。
+function pageImageStyle(uri: string) {
+  return {
+    backgroundImage: `url(${JSON.stringify(uri)})`,
+    backgroundPosition: "center",
+    backgroundRepeat: "no-repeat",
+    backgroundSize: "cover",
+  };
+}
+
+type BakedCover = { uri: string; baked: boolean };
+
+// 水彩上色的 CSS 近似；烤不出来时降级路径直接用同一串，两条路观感一致。
+const WATERCOLOR_CSS = "blur(0.3px) sepia(.16) saturate(1.02) contrast(1.16)";
+
+function loadCoverImage(src: string, anonymous: boolean): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const el = new window.Image();
+    if (anonymous) el.crossOrigin = "anonymous";
+    el.decoding = "async";
+    el.onload = () => resolve(el);
+    el.onerror = reject;
+    el.src = src;
+  });
+}
+
+// 水彩的色域两头都不到位：最亮处是纸本身（不是纯白），最暗处是厚颜料（不是纯黑）。
+// 把整张图重映射进 [墨, 纸] 之间，白的地方就自然成了纸的留白、黑的地方成了颜料 ——
+// 只抬暗端不够，亮端留在纯白的话背景永远是"照片的白"，纸感出不来。
+const PAPER_LO = [36, 33, 28];
+const PAPER_HI = [236, 228, 206];
+// 抖音封面大多曝光偏暗（夜景、影棚、游戏画面），线性映射抬不动中间调，纸感只在边上有。
+// gamma<1 把中间调整体提起来，接近水彩那种"照着画、不照着曝光"的明度分布。
+const PAPER_GAMMA = 0.72;
+
+function mapToPaperRange(data: Uint8ClampedArray, w: number, h: number): void {
+  // 每像素三次 pow 太贵，256 项查找表足够
+  const lut = PAPER_LO.map((lo, c) => {
+    const table = new Uint8Array(256);
+    for (let v = 0; v < 256; v += 1) table[v] = Math.round(lo + (v / 255) ** PAPER_GAMMA * (PAPER_HI[c]! - lo));
+    return table;
+  });
+  for (let p = 0; p < w * h * 4; p += 4) {
+    data[p] = lut[0]![data[p]!]!;
+    data[p + 1] = lut[1]![data[p + 1]!]!;
+    data[p + 2] = lut[2]![data[p + 2]!]!;
+  }
+}
+
+// 拉普拉斯 3x3 取边缘再 multiply 进水彩层：与原 #gate-ink-filter 同核同阈值，只是挪到烘焙期算一次。
+function inkOnto(data: Uint8ClampedArray, w: number, h: number): void {
+  const lum = new Float32Array(w * h);
+  const tmp = new Float32Array(w * h);
+  for (let i = 0; i < lum.length; i += 1) lum[i] = (data[i * 4]! * 0.299 + data[i * 4 + 1]! * 0.587 + data[i * 4 + 2]! * 0.114) / 255;
+  // 两轮 3x3 均值(≈5x5)再检边：封面里的星点和压缩噪点只有 1-2px，拉普拉斯对孤立亮点的响应是个环，
+  // 不抹掉就满图小圆圈；两轮足够吃掉它们，器物和波浪那种粗边留得住。
+  for (let pass = 0; pass < 2; pass += 1) {
+    tmp.set(lum);
+    for (let y = 1; y < h - 1; y += 1) {
+      for (let x = 1; x < w - 1; x += 1) {
+        const i = y * w + x;
+        lum[i] = (tmp[i - w - 1]! + tmp[i - w]! + tmp[i - w + 1]! + tmp[i - 1]! + tmp[i]! + tmp[i + 1]! + tmp[i + w - 1]! + tmp[i + w]! + tmp[i + w + 1]!) / 9;
+      }
+    }
+  }
+  for (let y = 1; y < h - 1; y += 1) {
+    for (let x = 1; x < w - 1; x += 1) {
+      const i = y * w + x;
+      const e = Math.abs(lum[i]! * 8 - lum[i - 1]! - lum[i + 1]! - lum[i - w]! - lum[i + w]! - lum[i - w - 1]! - lum[i - w + 1]! - lum[i + w - 1]! - lum[i + w + 1]!);
+      const ink = Math.min(1, (e - 0.055) * 4.8);
+      if (ink <= 0) continue;
+      const k = 1 - ink * 0.85;
+      const p = i * 4;
+      data[p] = data[p]! * k;
+      data[p + 1] = data[p + 1]! * k;
+      data[p + 2] = data[p + 2]! * k;
+    }
+  }
+}
+
+// 双线性插值的 value noise：低分辨率随机网格放大，用来把边界揉成不规则形状。
+function valueNoise(cells: number, seed: number): (u: number, v: number) => number {
+  const row = cells + 1;
+  const grid = new Float32Array(row * row);
+  let state = seed;
+  for (let i = 0; i < grid.length; i += 1) { state = (state * 48271) % 2147483647; grid[i] = state / 2147483647; }
+  return (u, v) => {
+    const x = Math.max(0, Math.min(cells - 0.0001, u * cells));
+    const y = Math.max(0, Math.min(cells - 0.0001, v * cells));
+    const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+    const a = grid[y0 * row + x0]!, b = grid[y0 * row + x0 + 1]!;
+    const c = grid[(y0 + 1) * row + x0]!, d = grid[(y0 + 1) * row + x0 + 1]!;
+    return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+  };
+}
+
+// 颜料渗透边：把矩形硬边换成水彩在纸上洇开的不规则软边。
+// 到最近边的距离场被两层 value noise 扰动后 smoothstep 成 alpha；过渡带里再压暗一档，
+// 模拟颜料干燥时往边缘聚集的深色沉积——水彩边缘那圈深色就是这么来的。
+// 关键是这一切烤进图自己的 alpha：不是 CSS mask，所以既不碰 preserve-3d，切片后接缝也天然连续。
+function bleedEdge(data: Uint8ClampedArray, w: number, h: number): void {
+  const coarse = valueNoise(7, 20260830);
+  const fine = valueNoise(23, 7654321);
+  const band = 0.075; // 洇开带宽，占到中心距离的比例；再宽就开始吃主体了
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const u = x / (w - 1), v = y / (h - 1);
+      const edge = Math.min(u, 1 - u, v, 1 - v) * 2; // 0=纸边 1=正中
+      const n = coarse(u, v) * 0.62 + fine(u, v) * 0.38;
+      const t = Math.max(0, Math.min(1, (edge + (n - 0.5) * 0.15) / band));
+      const p = (y * w + x) * 4;
+      data[p + 3] = Math.round(255 * t * t * (3 - 2 * t));
+      if (t > 0.04 && t < 0.6) {
+        const k = 1 - (1 - Math.abs(t - 0.32) / 0.32) * 0.24;
+        data[p] = data[p]! * k;
+        data[p + 1] = data[p + 1]! * k;
+        data[p + 2] = data[p + 2]! * k;
+      }
+    }
+  }
+}
+
+// 把封面预烤成"水彩上色 + 墨线勾边 + 颜料渗透边"的单张图。
+// 为什么烤而不是运行时挂滤镜：12 条翻页片各自跑一次卷积，核在每条缝上被截断，缝就成了可见竖纹；
+// 烤成一张再按 backgroundPosition 切片，接缝天然连续，翻页时也不必同时挂 12 份滤镜。
+// 抖音图床全域回 ACAO:*，crossOrigin 能取到像素；取不到就退回原图 + CSS 近似滤镜。
+async function bakeCover(src: string): Promise<BakedCover | undefined> {
+  let img: HTMLImageElement;
+  try {
+    img = await loadCoverImage(src, true);
+  } catch {
+    try { await loadCoverImage(src, false); } catch { return undefined; }
+    return { uri: src, baked: false };
+  }
+  try {
+    // 900 而非 720：书页在 2x 屏上要 862 物理像素，720 会被放大 1.2 倍、细节糊掉；再往上只是白烧编码时间
+    const w = Math.min(img.naturalWidth || 900, 900);
+    const h = Math.max(1, Math.round((img.naturalHeight / img.naturalWidth) * w) || 1200);
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return { uri: src, baked: false };
+    ctx.filter = WATERCOLOR_CSS;
+    ctx.drawImage(img, 0, 0, w, h);
+    ctx.filter = "none";
+    const frame = ctx.getImageData(0, 0, w, h);
+    mapToPaperRange(frame.data, w, h);
+    inkOnto(frame.data, w, h);
+    bleedEdge(frame.data, w, h);
+    ctx.putImageData(frame, 0, 0);
+    // 渗透边要 alpha，所以不能用 JPEG。编码本身比整条处理还贵（900×1200 的 WebP 实测 ~295ms/张），
+    // 而 toDataURL 是同步的会卡住主线程 —— 换 toBlob，编码走后台线程，主线程只留处理那几十毫秒。
+    // 不支持 WebP 的浏览器（Safari）会自己回退成 PNG；图被污染时 toBlob 抛，落到 catch。
+    const blob = await new Promise<Blob | null>((resolve) => { canvas.toBlob(resolve, "image/webp", 0.92); });
+    if (!blob) return { uri: src, baked: false };
+    return { uri: URL.createObjectURL(blob), baked: true };
+  } catch {
+    return { uri: src, baked: false };
+  }
+}
+
+// 竖片是 12 个平级兄弟, 不是 12 层嵌套。嵌套版每片只写自己相对上一片的增量角,
+// 读起来省事, 但 12 层深的 preserve-3d 链 Chrome 合成不住: 转过 ~90° 的片直接不画,
+// 于是"翻过去的那一页"整张消失, 翻页只剩横向擦除。平级片各自算好绝对位姿, 没有这个问题。
+function Segs({ baked, coverUri }: { baked?: boolean; coverUri?: string }) {
   return (
-    <div
-      className="gate-seg"
-      style={{
-        left: k === 0 ? 0 : "calc(100% - 1.5px)",
-        width: k === 0 ? `calc(${100 / SEGS}% + 1.5px)` : "100%",
-        borderRadius: k === SEGS - 1 ? "0 6px 6px 0" : 0,
-      }}
-    >
-      <div aria-hidden className="gate-seg-sheet" />
-      {coverUri ? <div aria-hidden className="gate-seg-cover" style={coverSliceStyle(k, coverUri)} /> : null}
-      <div aria-hidden className="gate-seg-paper" style={{ background: segPaperTone(k), opacity: pageVeilOpacity(k) }} />
-      <div aria-hidden className="gate-seg-edge" />
-      <Segs k={k + 1} coverUri={coverUri} />
-    </div>
+    <>
+      {Array.from({ length: SEGS }, (_, k) => {
+        const clipPath = segmentEdgeClip(k);
+        const inset = k === SEGS - 1 ? 0 : SEG_OVERLAP;
+        return (
+          <div
+            className="gate-seg"
+            key={k}
+            style={{
+              left: `calc(${k} * 100% / ${SEGS})`,
+              width: `calc(100% / ${SEGS} + ${SEG_OVERLAP}px)`,
+              borderRadius: k === SEGS - 1 ? "0 6px 6px 0" : 0,
+            }}
+          >
+            <div aria-hidden className="gate-seg-sheet" />
+            {coverUri ? <div aria-hidden className="gate-seg-cover" data-baked={baked || undefined} style={coverSliceStyle(k, coverUri)} /> : null}
+            <div aria-hidden className="gate-seg-paper" style={{ background: segPaperTone(k), clipPath, WebkitClipPath: clipPath, right: inset }} />
+            <div aria-hidden className="gate-seg-edge" style={{ clipPath, WebkitClipPath: clipPath, right: inset }} />
+            {/* 和 paper/edge 同理: 半透明层不能盖住 SEG_OVERLAP, 否则每条缝上叠两遍变成暗竖线 */}
+            <div aria-hidden className="gate-seg-shade" style={{ right: inset }} />
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -188,14 +408,16 @@ export function BookGate({ onDone, covers = [], privacy = false }: BookGateProps
   const lineRef = useRef<HTMLDivElement>(null);
   const realRef = useRef<HTMLDivElement>(null);
   const blackoutRef = useRef<HTMLDivElement>(null);
+  const castRef = useRef<HTMLDivElement>(null);
   const openingRef = useRef(false);
   const startAtRef = useRef(0);
   const timerRef = useRef(0);
   const flipFrameRef = useRef(0);
   const [opening, setOpening] = useState(false);
-  const [readyCovers, setReadyCovers] = useState<Array<string | undefined>>([]);
+  const [readyCovers, setReadyCovers] = useState<Array<BakedCover | undefined>>([]);
   const coverUri = (require("./assets/book-cover.png") as { uri: string }).uri;
   const sheetUri = (require("./assets/reference/pages-01-04.png") as { uri: string }).uri;
+  const paperGrainUri = (require("./assets/paper-grain.png") as { uri: string }).uri;
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -203,22 +425,24 @@ export function BookGate({ onDone, covers = [], privacy = false }: BookGateProps
       ? []
       : [...new Set(covers.filter((uri): uri is string => typeof uri === "string" && uri.trim().length > 0))].slice(0, LEAVES.length);
     let active = true;
-    const loaded = new Set<string>();
-    const update = () => {
-      if (active) setReadyCovers(requested.map((uri) => loaded.has(uri) ? uri : undefined));
-    };
+    const done = new Map<string, BakedCover>();
     setReadyCovers([]);
-    const images = requested.map((uri) => {
-      const image = new window.Image();
-      image.decoding = "async";
-      image.onload = () => { loaded.add(uri); update(); };
-      image.onerror = update;
-      image.src = uri;
-      return image;
-    });
+    // 串行 + 每张之间让出一拍：单张烤 ~35ms（首张含 JIT 预热更久），5 张连着跑会把书本入场动画顶掉。
+    // 烤在合书静止期完成，等用户点击时早就就绪，慢一点不影响。
+    void (async () => {
+      for (const uri of requested) {
+        const cover = await bakeCover(uri);
+        if (!active) return;
+        if (cover) {
+          done.set(uri, cover);
+          setReadyCovers(requested.map((key) => done.get(key)));
+        }
+        await new Promise((resolve) => { window.setTimeout(resolve, 0); });
+      }
+    })();
     return () => {
       active = false;
-      images.forEach((image) => { image.onload = null; image.onerror = null; });
+      done.forEach((cover) => { if (cover.uri.startsWith("blob:")) URL.revokeObjectURL(cover.uri); });
     };
   }, [covers, privacy]);
 
@@ -236,7 +460,7 @@ export function BookGate({ onDone, covers = [], privacy = false }: BookGateProps
       return;
     }
     openingRef.current = true;
-    if (typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (SKIP_INTRO || (typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches)) {
       onDone(null);
       return;
     }
@@ -253,26 +477,66 @@ export function BookGate({ onDone, covers = [], privacy = false }: BookGateProps
     // 一条 rAF 驱动全部编排: 软纸翻页 -> 线稿变实印 -> 虹膜压黑(印章圆外收拢)
     const leaves = Array.from(bookRef.current?.querySelectorAll<HTMLElement>(".gate-bleaf") ?? []);
     const segLists = leaves.map((leaf) => Array.from(leaf.querySelectorAll<HTMLElement>(".gate-seg")));
+    const shadeLists = leaves.map((leaf) => Array.from(leaf.querySelectorAll<HTMLElement>(".gate-seg-shade")));
+    const cast = castRef.current;
+    // 片距按整页实宽算一次: 折线要用像素长度接铰点, 用 % 接不上
+    const pitch = (leaves[0]?.querySelector(".gate-segs") as HTMLElement | null)?.clientWidth ?? 0;
+    const pitchPx = pitch / SEGS;
     let irisGeom: { cx: number; cy: number; R: number } | null = null;
     const t0 = startAtRef.current;
     const step = (now: number) => {
       let live = false;
+      let lead = 0;
+      // 相机在翻页期间侧过去一点再回正。正对着看时, 立到 90° 的页面屏幕宽度是 0,
+      // 整个翻页就只能读成"横向擦除"; 侧一点才看得见纸面转过去的那一面。
+      if (scene) {
+        const c = Math.sin(Math.PI * Math.min(1, Math.max(0, (now - t0 - 240) / 3300)));
+        scene.style.setProperty("--tilt-x", `${(-6 * c).toFixed(2)}deg`);
+        scene.style.setProperty("--tilt-y", `${(13 * c).toFixed(2)}deg`);
+      }
       leaves.forEach((leaf, i) => {
         const def = LEAVES[i]!;
         const local = (now - t0 - def.delay) / def.dur;
         if (local <= 0) { live = true; return; }
         const t = Math.min(1, local);
         if (t < 1) live = true;
-        const te = ease(t);
-        // 铰链角全部由贴脊第一条承担 => 终态必定平贴左侧;
-        // 弯曲量: 中段保持拱形, 头尾页尖领先/拖尾, 落地精确归零
+        const te = flipEase(t);
+        // 中段保持拱形, 头尾页尖领先/拖尾, 落地时所有竖片角度一致
         const hinge = def.end * te;
-        const bend = 38 * Math.sin(Math.PI * te) + 30 * Math.sin(2 * Math.PI * te);
-        segLists[i]!.forEach((seg, k) => {
-          const r = k === 0 ? hinge : bend / (SEGS - 1);
-          seg.style.transform = `rotateY(${(-r).toFixed(3)}deg)`;
+        // sin(π) 给整程的基本拱度, sin(2π) 给"抬起时自由缘领先 / 落下时拖尾"的换向
+        const bend = 22 * Math.sin(Math.PI * te) + 18 * Math.sin(2 * Math.PI * te);
+        if (t < 1) lead = Math.max(lead, hinge);
+        // 把这一页当成一条 12 段的折线来摆: 逐段累加角度, 顺着上一段的末端接下一段的铰点。
+        // 每片写的是绝对位姿(自己的世界坐标 + 自己的角度), 所以不依赖父片的变换。
+        const segs = segLists[i]!;
+        const cum: number[] = [];
+        let px = 0, pz = 0;
+        segs.forEach((seg, k) => {
+          const deg = (cum[k - 1] ?? 0) + (k === 0 ? hinge : bend * BEND_W[k - 1]!);
+          cum.push(deg);
+          const rad = (deg * Math.PI) / 180;
+          seg.style.transform = `translate3d(${(px - k * pitchPx).toFixed(2)}px, 0, ${pz.toFixed(2)}px) rotateY(${(-deg).toFixed(3)}deg)`;
+          px += pitchPx * Math.cos(rad);
+          pz += pitchPx * Math.sin(rad);
+        });
+        // 明暗按"累计角"算(片在世界里真正转过的角度), 按单片增量算等于没转。
+        // 每片写成横向渐变、两端取与邻片共用的中点角: 常数色会在 12 条缝上留亮度台阶。
+        shadeLists[i]!.forEach((shade, k) => {
+          const a = k === 0 ? cum[0]! : (cum[k - 1]! + cum[k]!) / 2;
+          const b = k === segs.length - 1 ? cum[k]! : (cum[k]! + cum[k + 1]!) / 2;
+          const sa = shadeAt(a), sb = shadeAt(b);
+          const dark = `linear-gradient(90deg, ${sa.dark}, ${sb.dark})`;
+          // 高光只在一条窄带里非零; 其余片省掉这一层, 每帧少刷一遍 60 个元素的渐变
+          shade.style.background = sa.hi || sb.hi ? `linear-gradient(90deg, ${sa.hi || "transparent"}, ${sb.hi || "transparent"}), ${dark}` : dark;
         });
       });
+
+      // 抬起的纸在下面那叠上投的影: 从书脊往外扫, 页面立起时最重
+      if (cast) {
+        const s = Math.sin((Math.min(lead, 180) * Math.PI) / 180);
+        cast.style.opacity = (s * 0.55).toFixed(3);
+        cast.style.width = `${(6 + 22 * s).toFixed(1)}%`;
+      }
 
       // 线稿 -> 实印: 原位交叉淡化, 线稿微涨散开, 实印从 .985 落定
       const mu = (now - t0 - MORPH_START) / MORPH_DUR;
@@ -381,18 +645,32 @@ export function BookGate({ onDone, covers = [], privacy = false }: BookGateProps
                 </div>
               </div>
             </div>
+            {/* 封面内页单独一层, 且必须排在所有书页之前。Chrome 在这个 3D 上下文里
+                既不认 z-index 也没把子元素的深度算进排序, 只有 DOM 顺序稳; 内页留在
+                封面里(DOM 最后)的话, 翻过去的书页全被它盖住, 翻页就只剩横向擦除。 */}
+            <div aria-hidden className="gate-leaf gate-cover-verso">
+              <div className="gate-face gate-back gate-cover-back">
+                <Sigil />
+              </div>
+            </div>
+            <div aria-hidden className="gate-cast" ref={castRef} />
             {LEAVES.map((leaf, index) => (
               <div className="gate-bleaf" data-testid={`book-page-${index + 1}`} key={index} style={{ transform: `translateZ(${leaf.z}px)` }}>
-                <Segs k={0} coverUri={privacy ? undefined : readyCovers[index]} />
+                {/* 纸张/水彩/墨线只在整页绘制一次；翻页片仅负责几何切片，避免每片叠加造成规则竖纹与发白。 */}
+                <div aria-hidden className="gate-page-paper" />
+                {privacy || !readyCovers[index] ? null : (
+                  <div aria-hidden className="gate-page-art" data-baked={readyCovers[index]!.baked || undefined} style={pageImageStyle(readyCovers[index]!.uri)} />
+                )}
+                <div aria-hidden className="gate-segs"><Segs baked={readyCovers[index]?.baked} coverUri={privacy ? undefined : readyCovers[index]?.uri} /></div>
+                <div aria-hidden className="gate-page-wash" />
+                <div aria-hidden className="gate-page-grain" style={{ backgroundImage: `url(${JSON.stringify(paperGrainUri)})` }} />
+                <div aria-hidden className="gate-page-edge" />
               </div>
             ))}
             <div className="gate-leaf gate-cover">
               <div className="gate-face gate-cover-front">
                 <img alt="个人内容宇宙报告封面" draggable={false} src={coverUri} />
                 <div className="gate-sheen" />
-              </div>
-              <div className="gate-face gate-back gate-cover-back">
-                <Sigil />
               </div>
             </div>
           </div>
@@ -412,12 +690,15 @@ const css = `
 .gate-sealline { position: absolute; inset: 0; }
 .gate-sealline svg { width: 100%; height: 100%; display: block; }
 .gate-sealreal { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; opacity: 0; }
-.gate-sealreal img { position: absolute; width: 1121.2%; height: 747.5%; left: -256.6%; top: -153.7%; max-width: none; user-select: none; -webkit-user-drag: none; }
+.gate-sealreal img { position: absolute; width: 1121.2%; height: 747.5%; left: -263.1%; top: -155.8%; max-width: none; user-select: none; -webkit-user-drag: none; }
 .gate-burnable::before { content: ""; position: absolute; inset: 0; z-index: -2; pointer-events: none; opacity: .62; background: radial-gradient(circle at var(--glow-x) var(--glow-y), rgba(137,170,161,.1), transparent 34%), radial-gradient(circle at 50% 120%, rgba(218,168,92,.12), transparent 42%), linear-gradient(125deg, #050608 0%, #111316 48%, #080a0c 100%); }
 .gate-burnable::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: .16; mix-blend-mode: screen; background-image: repeating-linear-gradient(0deg, rgba(255,255,255,.04) 0 1px, transparent 1px 4px), repeating-linear-gradient(90deg, rgba(0,0,0,.12) 0 1px, transparent 1px 5px); }
-.gate-scene { --book-h: clamp(390px, 76dvh, 617px); --book-w: calc(var(--book-h) * .705); --tilt-x: 0deg; --tilt-y: 0deg; --lift: 0px; position: relative; width: min(94vw, calc(var(--book-w) + 80px)); height: calc(var(--book-h) + 80px); display: grid; place-items: center; perspective: 1800px; outline: none; cursor: pointer; transform: translateZ(var(--lift)) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)); transform-style: preserve-3d; will-change: transform; }
-.gate-scene:focus-visible { outline: 1px solid rgba(201,164,104,.72); outline-offset: 10px; }
-.opening .gate-scene { transition: transform .5s cubic-bezier(.4,0,.2,1); cursor: default; }
+.gate-scene { --book-h: clamp(390px, 76dvh, 617px); --book-w: calc(var(--book-h) * .75); --tilt-x: 0deg; --tilt-y: 0deg; --lift: 0px; position: relative; width: min(94vw, calc(var(--book-w) + 80px)); height: calc(var(--book-h) + 80px); display: grid; place-items: center; perspective: 1150px; outline: none; cursor: pointer; transform: translateZ(var(--lift)) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)); transform-style: preserve-3d; will-change: transform; }
+.gate-scene:focus-visible { outline: 1px solid rgba(201,164,104,.72) !important; outline-offset: 10px !important; }
+/* App.tsx 给 [role="button"] 挂了 !important 的青色 focus 环, 不压掉会在翻页全程留一个青框 */
+.opening .gate-scene:focus-visible { outline: none !important; }
+/* 翻页期间 --tilt-* 每帧在写, 再挂 .5s transform 过渡等于给相机加 500ms 迟滞 */
+.opening .gate-scene { cursor: default; }
 .gate-aura { position: absolute; width: 72%; height: 72%; border-radius: 50%; background: radial-gradient(ellipse, rgba(0,0,0,.85), transparent 70%); filter: blur(22px); transform: translateY(18%); pointer-events: none; }
 .gate-book { position: relative; width: var(--book-w); height: var(--book-h); transform-style: preserve-3d; transform-origin: 100% 50%; }
 .opening .gate-book { animation: gateBook ${TOTAL_MS}ms cubic-bezier(.62,.04,.3,1) forwards; }
@@ -431,19 +712,47 @@ const css = `
 .gate-book::before { content: ""; position: absolute; left: -7px; top: 6px; width: 10px; height: calc(100% - 12px); border-radius: 3px 0 0 3px; background: repeating-linear-gradient(90deg, #756b5b 0 1px, #c6bbaa 1px 2px, #8e8270 2px 3px, #d6cdbd 3px 5px); opacity: .86; transform: translateZ(-4px); box-shadow: -2px 0 4px rgba(0,0,0,.35); pointer-events: none; }
 .gate-leaf { position: absolute; inset: 0; transform-origin: left center; transform-style: preserve-3d; border-radius: 4px 6px 6px 4px; }
 .gate-bleaf { position: absolute; inset: 0; transform-style: preserve-3d; pointer-events: none; }
+.gate-page-art { position: absolute; inset: 3.2% 3.8% 3.5% 3.2%; pointer-events: none;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 48%, #000 55%, rgba(0,0,0,.92) 67%, rgba(0,0,0,.48) 82%, transparent 100%);
+  mask-image: radial-gradient(ellipse at 50% 48%, #000 55%, rgba(0,0,0,.92) 67%, rgba(0,0,0,.48) 82%, transparent 100%); }
+.gate-page-art { z-index: 2; opacity: .92; filter: blur(0.3px) sepia(.16) saturate(1.02) contrast(1.16); }
+.gate-segs { position: absolute; inset: 3.2% 3.8% 3.5% 3.2%; z-index: 4; opacity: 0; transform-style: preserve-3d; }
 .gate-seg { position: absolute; top: 0; height: 100%; transform-origin: left center; transform-style: preserve-3d; backface-visibility: visible; }
 .gate-seg-sheet, .gate-seg-cover, .gate-seg-paper { position: absolute; inset: 0; pointer-events: none; }
 .gate-seg-sheet { z-index: 0; background:
-  repeating-linear-gradient(0deg, rgba(255,250,235,.7) 0 1px, rgba(138,113,76,.22) 1px 2px, rgba(232,222,199,.86) 2px 4px),
-  linear-gradient(105deg, #F1E9D6, #DDD1B7 55%, #F0E5CF); }
-.gate-seg-cover { z-index: 1; background-color: #E8E0CB; }
+  repeating-linear-gradient(0deg, rgba(255,250,235,.3) 0 1px, rgba(138,113,76,.06) 1px 2px, rgba(232,222,199,.34) 2px 4px),
+  #EAE1CA; }
+.gate-seg-cover { backface-visibility: hidden; z-index: 1; filter: blur(0.3px) sepia(.16) saturate(1.02) contrast(1.16); opacity: 0; transition: opacity .18s ease; }
+/* 烤过的图已经含水彩与墨线，再套一次就是二次上色 */
+.gate-page-art[data-baked], .gate-seg-cover[data-baked] { filter: none; }
 .gate-seg-paper { z-index: 2; }
 .gate-seg-edge { position: absolute; inset: 0; z-index: 3; pointer-events: none; background:
   linear-gradient(180deg, rgba(82,63,39,.24), rgba(82,63,39,0) 7%, rgba(82,63,39,0) 93%, rgba(82,63,39,.3)),
-  linear-gradient(90deg, rgba(82,63,39,.18), rgba(82,63,39,0) 9%, rgba(82,63,39,0) 91%, rgba(82,63,39,.28)),
-  repeating-linear-gradient(0deg, rgba(255,249,229,.16) 0 1px, transparent 1px 4px);
+  repeating-linear-gradient(0deg, rgba(255,249,229,.06) 0 1px, transparent 1px 4px);
   mix-blend-mode: multiply; opacity: .7; }
-.gate-seg > .gate-seg { z-index: 4; }
+.gate-page-paper { position: absolute; inset: 0; z-index: 0; pointer-events: none; background:
+  linear-gradient(180deg, rgba(96,78,48,.06), rgba(96,78,48,0) 5%, rgba(96,78,48,0) 95%, rgba(96,78,48,.08)),
+  radial-gradient(120% 100% at 40% 14%, rgba(255,250,236,.08), rgba(255,250,236,0) 55%),
+  linear-gradient(105deg, #E6D8BE 0%, #DCC9A8 55%, #E6D7BC 100%);
+  box-shadow: inset 0 0 0 1px rgba(90,76,54,.16), inset 16px 0 30px -20px rgba(56,42,24,.5), inset -6px 0 14px -12px rgba(56,42,24,.28); }
+.gate-seg-shade { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.gate-cast { z-index: 25; position: absolute; left: 0; top: 2%; height: 96%; width: 7%; opacity: 0; pointer-events: none;
+  transform: translateZ(.28px); border-radius: 2px 40% 40% 2px;
+  background: linear-gradient(90deg, rgba(24,16,7,.62), rgba(24,16,7,.26) 42%, rgba(24,16,7,0)); filter: blur(3px); }
+.gate-page-wash, .gate-page-grain, .gate-page-edge { position: absolute; inset: 0; pointer-events: none; }
+.gate-page-wash { z-index: 10; background:
+  radial-gradient(ellipse at 18% 16%, rgba(145,111,70,.16), transparent 38%),
+  radial-gradient(ellipse at 80% 84%, rgba(121,92,58,.18), transparent 44%),
+  linear-gradient(109deg, rgba(210,181,138,.2), transparent 32%, transparent 72%, rgba(155,121,78,.14));
+  mix-blend-mode: multiply; opacity: .34; }
+.gate-page-grain { z-index: 11; background-repeat: repeat; background-size: 256px 256px; mix-blend-mode: multiply; opacity: .16; }
+.gate-page-edge { z-index: 12; clip-path: polygon(0.8% 2.8%, 12% 2.4%, 24% 2.9%, 36% 2.5%, 48% 3%, 60% 2.6%, 72% 3.1%, 84% 2.5%, 99.2% 2.9%, 99.2% 97.2%, 84% 97.6%, 72% 97.1%, 60% 97.5%, 48% 97%, 36% 97.4%, 24% 97.1%, 12% 97.6%, 0.8% 97.2%); background:
+  linear-gradient(180deg, rgba(76,58,35,.32), rgba(76,58,35,0) 8%, rgba(76,58,35,0) 92%, rgba(76,58,35,.38)),
+  linear-gradient(90deg, rgba(76,58,35,.2), rgba(76,58,35,0) 8%, rgba(76,58,35,0) 92%, rgba(76,58,35,.24)); mix-blend-mode: multiply; opacity: .46; }
+.opening .gate-segs { opacity: 1; }
+.opening .gate-page-paper, .opening .gate-page-art,
+.opening .gate-page-wash, .opening .gate-page-edge { opacity: 0; transition: opacity .18s ease; }
+.opening .gate-seg-cover { opacity: 1; }
 .gate-face { position: absolute; inset: 0; backface-visibility: hidden; border-radius: 4px 6px 6px 4px; overflow: hidden; transform: translateZ(.2px); }
 .gate-face.gate-back { transform: rotateY(180deg) translateZ(.2px); border-radius: 6px 4px 4px 6px; }
 .gate-paper { background:
@@ -453,16 +762,22 @@ const css = `
   radial-gradient(100% 90% at 82% 88%, rgba(120,96,60,.06), rgba(120,96,60,0) 60%),
   linear-gradient(105deg, #EFE8D6 0%, #E8E0CB 55%, #EFE7D5 100%);
   box-shadow: inset 0 0 0 1px rgba(90,76,54,.16), inset 16px 0 30px -20px rgba(56,42,24,.5), inset -6px 0 14px -12px rgba(56,42,24,.28); }
-.gate-base { transform: none; }
+.gate-base { transform: none; z-index: 1; }
 .gate-base::after { content: ""; position: absolute; right: 0; top: 1.4%; bottom: 1.2%; width: 7px; border-radius: 0 6px 6px 0; background:
   linear-gradient(180deg, rgba(80,64,40,.2), rgba(80,64,40,0) 9%, rgba(80,64,40,0) 91%, rgba(80,64,40,.24)),
   repeating-linear-gradient(90deg, #CBBFA3 0 1px, #E9E1CC 1px 2.2px, #DDD3BA 2.2px 3.4px); }
 .gate-base::before { content: ""; position: absolute; left: 1%; right: 1px; bottom: 0; height: 6px; border-radius: 0 0 6px 4px; background:
   linear-gradient(90deg, rgba(80,64,40,.16), rgba(80,64,40,0) 10%, rgba(80,64,40,0) 88%, rgba(80,64,40,.2)),
   repeating-linear-gradient(0deg, #C7BB9F 0 1px, #E7DFC9 1px 2.1px, #DAD0B6 2.1px 3.2px); }
-.gate-cover { transform: translateZ(1.6px); }
+.gate-cover { transform: translateZ(1.6px); z-index: 30; }
 .opening .gate-cover { animation: gateFlipCover 1.3s cubic-bezier(.7,.05,.28,1) .12s forwards; }
 @keyframes gateFlipCover { to { transform: translateZ(1.6px) rotateY(-178.4deg); } }
+/* 内页跟着封面同步转, 但坐在所有书页的深度之下(0.2 < 页叶的 0.35~1.35) */
+/* Chrome 排序只看这一层自己的平面: 封面收在 178.4° 还留 1.6° 仰角, 平面远端会翘到 z≈+13,
+   照样盖住页叶(平面 z 只有 0.35~1.35)。内页因此收到 179.4°(近似压平)并整体再沉 6px。 */
+.gate-cover-verso { transform: translateZ(-6px); }
+.opening .gate-cover-verso { animation: gateFlipVerso 1.3s cubic-bezier(.7,.05,.28,1) .12s forwards; }
+@keyframes gateFlipVerso { to { transform: translateZ(-6px) rotateY(-179.4deg); } }
 .gate-cover-front { box-shadow: inset 0 0 0 1px rgba(61,45,31,.34); }
 .gate-cover-front img { display: block; width: 100%; height: 100%; object-fit: cover; user-select: none; -webkit-user-drag: none; }
 .gate-sheen { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(112deg, transparent 31%, rgba(255,255,255,.12) 48%, transparent 64%); mix-blend-mode: screen; opacity: .46; }
@@ -487,6 +802,6 @@ const css = `
 .opening .gate-hint { opacity: 0; transition: opacity .3s; }
 @media (max-width: 700px) {
   .gate-burnable { padding: 10px 7px 14px; }
-  .gate-scene { --book-h: min(72dvh, 560px, calc(92vw / .705)); width: min(98vw, calc(var(--book-w) + 44px)); height: calc(var(--book-h) + 54px); }
+  .gate-scene { --book-h: min(72dvh, 560px, calc(92vw / .75)); width: min(98vw, calc(var(--book-w) + 44px)); height: calc(var(--book-h) + 54px); }
 }
 `;

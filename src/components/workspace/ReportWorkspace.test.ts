@@ -31,7 +31,8 @@ vi.mock("react-native-svg", () => {
 
 import type { ChatMessage } from "../../domain/chatRecords";
 import type { PersonalRecordCollection, PersonalVideoRecord } from "../../domain/personalRecords";
-import { buildReportModel, selectBookCoverUris } from "./ReportWorkspace";
+import { buildReportModel, selectBookCoverUris, spawnVortex, stepVortex, vortexFrame } from "./ReportWorkspace";
+import { segmentEdgeClip } from "./BookGate";
 
 function video(id: string, occurredAt: string, percent?: number): PersonalVideoRecord {
   return {
@@ -84,7 +85,9 @@ describe("buildReportModel", () => {
     expect(model.evidence.watch.count).toBe(2);
     expect(model.evidence.watch.dots).toBe(1);
     expect(model.evidence.watch.range).toEqual(["2026-08-20", "2026-08-21"]);
-    expect(model.evidence.watch.months[7]).toBe(true);
+    // 8 月 20/21 日 → 8 月后半月桶（7*2+1）
+    expect(model.evidence.watch.months[15]).toBeGreaterThan(0);
+    expect(model.evidence.watch.months[14]).toBe(0);
     expect(model.evidence.chat.caveat).toEqual(["observed", "partial"]);
     expect(model.evidence.creators.count).toBe(1);
     expect(model.events).toHaveLength(5);
@@ -97,7 +100,71 @@ describe("buildReportModel", () => {
     expect(model.seasons[0]!.title).toBe("春季暂无观测");
   });
 
-  it("selects the five newest unique book covers and honors privacy mode", () => {
+  it("keeps report-wide axes all-period while the profile axes use the recent window", () => {
+    const records: PersonalRecordCollection = {
+      watch_history: [
+        video("old", "2026-08-01T12:00:00+08:00", 20),
+        video("new", "2026-08-10T12:00:00+08:00", 90),
+      ],
+      liked_videos: [video("old-like", "2026-08-01T12:05:00+08:00")],
+      favorite_videos: [],
+    };
+
+    const model = buildReportModel(records, [], null);
+
+    expect(model.completion).toBe(55);
+    expect(model.axes[1]?.value).toBe(55);
+    expect(model.profileMetrics.completion).toBe(90);
+    expect(model.profileAxes[1]?.value).toBe(90);
+    expect(model.profileMetrics.windowed).toBe(true);
+    expect(model.profileMetrics.windowWatchRecords).toBe(1);
+  });
+
+  it("compresses uninterrupted viewing into boundaries while keeping keeps and chat breaks", () => {
+    const watch = (id: string, occurredAt: string): PersonalVideoRecord => ({
+      ...video(id, occurredAt),
+      id,
+      videoId: id,
+    });
+    const chat = (id: string, sentAt: string): ChatMessage => ({
+      id,
+      conversationId: id,
+      conversationType: "friend",
+      conversationName: null,
+      senderId: null,
+      senderName: null,
+      sentAt,
+      type: "text",
+      text: null,
+      mediaUrl: null,
+      share: null,
+      callDurationSeconds: null,
+    });
+    const records: PersonalRecordCollection = {
+      watch_history: [
+        watch("watch-a", "2026-08-21T12:00:00+08:00"),
+        watch("watch-b", "2026-08-21T12:02:00+08:00"),
+        watch("watch-c", "2026-08-21T12:05:00+08:00"),
+        watch("watch-d", "2026-08-21T12:06:00+08:00"),
+        watch("watch-e", "2026-08-21T12:08:00+08:00"),
+      ],
+      liked_videos: [watch("like-a", "2026-08-21T12:01:00+08:00")],
+      favorite_videos: [watch("favorite-a", "2026-08-21T12:03:00+08:00")],
+    };
+    const model = buildReportModel(records, [chat("chat-a", "2026-08-21T12:04:00+08:00")], null);
+
+    expect(model.events.map((event) => ({ kind: event.kind, time: event.time }))).toEqual([
+      { kind: "watch", time: "12:08" },
+      { kind: "watch", time: "12:05" },
+      { kind: "chat", time: "12:04" },
+      { kind: "kept", time: "12:03" },
+      { kind: "watch", time: "12:02" },
+      { kind: "kept", time: "12:01" },
+      { kind: "watch", time: "12:00" },
+    ]);
+  });
+
+  it("selects the newest unique book covers and honors privacy mode", () => {
     const cover = (id: string, occurredAt: string, videoId = id): PersonalVideoRecord => ({
       ...video(id, occurredAt),
       videoId,
@@ -114,12 +181,15 @@ describe("buildReportModel", () => {
       favorite_videos: [cover("new-4", "2026-08-01T13:00:00Z"), cover("new-5", "2026-07-31T12:00:00Z")],
     };
 
+    // 时间降序去重(same-video 与 duplicate 同 videoId 被去掉); 上限是 BOOK_PAGE_COUNT(书页数)
     expect(selectBookCoverUris(records)).toEqual([
       "https://p3.douyinpic.com/new-1.jpg",
       "https://p3.douyinpic.com/new-2.jpg",
       "https://p3.douyinpic.com/duplicate.jpg",
       "https://p3.douyinpic.com/new-3.jpg",
       "https://p3.douyinpic.com/new-4.jpg",
+      "https://p3.douyinpic.com/old.jpg",
+      "https://p3.douyinpic.com/new-5.jpg",
     ]);
     expect(selectBookCoverUris(records, true)).toEqual([]);
   });
@@ -166,5 +236,55 @@ describe("buildReportModel", () => {
     expect(model.chatOwnGroupMessages).toBe(3);
     expect(model.chatKinds).toEqual([expect.objectContaining({ name: "文字", count: 1 })]);
     expect(model.chatGroups).toHaveLength(1);
+  });
+});
+
+describe("涡旋粒子", () => {
+  it("整段生命周期都留在圆锥内，且越靠焦点转得越快", () => {
+    const dots = spawnVortex(120);
+    const band = [{ angle: 0, frames: 0 }, { angle: 0, frames: 0 }];
+    for (let frame = 0; frame < 900; frame += 1) {
+      for (const dot of dots) {
+        const before = dot.theta;
+        const slot = dot.u / 356 > 0.6 ? 0 : dot.u / 356 < 0.15 ? 1 : -1;
+        stepVortex(dot, 1 / 60, frame / 60);
+        // theta 变小 = 这一帧重生了，不计入角速度
+        if (slot >= 0 && dot.theta > before) {
+          band[slot]!.angle += dot.theta - before;
+          band[slot]!.frames += 1;
+        }
+        const view = vortexFrame(dot);
+        expect(Math.abs(view.cx - 190)).toBeLessThanOrEqual(0.44 * (376 - view.cy) + 20);
+        // 最上一层圆盘在锥口平面上方，落在暗腔里甚至锥口以外是预期的（预览也这样）
+        expect(view.cy).toBeGreaterThan(0);
+        expect(view.cy).toBeLessThanOrEqual(380);
+        expect(view.r).toBeGreaterThan(0);
+      }
+    }
+    const omega = band.map((row) => row.angle / row.frames);
+    // 焦点附近角速度必须显著高于锥口，否则只是整体刚性旋转
+    expect(omega[1]! / omega[0]!).toBeGreaterThan(2);
+  });
+});
+
+describe("segmentEdgeClip", () => {
+  const ys = (clip: string) => clip.slice(8, -1).split(", ").map((pt) => pt.split(" ").map((v) => Number(v.replace("%", ""))) as [number, number]);
+
+  it("相邻片在交界处上下缘对齐（缝上不留台阶）", () => {
+    for (let k = 0; k < 11; k += 1) {
+      const a = ys(segmentEdgeClip(k));
+      const b = ys(segmentEdgeClip(k + 1));
+      // a 的最右顶点（上缘末点 / 下缘首点）应与 b 的最左顶点同高
+      expect(a[8]![1]).toBeCloseTo(b[0]![1], 2); // 上缘
+      expect(a[9]![1]).toBeCloseTo(b[17]![1], 2); // 下缘
+    }
+  });
+
+  it("毛边有起伏但不越界", () => {
+    const all = Array.from({ length: 12 }, (_, k) => ys(segmentEdgeClip(k))).flat();
+    const top = all.filter((pt) => pt[1] < 50).map((pt) => pt[1]);
+    expect(Math.max(...top) - Math.min(...top)).toBeGreaterThan(0.8); // 确实在抖（纸边只留轻微毛刺，不规则边界由烘焙的颜料渗透边负责）
+    expect(Math.min(...top)).toBeGreaterThan(0); // 没抖出页面
+    expect(Math.max(...all.map((pt) => pt[1]))).toBeLessThan(100);
   });
 });

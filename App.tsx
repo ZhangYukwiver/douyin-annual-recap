@@ -11,7 +11,9 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import {
   ContentWorkspace,
+  LegacyContentWorkspace,
   SetupWorkspace,
+  type LegacyWorkspaceViewKey,
   workspaceColors,
 } from "./src/components/workspace";
 import { buildPersonalSummary } from "./src/domain/annualReport";
@@ -132,6 +134,8 @@ function collectorErrorMessage(error: unknown): string {
 
 function AppContent() {
   const [activeView, setActiveView] = useState<ViewKey>("sources");
+  const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [dashboardView, setDashboardView] = useState<LegacyWorkspaceViewKey>("summary");
   const [privacy, setPrivacy] = useState(false);
   const [selectedArchive, setSelectedArchive] = useState<SelectedArchive | null>(null);
   const [pickingArchive, setPickingArchive] = useState(false);
@@ -797,11 +801,23 @@ function AppContent() {
     : null;
 
   function enterWorkspace() {
+    setDashboardOpen(false);
     setActiveView("summary");
   }
 
   function replayStory() {
+    setDashboardOpen(false);
     setActiveView("summary");
+  }
+
+  function openDashboard() {
+    setDashboardView("summary");
+    setDashboardOpen(true);
+  }
+
+  function openSettings() {
+    setDashboardOpen(false);
+    setActiveView("sources");
   }
 
   return (
@@ -854,10 +870,30 @@ function AppContent() {
           stoppingSync={stoppingSync}
           switchingAccount={switchingAccount}
         />
+      ) : dashboardOpen ? (
+        <LegacyContentWorkspace
+          activeView={dashboardView}
+          busy={collectorBusy}
+          chatConversations={displaySnapshot?.chatConversations ?? []}
+          chatMessages={displaySnapshot?.chatMessages ?? []}
+          onChangeView={setDashboardView}
+          onOpenRecord={openRecord}
+          onOpenSettings={openSettings}
+          onReplayStory={replayStory}
+          onSync={() => collectorToken ? confirmIncrementalSync() : openSettings()}
+          onTogglePrivacy={() => setPrivacy((value) => !value)}
+          privacy={privacy}
+          records={workspaceRecords}
+          report={personalSummary ?? livingReport}
+          sourceLabel={sourceLabel}
+          status={collectorStatus}
+          updatedAt={displaySnapshot?.updatedAt ?? null}
+        />
       ) : (
         <ContentWorkspace
           activeView={activeView === "chat" ? "chat" : activeView === "highlights" ? "highlights" : "summary"}
           busy={collectorBusy}
+          onOpenDashboard={openDashboard}
           onChangeView={(view) => {
             if (view === "summary" || view === "highlights" || view === "chat") {
               setActiveView(view);
@@ -866,7 +902,7 @@ function AppContent() {
             setActiveView("summary");
           }}
           onOpenRecord={openRecord}
-          onOpenSettings={() => setActiveView("sources")}
+          onOpenSettings={openSettings}
           onReplayStory={replayStory}
           onSync={() => collectorToken ? confirmIncrementalSync() : setActiveView("sources")}
           onTogglePrivacy={() => setPrivacy((value) => !value)}
