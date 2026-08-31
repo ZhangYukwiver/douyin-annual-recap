@@ -21,6 +21,8 @@ import {
   ChatConversationAccumulator,
   ChatMessageAccumulator,
   matchChatEndpoint,
+  normalizeChatAvatarUrl,
+  normalizeChatConversation,
   normalizeChatPayload,
 } from "./chatNormalizer.mjs";
 import {
@@ -121,33 +123,241 @@ async function readCurrentUserId(page) {
   }).catch(() => null);
 }
 
-async function readChatConversationCatalog(page) {
+export async function readChatConversationCatalog(page) {
   if (!page || typeof page.evaluate !== "function") return [];
-  return page.evaluate(() => {
+  const rawCatalog = await page.evaluate(() => {
     const store = globalThis.conversationStore;
     if (!store) return [];
+    const read = (target, key) => {
+      try {
+        return target?.[key] ?? null;
+      } catch {
+        return null;
+      }
+    };
+    const firstText = (...values) => {
+      for (const value of values) {
+        if (typeof value !== "string" && typeof value !== "number") continue;
+        const text = String(value).trim();
+        if (text) return text.slice(0, 500);
+      }
+      return null;
+    };
+    const mapLookup = (map, key) => {
+      if (!map || key === null || key === undefined || key === "") return null;
+      try {
+        return map.get?.(key) ?? null;
+      } catch {
+        return null;
+      }
+    };
+    const firstUrl = (...values) => {
+      const queue = values.map((value) => ({ value, depth: 0 }));
+      const seenValues = new Set();
+      let inspected = 0;
+      while (queue.length > 0 && inspected < 80) {
+        const entry = queue.shift();
+        if (!entry || entry.depth > 4) continue;
+        inspected += 1;
+        const value = entry.value;
+        if (typeof value === "string") {
+          const text = value.trim();
+          if (/^https?:\/\//iu.test(text)) return text.slice(0, 2048);
+          continue;
+        }
+        if (Array.isArray(value)) {
+          for (const item of value.slice(0, 20)) queue.push({ value: item, depth: entry.depth + 1 });
+          continue;
+        }
+        if (!value || typeof value !== "object" || seenValues.has(value)) continue;
+        seenValues.add(value);
+        for (const key of [
+          "avatarUrl", "avatar_url", "avatar", "avatarThumb", "avatar_thumb", "avatarMedium", "avatar_medium", "avatarLarger", "avatar_larger",
+          "iconUrl", "icon_url", "icon", "url", "uri", "urlList", "url_list", "originUrlList", "origin_url_list",
+          "largeUrlList", "large_url_list", "mediumUrlList", "medium_url_list", "thumbUrlList", "thumb_url_list",
+        ]) {
+          queue.push({ value: read(value, key), depth: entry.depth + 1 });
+        }
+      }
+      return null;
+    };
     const ids = [
       ...(store.sortedConversationIdList ?? []),
       ...(store.sortedStrangerConversationIdList ?? []),
     ];
     const result = [];
     const seen = new Set();
-    for (const id of ids) {
-      if (typeof id !== "string" || !id || seen.has(id)) continue;
-      const conversation = store.conversationMap?.get(id) ?? store.strangerConversationMap?.get(id);
+    for (const rawId of ids) {
+      const id = typeof rawId === "string" || typeof rawId === "number" ? String(rawId).trim() : "";
+      if (!id || seen.has(id)) continue;
+      const conversation = store.conversationMap?.get(rawId)
+        ?? store.strangerConversationMap?.get(rawId)
+        ?? store.conversationMap?.get(id)
+        ?? store.strangerConversationMap?.get(id);
       if (!conversation) continue;
       seen.add(id);
-      let name = null;
-      try { name = conversation.coreInfo?.name ?? conversation.name ?? conversation.conversationName ?? null; } catch { /* optional getter */ }
-      const businessType = String(conversation.bizType ?? conversation.type ?? conversation.conversationType ?? "").toLowerCase();
+      const core = read(conversation, "coreInfo") ?? read(conversation, "core_info");
+      const user = read(conversation, "userInfo")
+        ?? read(conversation, "user_info")
+        ?? read(conversation, "targetUser")
+        ?? read(conversation, "target_user")
+        ?? read(conversation, "user");
+      const coreUser = read(core, "userInfo") ?? read(core, "user_info");
+      const businessType = String(
+        read(conversation, "bizType") ?? read(conversation, "type") ?? read(conversation, "conversationType") ?? "",
+      ).toLowerCase();
+      const explicitGroup = businessType === "2" || businessType === "group" || businessType === "group_chat";
+      const participantMap = mapLookup(store.participantMapWithConversationId, id);
+      let participants = [];
+      try { participants = [...(participantMap?.values?.() ?? [])]; } catch { participants = []; }
+      const participantSecUid = firstText(
+        read(conversation, "toParticipantSecUserId"),
+        read(conversation, "to_participant_sec_user_id"),
+        read(conversation, "_toParticipantSecUserId"),
+      );
+      // The conversation objects in the current web client omit bizType. A
+      // direct chat carries one target sec UID, while group entries expose
+      // several participants and no target UID; use that as a conservative
+      // fallback only when the endpoint did not provide an explicit type.
+      const isGroup = explicitGroup || (!businessType && !participantSecUid && participants.length > 2);
+      const userInfoStore = globalThis.userInfoStore;
+      const selfUid = firstText(read(userInfoStore?.curLoginUserInfo, "uid"));
+      let participant = null;
+      let profile = null;
+      if (!isGroup) {
+        for (const candidate of participants) {
+          const candidateUid = firstText(read(candidate, "userId"), read(candidate, "uid"));
+          if (!candidateUid || candidateUid === selfUid) continue;
+          const candidateSecUid = firstText(read(candidate, "secUid"), read(candidate, "sec_uid"));
+          const candidateProfile = mapLookup(userInfoStore?.usersInfoMap, candidateUid)
+            ?? mapLookup(userInfoStore?.usersInfoMap, candidateSecUid);
+          participant ??= candidate;
+          profile ??= candidateProfile;
+          if (candidateProfile) {
+            participant = candidate;
+            profile = candidateProfile;
+            break;
+          }
+        }
+      }
+      const name = isGroup
+        ? firstText(
+            read(conversation, "name"),
+            read(conversation, "conversationName"),
+            read(conversation, "conversation_name"),
+            read(core, "name"),
+            read(core, "nickname"),
+            read(core, "nickName"),
+            read(conversation, "nickname"),
+            read(conversation, "nickName"),
+            read(user, "nickname"),
+            read(user, "nickName"),
+            read(user, "name"),
+            read(user, "displayName"),
+            read(user, "display_name"),
+            read(coreUser, "nickname"),
+            read(coreUser, "nickName"),
+            read(coreUser, "name"),
+            read(coreUser, "displayName"),
+            read(coreUser, "display_name"),
+          )
+        : firstText(
+            read(profile, "nickname"),
+            read(profile, "nickName"),
+            read(profile, "nick_name"),
+            read(participant, "alias"),
+            read(conversation, "nickname"),
+            read(conversation, "nickName"),
+            read(user, "nickname"),
+            read(user, "nickName"),
+            read(coreUser, "nickname"),
+            read(coreUser, "nickName"),
+            read(conversation, "name"),
+            read(conversation, "conversationName"),
+            read(conversation, "conversation_name"),
+            read(core, "name"),
+            read(core, "nickname"),
+            read(core, "nickName"),
+            read(user, "name"),
+            read(user, "displayName"),
+            read(user, "display_name"),
+            read(coreUser, "name"),
+            read(coreUser, "displayName"),
+            read(coreUser, "display_name"),
+      );
+      const avatarUrl = firstUrl(
+        read(profile, "avatarUrl"),
+        read(profile, "avatar_url"),
+        read(read(profile, "avatar_thumb"), "url_list"),
+        read(read(profile, "avatar_thumb"), "urlList"),
+        read(read(profile, "avatar_small"), "url_list"),
+        read(read(profile, "avatar_small"), "urlList"),
+        read(read(profile, "avatar_medium"), "url_list"),
+        read(read(profile, "avatar_medium"), "urlList"),
+        read(read(profile, "avatar_larger"), "url_list"),
+        read(read(profile, "avatar_larger"), "urlList"),
+        read(profile, "avatar_thumb"),
+        read(profile, "avatar_small"),
+        read(profile, "avatar_medium"),
+        read(profile, "avatar_larger"),
+        read(profile, "avatar300Url"),
+        read(profile, "avatar_300_url"),
+        read(profile, "avatarThumb"),
+        read(profile, "avatarLarger"),
+        read(conversation, "avatarUrl"),
+        read(conversation, "avatar_url"),
+        read(conversation, "avatar"),
+        read(conversation, "avatarThumb"),
+        read(conversation, "avatar_thumb"),
+        read(conversation, "avatarMedium"),
+        read(conversation, "avatar_medium"),
+        read(conversation, "avatarLarger"),
+        read(conversation, "avatar_larger"),
+        read(conversation, "iconUrl"),
+        read(conversation, "icon_url"),
+        read(conversation, "icon"),
+        read(core, "avatarUrl"),
+        read(core, "avatar_url"),
+        read(core, "avatar"),
+        read(core, "avatarThumb"),
+        read(core, "avatar_thumb"),
+        read(core, "avatarLarger"),
+        read(core, "avatar_larger"),
+        read(user, "avatarUrl"),
+        read(user, "avatar_url"),
+        read(user, "avatar"),
+        read(user, "avatarThumb"),
+        read(user, "avatar_thumb"),
+        read(user, "avatarLarger"),
+        read(user, "avatar_larger"),
+        read(coreUser, "avatarUrl"),
+        read(coreUser, "avatar_url"),
+        read(coreUser, "avatar"),
+        read(coreUser, "avatarThumb"),
+        read(coreUser, "avatar_thumb"),
+        read(coreUser, "avatarLarger"),
+        read(coreUser, "avatar_larger"),
+      );
       result.push({
         id,
-        kind: businessType === "2" || businessType === "group" || businessType === "group_chat" ? "group" : "friend",
-        name: typeof name === "string" && name.trim() ? name.trim() : null,
+        kind: isGroup ? "group" : "friend",
+        name,
+        avatarUrl,
       });
     }
     return result;
   }).catch(() => []);
+  return normalizeChatConversationCatalog(rawCatalog);
+}
+
+export function normalizeChatConversationCatalog(values) {
+  const seen = new Set();
+  return (Array.isArray(values) ? values : []).flatMap((value) => {
+    const conversation = normalizeChatConversation(value);
+    if (!conversation || seen.has(conversation.id)) return [];
+    seen.add(conversation.id);
+    return [conversation];
+  });
 }
 
 function mergeChatConversationSnapshots(previous = [], current = []) {
@@ -167,6 +377,7 @@ function mergeChatConversationSnapshots(previous = [], current = []) {
       name: conversation.kind === "group"
         ? conversation.name ?? next.name ?? null
         : next.name ?? conversation.name ?? null,
+      avatarUrl: normalizeChatAvatarUrl(next.avatarUrl) ?? normalizeChatAvatarUrl(conversation.avatarUrl) ?? null,
       messageCount: Math.max(conversation.messageCount ?? 0, next.messageCount ?? 0),
       ownMessageCount: Math.max(conversation.ownMessageCount ?? 0, next.ownMessageCount ?? 0),
     });
@@ -1230,6 +1441,13 @@ export class DouyinCollector {
           await delay(1_000);
           if ((responseCountByConversation.get(conversation.id) ?? 0) === beforeResponses) break;
         }
+      }
+      // Selecting each friend conversation can lazily hydrate the profile
+      // cache. Read the catalog once more after the sweep so nicknames and
+      // avatars that arrived during history paging are persisted as well.
+      const refreshedCatalog = await readChatConversationCatalog(page);
+      if (refreshedCatalog.length > 0) {
+        conversationAccumulator.addConversations(refreshedCatalog);
       }
       if (catalog.length > 0 || capturedResponses > 0) await persistSnapshot();
     })().catch((error) => {

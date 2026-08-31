@@ -110,6 +110,7 @@ const IMAGE_HOST_SUFFIXES = [
   "snssdk.com",
 ] as const;
 const CHAT_TYPES: ChatMessageType[] = ["text", "image", "sticker", "share", "call", "system", "voice", "video", "unknown"];
+const NUMERIC_CHAT_ID = /^(?:0|\d{15,})$/u;
 
 function cleanRecordString(value: unknown, limit = MAX_RECORD_STRING): string | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
@@ -160,6 +161,49 @@ function parseImageUrl(value: unknown): string | null {
     ) return candidate.toString().slice(0, MAX_RECORD_URL);
   } catch {
     // Untrusted image hosts are dropped before they reach the DOM.
+  }
+  return null;
+}
+
+function parseChatAvatarUrl(value: unknown, depth = 0, seen = new Set<object>()): string | null {
+  if (depth > 4 || value === null || value === undefined) return null;
+  const direct = parseImageUrl(value);
+  if (direct) return direct;
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 20)) {
+      const nested = parseChatAvatarUrl(item, depth + 1, seen);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  if (!isObject(value) || seen.has(value)) return null;
+  seen.add(value);
+  for (const key of [
+    "avatarUrl",
+    "avatar_url",
+    "avatar",
+    "avatarThumb",
+    "avatar_thumb",
+    "avatarLarger",
+    "avatar_larger",
+    "iconUrl",
+    "icon_url",
+    "icon",
+    "url",
+    "uri",
+    "urlList",
+    "url_list",
+    "originUrlList",
+    "origin_url_list",
+    "largeUrlList",
+    "large_url_list",
+    "mediumUrlList",
+    "medium_url_list",
+    "thumbUrlList",
+    "thumb_url_list",
+  ] as const) {
+    const nested = parseChatAvatarUrl(value[key], depth + 1, seen);
+    if (nested) return nested;
   }
   return null;
 }
@@ -327,7 +371,15 @@ function parseChatMessage(value: unknown): ChatMessage | null {
   const duration = Number.isFinite(numericDuration) && numericDuration >= 0 && numericDuration <= 86_400
     ? Math.round(numericDuration)
     : null;
-  return {
+  const senderAvatarUrl = parseChatAvatarUrl([
+    value.senderAvatarUrl,
+    value.sender_avatar_url,
+    value.sender_avatar,
+    value.sender,
+    value.senderInfo,
+    value.sender_info,
+  ]);
+  const message: ChatMessage = {
     id,
     conversationId: cleanRecordString(value.conversationId, 300),
     conversationType: parseChatConversationKind(value.conversationType),
@@ -341,6 +393,14 @@ function parseChatMessage(value: unknown): ChatMessage | null {
     share: parseChatShare(value.share),
     callDurationSeconds: duration,
   };
+  if (senderAvatarUrl) message.senderAvatarUrl = senderAvatarUrl;
+  return message;
+}
+
+function isSyntheticChatPlaceholder(message: ChatMessage): boolean {
+  if (message.type !== "unknown") return false;
+  if (!NUMERIC_CHAT_ID.test(message.id.trim())) return false;
+  return !message.text && !message.senderName && !message.mediaUrl && !message.share;
 }
 
 function parseChatMessages(value: unknown): ChatMessage[] {
@@ -348,7 +408,7 @@ function parseChatMessages(value: unknown): ChatMessage[] {
   const seen = new Set<string>();
   return value.flatMap((item) => {
     const message = parseChatMessage(item);
-    if (!message || seen.has(message.id)) return [];
+    if (!message || isSyntheticChatPlaceholder(message) || seen.has(message.id)) return [];
     seen.add(message.id);
     return [message];
   });
@@ -367,7 +427,25 @@ function parseChatConversations(value: unknown): ChatConversationSummary[] {
     return [{
       id,
       kind: parseChatConversationKind(item.kind),
-      name: cleanRecordString(item.name ?? item.conversationName),
+      name: cleanRecordString(item.name ?? item.conversationName ?? item.conversation_name ?? item.nickname ?? item.nickName),
+      avatarUrl: parseChatAvatarUrl([
+        item.avatarUrl,
+        item.avatar_url,
+        item.avatar,
+        item.avatarThumb,
+        item.avatar_thumb,
+        item.avatarMedium,
+        item.avatar_medium,
+        item.avatarLarger,
+        item.avatar_larger,
+        item.iconUrl,
+        item.icon_url,
+        item.icon,
+        item.coreInfo,
+        item.core_info,
+        item.userInfo,
+        item.user_info,
+      ]),
       messageCount,
       ownMessageCount,
     }];

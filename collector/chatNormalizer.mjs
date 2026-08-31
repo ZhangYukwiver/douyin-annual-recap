@@ -23,6 +23,7 @@ const MAX_STRING = 500;
 const MAX_URL = 2_048;
 const MAX_CHAT_MESSAGES = 100_000;
 const MAX_CHAT_CONVERSATIONS = 10_000;
+const NUMERIC_CHAT_ID = /^(?:0|\d{15,})$/u;
 
 export class CollectorAdapterError extends Error {
   constructor(code, message) {
@@ -57,6 +58,23 @@ function cleanString(value, limit = MAX_STRING) {
     return text ? text.slice(0, limit) : null;
   }
   return null;
+}
+
+/**
+ * Older versions could turn a pagination/metadata protobuf section into an
+ * empty `unknown` message. Those records have a numeric snowflake-like id,
+ * no readable payload, and no sender name. Keep unknown messages that carry
+ * an explicit identity or payload, but discard this narrow legacy shape at
+ * every persistence boundary.
+ */
+export function isSyntheticChatPlaceholder(value) {
+  if (!isObject(value) || value.type !== "unknown") return false;
+  const id = cleanString(value.id, 300);
+  if (!id || !NUMERIC_CHAT_ID.test(id)) return false;
+  return !cleanString(value.text)
+    && !cleanString(value.senderName)
+    && !value.mediaUrl
+    && !value.share;
 }
 
 function normalizeConversationKind(value) {
@@ -226,6 +244,168 @@ function normalizeImageUrl(value) {
   } catch {
     return null;
   }
+}
+
+// Douyin returns avatar metadata in a few shapes depending on the endpoint:
+// a plain URL, a `{ url_list: [...] }` object, or a nested profile object.
+// Keep the traversal deliberately small and allow-listed so a malformed IM
+// payload cannot make us persist arbitrary remote content.
+function imageUrlFromValue(value, depth = 0, seen = new Set()) {
+  if (depth > 4 || value === null || value === undefined) return null;
+  const direct = normalizeImageUrl(value);
+  if (direct) return direct;
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 20)) {
+      const nested = imageUrlFromValue(item, depth + 1, seen);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  if (!isObject(value) || seen.has(value)) return null;
+  seen.add(value);
+  for (const key of [
+    "avatarUrl",
+    "avatar_url",
+    "avatar",
+    "avatarThumb",
+    "avatar_thumb",
+    "avatarLarger",
+    "avatar_larger",
+    "iconUrl",
+    "icon_url",
+    "icon",
+    "url",
+    "uri",
+    "urlList",
+    "url_list",
+    "originUrlList",
+    "origin_url_list",
+    "largeUrlList",
+    "large_url_list",
+    "mediumUrlList",
+    "medium_url_list",
+    "thumbUrlList",
+    "thumb_url_list",
+  ]) {
+    const nested = imageUrlFromValue(value[key], depth + 1, seen);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+export function normalizeChatAvatarUrl(value) {
+  return imageUrlFromValue(value);
+}
+
+function normalizeConversationObject(value) {
+  if (!isObject(value)) return null;
+  const id = firstString(value.id, value.conversationId, value.conversation_id, value.conv_id);
+  if (!id) return null;
+  const core = isObject(value.coreInfo) ? value.coreInfo : isObject(value.core_info) ? value.core_info : null;
+  const user = isObject(value.userInfo)
+    ? value.userInfo
+    : isObject(value.user_info)
+      ? value.user_info
+      : isObject(value.targetUser)
+        ? value.targetUser
+        : isObject(value.target_user)
+          ? value.target_user
+          : isObject(value.user)
+            ? value.user
+            : null;
+  const coreUser = isObject(core?.userInfo)
+    ? core.userInfo
+    : isObject(core?.user_info)
+      ? core.user_info
+      : null;
+  const kind = normalizeConversationKind(value.kind ?? value.type ?? value.conversationType ?? value.conversation_type);
+  const name = kind === "friend"
+    ? firstString(
+        value.nickname,
+        value.nickName,
+        user?.nickname,
+        user?.nickName,
+        coreUser?.nickname,
+        coreUser?.nickName,
+        value.name,
+        value.conversationName,
+        value.conversation_name,
+        value.displayName,
+        value.display_name,
+        core?.name,
+        core?.nickname,
+        core?.nickName,
+        core?.conversationName,
+        user?.name,
+        user?.displayName,
+        user?.display_name,
+        coreUser?.name,
+        coreUser?.displayName,
+        coreUser?.display_name,
+      )
+    : firstString(
+        value.name,
+        value.conversationName,
+        value.conversation_name,
+        value.nickname,
+        value.nickName,
+        core?.name,
+        core?.nickname,
+        core?.nickName,
+        core?.conversationName,
+        user?.nickname,
+        user?.nickName,
+        user?.name,
+        user?.displayName,
+        user?.display_name,
+        coreUser?.nickname,
+        coreUser?.nickName,
+        coreUser?.name,
+        coreUser?.displayName,
+        coreUser?.display_name,
+      );
+  const avatarUrl = normalizeChatAvatarUrl([
+    value.avatarUrl,
+    value.avatar_url,
+    value.avatar,
+    value.avatarThumb,
+    value.avatar_thumb,
+    value.avatarMedium,
+    value.avatar_medium,
+    value.avatarLarger,
+    value.avatar_larger,
+    value.iconUrl,
+    value.icon_url,
+    value.icon,
+    core?.avatarUrl,
+    core?.avatar_url,
+    core?.avatar,
+    core?.avatarThumb,
+    core?.avatar_thumb,
+    core?.avatarLarger,
+    core?.avatar_larger,
+    user?.avatarUrl,
+    user?.avatar_url,
+    user?.avatar,
+    user?.avatarThumb,
+    user?.avatar_thumb,
+    user?.avatarLarger,
+    user?.avatar_larger,
+    coreUser?.avatarUrl,
+    coreUser?.avatar_url,
+    coreUser?.avatar,
+    coreUser?.avatarThumb,
+    coreUser?.avatar_thumb,
+    coreUser?.avatarLarger,
+    coreUser?.avatar_larger,
+  ]);
+  const result = {
+    id,
+    kind,
+    name,
+  };
+  if (avatarUrl) result.avatarUrl = avatarUrl;
+  return result;
 }
 
 function normalizeDouyinUrl(value) {
@@ -465,9 +645,35 @@ function parseMessageObject(value, fallbackConversationId = null, fallbackConver
         ? value.content
       : decodeJsonMaybe(value.content_json ?? value.contentJson ?? value.content);
   const contentObject = isObject(content) ? content : null;
-  const conversation = typeof fallbackConversationId === "object" && fallbackConversationId !== null
+  const embeddedConversation = normalizeConversationObject(
+    isObject(value.conversation)
+      ? value.conversation
+      : isObject(value.conversationInfo)
+        ? value.conversationInfo
+        : isObject(value.conversation_info)
+          ? value.conversation_info
+          : isObject(contentObject?.conversation)
+            ? contentObject.conversation
+            : null,
+  );
+  const conversation = embeddedConversation ?? (typeof fallbackConversationId === "object" && fallbackConversationId !== null
     ? fallbackConversationId
-    : { id: fallbackConversationId, kind: fallbackConversation.conversationType, name: fallbackConversation.conversationName };
+    : { id: fallbackConversationId, kind: fallbackConversation.conversationType, name: fallbackConversation.conversationName });
+  const sender = isObject(value.sender)
+    ? value.sender
+    : isObject(value.sender_info)
+      ? value.sender_info
+      : isObject(value.senderInfo)
+        ? value.senderInfo
+        : isObject(value.user)
+          ? value.user
+          : isObject(value.user_info)
+            ? value.user_info
+            : isObject(contentObject?.sender)
+              ? contentObject.sender
+              : isObject(contentObject?.sender_info)
+                ? contentObject.sender_info
+                : null;
   const conversationId = firstString(value.conv_id, value.conversation_id, value.conversationId, conversation.id, contentObject?.conv_id);
   const conversationType = normalizeConversationKind(value.conversation_type ?? value.conversationType ?? conversation.kind);
   const conversationName = firstString(
@@ -477,7 +683,17 @@ function parseMessageObject(value, fallbackConversationId = null, fallbackConver
     contentObject?.conversationName,
     conversation.name,
   );
-  const senderId = firstString(value.sender_uid, value.sender_id, value.senderId, contentObject?.sender_uid, contentObject?.sender_id);
+  const senderId = firstString(
+    value.sender_uid,
+    value.sender_id,
+    value.senderId,
+    contentObject?.sender_uid,
+    contentObject?.sender_id,
+    sender?.uid,
+    sender?.userId,
+    sender?.user_id,
+    sender?.id,
+  );
   const serverId = firstString(value.server_id, value.serverId, value.message_id, value.messageId, value.id);
   const sentAt = parseTimestamp(value.created_at_us ?? value.createdAtUs ?? value.created_at ?? value.createdAt ?? value.timestamp ?? contentObject?.created_at_us ?? contentObject?.createdAt)
     ?? parseSnowflakeTimestamp(serverId);
@@ -487,13 +703,38 @@ function parseMessageObject(value, fallbackConversationId = null, fallbackConver
   const fallbackId = [conversationId, senderId, sentAt, type, JSON.stringify(contentObject ?? value)].filter(Boolean).join(":");
   const id = serverId ?? (fallbackId || null);
   if (!id) return null;
+  const senderName = firstString(
+    value.sender_name,
+    value.senderName,
+    contentObject?.sender_name,
+    contentObject?.senderName,
+    contentObject?.nickname,
+    sender?.nickname,
+    sender?.nickName,
+    sender?.name,
+    sender?.displayName,
+    sender?.display_name,
+  );
+  const senderAvatarUrl = normalizeChatAvatarUrl([
+    value.senderAvatarUrl,
+    value.sender_avatar_url,
+    value.sender_avatar,
+    sender?.avatarUrl,
+    sender?.avatar_url,
+    sender?.avatar,
+    sender?.avatarThumb,
+    sender?.avatar_thumb,
+    sender?.avatarLarger,
+    sender?.avatar_larger,
+    embeddedConversation?.avatarUrl,
+  ]);
   const message = {
     id: id.slice(0, 300),
     conversationId,
     conversationType,
     conversationName,
     senderId,
-    senderName: firstString(value.sender_name, value.senderName, contentObject?.sender_name, contentObject?.senderName, contentObject?.nickname),
+    senderName,
     sentAt,
     type,
     text: null,
@@ -501,6 +742,7 @@ function parseMessageObject(value, fallbackConversationId = null, fallbackConver
     share: null,
     callDurationSeconds: null,
   };
+  if (senderAvatarUrl) message.senderAvatarUrl = senderAvatarUrl;
   const share = type === "share" ? parseShare(contentForClassification) : null;
   const mediaUrl = parseMediaUrlFromContent(contentForClassification);
   const messageText = parseText(contentObject) ?? parseText(value);
@@ -551,11 +793,31 @@ function readJsonMessages(payload) {
   return pick(payload) ?? pick(payload.data) ?? pick(payload.result);
 }
 
+function findProtoImageUrl(bytes, depth = 0) {
+  if (!(bytes instanceof Uint8Array) || depth > 4) return null;
+  let fields;
+  try {
+    fields = readProtoFields(bytes);
+  } catch {
+    return null;
+  }
+  for (const items of fields.values()) {
+    for (const item of items) {
+      if (item.wireType !== 2 || !(item.value instanceof Uint8Array)) continue;
+      const direct = normalizeImageUrl(decodeText(item.value, MAX_URL));
+      if (direct) return direct;
+      const nested = findProtoImageUrl(item.value, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
 function parseConversationInfo(bytes) {
   const fields = readProtoFields(bytes);
   const core = firstField(fields, 50, 2)?.value;
   const coreFields = core instanceof Uint8Array ? readProtoFields(core) : null;
-  return {
+  const result = {
     id: firstString(decodeText(firstField(fields, 1, 2)?.value), decodeText(firstField(fields, 1)?.value)),
     kind: normalizeConversationKind(firstField(fields, 3, 0)?.value ?? decodeText(firstField(fields, 3, 2)?.value)),
     name: firstString(
@@ -563,6 +825,9 @@ function parseConversationInfo(bytes) {
       coreFields ? decodeText(firstField(coreFields, 5)?.value) : null,
     ),
   };
+  const avatarUrl = findProtoImageUrl(core instanceof Uint8Array ? core : bytes);
+  if (avatarUrl) result.avatarUrl = avatarUrl;
+  return result;
 }
 
 function parseProtoMessage(bytes, fallbackConversation = null) {
@@ -657,6 +922,8 @@ function parseUserMessageResponse(bytes) {
         kind: "unknown",
         name: null,
       };
+      const avatarUrl = findProtoImageUrl(conversationBytes);
+      if (avatarUrl) conversation.avatarUrl = avatarUrl;
       conversations.push(conversation);
       for (const message of [
         ...fieldValues(conversationFields, 2, 2),
@@ -714,7 +981,10 @@ function parseProtoMessages(payload, endpointPath = "") {
   if (rows.length > 0) {
     return { messages: rows.map(parseProtoMessage), conversations, pagination };
   }
-  const looksLikeMessage = [1, 3, 4, 6, 7, 8, 10].some((field) => (sectionFields.get(field)?.length ?? 0) > 0);
+  // A section with only pagination/metadata fields (for example cursor and
+  // has-more) is not a message. The previous broad field-number check treated
+  // those fields as an empty `unknown` message on every chat read.
+  const looksLikeMessage = [6, 8].some((field) => (sectionFields.get(field)?.length ?? 0) > 0);
   if (!looksLikeMessage) return { messages: [], conversations, pagination };
   return { messages: [parseProtoMessage(section)], conversations, pagination };
 }
@@ -722,22 +992,32 @@ function parseProtoMessages(payload, endpointPath = "") {
 function normalizeMessages(rawMessages) {
   const messages = [];
   const seen = new Set();
+  let parsedCount = 0;
   for (const item of rawMessages) {
     if (messages.length >= MAX_CHAT_MESSAGES) break;
     const message = parseMessageObject(item);
-    if (!message || seen.has(message.id)) continue;
+    if (!message) continue;
+    parsedCount += 1;
+    if (isSyntheticChatPlaceholder(message) || seen.has(message.id)) continue;
     seen.add(message.id);
     messages.push(message);
   }
-  return messages.sort((left, right) => {
-    const leftTime = left.sentAt ? Date.parse(left.sentAt) : 0;
-    const rightTime = right.sentAt ? Date.parse(right.sentAt) : 0;
-    return rightTime - leftTime || left.id.localeCompare(right.id);
-  });
+  return {
+    messages: messages.sort((left, right) => {
+      const leftTime = left.sentAt ? Date.parse(left.sentAt) : 0;
+      const rightTime = right.sentAt ? Date.parse(right.sentAt) : 0;
+      return rightTime - leftTime || left.id.localeCompare(right.id);
+    }),
+    parsedCount,
+  };
 }
 
 export function normalizeImapiMessage(value, fallbackConversationId = null) {
   return parseMessageObject(value, fallbackConversationId);
+}
+
+export function normalizeChatConversation(value) {
+  return normalizeConversationObject(value);
 }
 
 export function normalizeImapiResponse(endpoint, payload) {
@@ -788,20 +1068,17 @@ export function normalizeImapiResponse(endpoint, payload) {
     throw new CollectorAdapterError("invalid_response", "IM API 响应类型无效。");
   }
 
-  const chatMessages = normalizeMessages(rawMessages);
-  if (rawMessages.length > 0 && chatMessages.length === 0) {
+  const normalizedMessages = normalizeMessages(rawMessages);
+  const chatMessages = normalizedMessages.messages;
+  if (rawMessages.length > 0 && normalizedMessages.parsedCount === 0) {
     throw new CollectorAdapterError("schema_changed", "IM API 消息列表包含无法识别的数据。请更新采集器适配器。");
   }
 
   const conversations = new Map();
   for (const value of rawConversations) {
-    const id = firstString(value?.id, value?.conversationId, value?.conversation_id);
-    if (!id) continue;
-    conversations.set(id, {
-      id,
-      kind: normalizeConversationKind(value.kind ?? value.type ?? value.conversationType ?? value.conversation_type),
-      name: firstString(value.name, value.conversationName, value.conversation_name),
-    });
+    const conversation = normalizeConversationObject(value);
+    if (!conversation) continue;
+    conversations.set(conversation.id, conversation);
   }
   for (const message of chatMessages) {
     if (!message.conversationId) continue;
@@ -810,6 +1087,9 @@ export function normalizeImapiResponse(endpoint, payload) {
       id: message.conversationId,
       kind: previous?.kind && previous.kind !== "unknown" ? previous.kind : message.conversationType,
       name: previous?.name ?? message.conversationName,
+      ...(previous?.avatarUrl || message.senderAvatarUrl
+        ? { avatarUrl: normalizeChatAvatarUrl(previous?.avatarUrl ?? message.senderAvatarUrl) }
+        : {}),
     });
   }
 
@@ -842,13 +1122,25 @@ export function normalizeChatPayload(payload, context = {}) {
       : message.conversationType,
     conversationName: message.conversationName ?? context.conversationName ?? null,
   }));
-  const conversations = result.conversations.length > 0 || !context.conversationId
-    ? result.conversations
-    : [{
-        id: context.conversationId,
-        kind: normalizeConversationKind(context.conversationType),
-        name: context.conversationName ?? null,
-      }];
+  const contextAvatarUrl = normalizeChatAvatarUrl(
+    context.avatarUrl ?? context.avatar_url ?? context.avatar ?? context.iconUrl ?? context.icon_url,
+  );
+  const conversations = result.conversations.length > 0
+    ? result.conversations.map((conversation) => conversation.id === context.conversationId
+      ? {
+          ...conversation,
+          name: conversation.name ?? context.conversationName ?? null,
+          ...(conversation.avatarUrl || !contextAvatarUrl ? {} : { avatarUrl: contextAvatarUrl }),
+        }
+      : conversation)
+    : !context.conversationId
+      ? result.conversations
+      : [{
+          id: context.conversationId,
+          kind: normalizeConversationKind(context.conversationType),
+          name: context.conversationName ?? null,
+          ...(contextAvatarUrl ? { avatarUrl: contextAvatarUrl } : {}),
+        }];
   return {
     messages,
     conversations,
@@ -868,6 +1160,7 @@ export class ChatMessageAccumulator {
     for (const message of messages ?? []) {
       const normalized = message?.id ? message : normalizeImapiMessage(message);
       if (!normalized) continue;
+      if (isSyntheticChatPlaceholder(normalized)) continue;
       if (!this.messages.has(normalized.id) && this.messages.size >= MAX_CHAT_MESSAGES) {
         if (trackTruncation) break;
         continue;
@@ -882,6 +1175,7 @@ export class ChatMessageAccumulator {
         conversationName: normalized.conversationName ?? previous?.conversationName ?? null,
         senderId: normalized.senderId ?? previous?.senderId ?? null,
         senderName: normalized.senderName ?? previous?.senderName ?? null,
+        senderAvatarUrl: normalized.senderAvatarUrl ?? previous?.senderAvatarUrl ?? null,
         sentAt: normalized.sentAt ?? previous?.sentAt ?? null,
         text: normalized.text ?? previous?.text ?? null,
         mediaUrl: normalized.mediaUrl ?? previous?.mediaUrl ?? null,
@@ -926,14 +1220,60 @@ export class ChatConversationAccumulator {
       if (!id || this.conversations.size >= MAX_CHAT_CONVERSATIONS && !this.conversations.has(id)) continue;
       const kind = normalizeConversationKind(value?.kind ?? value?.type ?? value?.conversationType ?? value?.conversation_type);
       const previous = this.conversations.get(id);
+      const avatarUrl = normalizeChatAvatarUrl(
+        [
+          value?.avatarUrl,
+          value?.avatar_url,
+          value?.avatar,
+          value?.avatarThumb,
+          value?.avatar_thumb,
+          value?.avatarMedium,
+          value?.avatar_medium,
+          value?.avatarLarger,
+          value?.avatar_larger,
+          value?.iconUrl,
+          value?.icon_url,
+          value?.icon,
+          value?.coreInfo,
+          value?.core_info,
+          value?.userInfo,
+          value?.user_info,
+        ],
+      );
+      const valueName = kind === "friend"
+        ? firstString(
+            value?.nickname,
+            value?.nickName,
+            value?.userInfo?.nickname,
+            value?.user_info?.nickname,
+            value?.name,
+            value?.conversationName,
+            value?.conversation_name,
+            value?.coreInfo?.name,
+            value?.coreInfo?.nickname,
+            value?.core_info?.name,
+            value?.core_info?.nickname,
+          )
+        : firstString(
+            value?.name,
+            value?.conversationName,
+            value?.conversation_name,
+            value?.coreInfo?.name,
+            value?.core_info?.name,
+            value?.nickname,
+            value?.nickName,
+            value?.userInfo?.nickname,
+            value?.user_info?.nickname,
+          );
       this.conversations.set(id, {
         id,
         kind: previous?.kind === "group" || kind === "group"
           ? "group"
           : kind !== "unknown" ? kind : previous?.kind ?? "unknown",
         name: previous?.kind === "group"
-          ? firstString(previous?.name, value?.name, value?.conversationName, value?.conversation_name)
-          : firstString(value?.name, value?.conversationName, value?.conversation_name, previous?.name),
+          ? firstString(previous?.name, valueName)
+          : firstString(valueName, previous?.name),
+        avatarUrl: avatarUrl ?? previous?.avatarUrl ?? null,
         messageCount: previous?.messageCount ?? 0,
         ownMessageCount: previous?.ownMessageCount ?? 0,
       });
@@ -946,13 +1286,22 @@ export class ChatConversationAccumulator {
       const id = firstString(message?.conversationId, message?.conversation_id);
       if (!id) continue;
       const kind = normalizeConversationKind(message?.conversationType ?? message?.conversation_type);
+      const senderId = firstString(message?.senderId, message?.sender_id, message?.sender_uid);
+      const senderName = firstString(message?.senderName, message?.sender_name);
+      const explicitName = firstString(message?.conversationName, message?.conversation_name);
+      const inferredName = explicitName
+        ?? (kind !== "group" && senderName && senderId !== this.currentUserId && !/^(我|本人|自己)$/u.test(senderName) ? senderName : null);
+      const avatarUrl = normalizeChatAvatarUrl(
+        message?.avatarUrl ?? message?.avatar_url ?? message?.senderAvatarUrl ?? message?.sender_avatar_url,
+      );
       const previous = this.conversations.get(id);
       if (this.conversations.size >= MAX_CHAT_CONVERSATIONS && !previous) continue;
       if (!previous) {
         this.conversations.set(id, {
           id,
           kind,
-          name: firstString(message?.conversationName, message?.conversation_name),
+          name: inferredName,
+          avatarUrl: avatarUrl ?? null,
           messageCount: 0,
           ownMessageCount: 0,
         });
@@ -960,13 +1309,16 @@ export class ChatConversationAccumulator {
         previous.kind = kind;
       }
       const entry = this.conversations.get(id);
+      if (entry && !entry.name && inferredName) entry.name = inferredName;
+      if (entry && avatarUrl) entry.avatarUrl = avatarUrl;
+      if (!entry) continue;
       const seen = this.messageIds.get(id) ?? new Set();
       this.messageIds.set(id, seen);
       const messageId = firstString(message?.id, message?.server_id, message?.serverId);
       if (!messageId || seen.has(messageId)) continue;
       seen.add(messageId);
       const senders = this.messageSenders.get(id) ?? [];
-      senders.push(firstString(message?.senderId, message?.sender_id, message?.sender_uid));
+      senders.push(senderId);
       this.messageSenders.set(id, senders);
       entry.messageCount += 1;
       if (this.currentUserId && firstString(message?.senderId, message?.sender_id, message?.sender_uid) === this.currentUserId) {
@@ -977,10 +1329,11 @@ export class ChatConversationAccumulator {
 
   snapshot() {
     return [...this.conversations.values()]
-      .map(({ id, kind, name, messageCount, ownMessageCount }) => ({
+      .map(({ id, kind, name, avatarUrl, messageCount, ownMessageCount }) => ({
         id,
         kind,
         name: name ?? null,
+        avatarUrl: avatarUrl ?? null,
         messageCount,
         ownMessageCount,
       }))

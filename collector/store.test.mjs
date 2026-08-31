@@ -59,6 +59,7 @@ describe("CollectorStore", () => {
           id: "group-1",
           kind: "group",
           name: "测试群",
+          avatarUrl: "https://p3.douyinpic.com/group-avatar.jpg",
           messageCount: 12,
           ownMessageCount: 3,
         }],
@@ -88,6 +89,7 @@ describe("CollectorStore", () => {
         id: "group-1",
         kind: "group",
         name: "测试群",
+        avatarUrl: "https://p3.douyinpic.com/group-avatar.jpg",
         messageCount: 12,
         ownMessageCount: 3,
       })]);
@@ -95,6 +97,7 @@ describe("CollectorStore", () => {
         "id",
         "kind",
         "name",
+        "avatarUrl",
         "messageCount",
         "ownMessageCount",
       ]);
@@ -165,6 +168,62 @@ describe("CollectorStore", () => {
         liked_videos: true,
         favorite_videos: true,
       });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("removes legacy empty numeric chat placeholders when loading a snapshot", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "douyin-collector-store-chat-migration-"));
+    try {
+      const filePath = path.join(directory, "records.json");
+      await writeFile(filePath, JSON.stringify({
+        schemaVersion: 2,
+        updatedAt: "2026-08-30T00:00:00.000Z",
+        records: createEmptyRecords(),
+        chatConversations: [{
+          id: "conv-1",
+          kind: "friend",
+          name: "联系人",
+          messageCount: 2,
+          ownMessageCount: 1,
+        }],
+        chatMessages: [{
+          id: "7678560234599844388",
+          conversationId: "conv-1",
+          conversationType: "friend",
+          conversationName: "联系人",
+          senderId: "me",
+          senderName: null,
+          sentAt: "2026-08-27T04:15:21.000Z",
+          type: "unknown",
+          text: null,
+          mediaUrl: null,
+          share: null,
+          callDurationSeconds: null,
+        }, {
+          id: "unknown-file-1",
+          conversationId: "conv-1",
+          conversationType: "friend",
+          conversationName: "联系人",
+          senderId: "friend",
+          senderName: "联系人",
+          sentAt: "2026-08-27T04:16:00.000Z",
+          type: "unknown",
+          text: null,
+          mediaUrl: null,
+          share: null,
+          callDurationSeconds: null,
+        }],
+        warnings: [],
+      }), "utf8");
+
+      const loaded = await new CollectorStore(directory).load();
+      const persisted = JSON.parse(await readFile(filePath, "utf8"));
+
+      expect(loaded.chatMessages.map((message) => message.id)).toEqual(["unknown-file-1"]);
+      expect(persisted.chatMessages.map((message) => message.id)).toEqual(["unknown-file-1"]);
+      expect(persisted.records).toEqual(createEmptyRecords());
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

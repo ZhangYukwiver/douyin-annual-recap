@@ -329,6 +329,26 @@ describe("local collector client", () => {
           url: "https://www.douyin.com/video/123?token=secret",
         },
         callDurationSeconds: 208,
+      }, {
+        id: "7678560234599844388",
+        conversationId: "conv-1",
+        conversationName: "会话",
+        senderId: "user-1",
+        senderName: null,
+        sentAt: "2026-08-27T04:15:21.000Z",
+        type: "unknown",
+        text: null,
+        mediaUrl: null,
+        share: null,
+        callDurationSeconds: null,
+      }],
+      chatConversations: [{
+        id: "conv-1",
+        kind: "friend",
+        nickname: "联系人",
+        avatar: { url_list: ["https://p3.douyinpic.com/contact-avatar.jpg"] },
+        messageCount: 1,
+        ownMessageCount: 0,
       }],
       warnings: [],
     }), { status: 200 })));
@@ -340,6 +360,12 @@ describe("local collector client", () => {
       callDurationSeconds: 208,
       mediaUrl: null,
       share: { coverUrl: "https://p3.douyinpic.com/cover.jpg", url: "https://www.douyin.com/video/123" },
+    });
+    expect(snapshot.chatMessages).toHaveLength(1);
+    expect(snapshot.chatConversations[0]).toMatchObject({
+      id: "conv-1",
+      name: "联系人",
+      avatarUrl: "https://p3.douyinpic.com/contact-avatar.jpg",
     });
   });
 

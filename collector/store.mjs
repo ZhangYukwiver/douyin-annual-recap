@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { isSyntheticChatPlaceholder } from "./chatNormalizer.mjs";
 import { createEmptyRecords, normalizeRecord } from "./normalizer.mjs";
 
 export const SCHEMA_VERSION = 2;
@@ -75,6 +76,49 @@ function chatImageUrl(value) {
   }
 }
 
+function chatAvatarUrl(value, depth = 0, seen = new Set()) {
+  if (depth > 4 || value === null || value === undefined) return null;
+  const direct = chatImageUrl(value);
+  if (direct) return direct;
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 20)) {
+      const nested = chatAvatarUrl(item, depth + 1, seen);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  if (typeof value !== "object" || seen.has(value)) return null;
+  seen.add(value);
+  for (const key of [
+    "avatarUrl",
+    "avatar_url",
+    "avatar",
+    "avatarThumb",
+    "avatar_thumb",
+    "avatarLarger",
+    "avatar_larger",
+    "iconUrl",
+    "icon_url",
+    "icon",
+    "url",
+    "uri",
+    "urlList",
+    "url_list",
+    "originUrlList",
+    "origin_url_list",
+    "largeUrlList",
+    "large_url_list",
+    "mediumUrlList",
+    "medium_url_list",
+    "thumbUrlList",
+    "thumb_url_list",
+  ]) {
+    const nested = chatAvatarUrl(value[key], depth + 1, seen);
+    if (nested) return nested;
+  }
+  return null;
+}
+
 function chatDouyinUrl(value) {
   const text = chatString(value, 2_048);
   if (!text) return null;
@@ -110,7 +154,15 @@ function normalizeChatMessage(value) {
     };
     if (Object.values(candidate).some(Boolean)) share = candidate;
   }
-  return {
+  const senderAvatarUrl = chatAvatarUrl([
+    value.senderAvatarUrl,
+    value.sender_avatar_url,
+    value.sender_avatar,
+    value.sender,
+    value.senderInfo,
+    value.sender_info,
+  ]);
+  const result = {
     id,
     conversationId: chatString(value.conversationId, 300),
     conversationType,
@@ -124,6 +176,8 @@ function normalizeChatMessage(value) {
     share,
     callDurationSeconds: rawDuration,
   };
+  if (senderAvatarUrl) result.senderAvatarUrl = senderAvatarUrl;
+  return result;
 }
 
 function normalizeChatCollection(value, groupConversationIds = new Set()) {
@@ -133,7 +187,13 @@ function normalizeChatCollection(value, groupConversationIds = new Set()) {
   for (const item of value) {
     if (messages.length >= MAX_CHAT_MESSAGES) break;
     const message = normalizeChatMessage(item);
-    if (!message || message.conversationType === "group" || groupConversationIds.has(message.conversationId) || seen.has(message.id)) continue;
+    if (
+      !message
+      || isSyntheticChatPlaceholder(message)
+      || message.conversationType === "group"
+      || groupConversationIds.has(message.conversationId)
+      || seen.has(message.id)
+    ) continue;
     seen.add(message.id);
     messages.push(message);
   }
@@ -159,7 +219,27 @@ function normalizeChatConversations(value) {
     conversations.push({
       id,
       kind,
-      name: chatString(item.name ?? item.conversationName),
+      name: chatString(item.name ?? item.conversationName ?? item.conversation_name ?? item.nickname ?? item.nickName),
+      avatarUrl: chatAvatarUrl(
+        [
+          item.avatarUrl,
+          item.avatar_url,
+          item.avatar,
+          item.avatarThumb,
+          item.avatar_thumb,
+          item.avatarMedium,
+          item.avatar_medium,
+          item.avatarLarger,
+          item.avatar_larger,
+          item.iconUrl,
+          item.icon_url,
+          item.icon,
+          item.coreInfo,
+          item.core_info,
+          item.userInfo,
+          item.user_info,
+        ],
+      ),
       messageCount,
       ownMessageCount,
     });
@@ -209,6 +289,7 @@ export class CollectorStore {
       const groupConversationIds = new Set(chatConversations
         .filter((conversation) => conversation.kind === "group")
         .map((conversation) => conversation.id));
+      const normalizedChatMessages = normalizeChatCollection(parsed.chatMessages, groupConversationIds);
       const snapshot = {
         schemaVersion: SCHEMA_VERSION,
         updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : null,
@@ -217,14 +298,16 @@ export class CollectorStore {
           parsed.schemaVersion === LEGACY_SCHEMA_VERSION ? "platform_action" : "unknown",
         ),
         chatConversations,
-        chatMessages: normalizeChatCollection(parsed.chatMessages, groupConversationIds),
+        chatMessages: normalizedChatMessages,
         warnings: normalizedWarnings(parsed.warnings),
         directSync: normalizeDirectSyncState(parsed.directSync, parsed.warnings),
       };
       if (!snapshot.records) return emptyStoredSnapshot();
       // Persist the canonical v2 shape after reading a v1 snapshot.  Failure to
       // rewrite must not make an otherwise valid legacy snapshot disappear.
-      if (parsed.schemaVersion === LEGACY_SCHEMA_VERSION) {
+      const removedLegacyChatPlaceholders = Array.isArray(parsed.chatMessages)
+        && normalizedChatMessages.length < parsed.chatMessages.length;
+      if (parsed.schemaVersion === LEGACY_SCHEMA_VERSION || removedLegacyChatPlaceholders) {
         try {
           await this.writeSnapshot(snapshot);
         } catch {

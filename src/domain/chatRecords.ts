@@ -26,6 +26,8 @@ export interface ChatMessage {
   conversationName: string | null;
   senderId: string | null;
   senderName: string | null;
+  /** 联系人资料中的头像地址；可选，旧消息快照不会有该字段。 */
+  senderAvatarUrl?: string | null;
   sentAt: string | null;
   type: ChatMessageType;
   text: string | null;
@@ -39,6 +41,8 @@ export interface ChatConversationSummary {
   id: string;
   kind: ChatConversationKind;
   name: string | null;
+  /** 联系人/群聊头像地址；旧快照可能没有该字段。 */
+  avatarUrl?: string | null;
   messageCount: number;
   ownMessageCount: number;
 }

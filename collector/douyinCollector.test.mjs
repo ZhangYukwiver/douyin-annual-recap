@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   directContextLaunchOptions,
   DouyinCollector,
+  normalizeChatConversationCatalog,
   normalizeOwnProfileUrl,
   profileTabUrl,
+  readChatConversationCatalog,
 } from "./douyinCollector.mjs";
 import { createEmptyRecords } from "./normalizer.mjs";
 import { createEndpointProgress } from "./progress.mjs";
@@ -45,6 +47,90 @@ function fakeResponse(pathname, payload) {
     json: () => typeof payload === "function" ? payload() : Promise.resolve(payload),
   };
 }
+
+describe("normalizeChatConversationCatalog", () => {
+  it("normalizes contact nickname aliases and safe avatar candidates", () => {
+    expect(normalizeChatConversationCatalog([
+      {
+        id: "friend-1",
+        kind: "friend",
+        nickname: "联系人甲",
+        avatar_thumb: { url_list: ["https://p3.douyinpic.com/contact.jpg"] },
+      },
+      {
+        id: "friend-2",
+        kind: "friend",
+        nickName: "联系人乙",
+        avatarUrl: "https://evil.example/avatar.jpg",
+      },
+    ])).toEqual([
+      {
+        id: "friend-1",
+        kind: "friend",
+        name: "联系人甲",
+        avatarUrl: "https://p3.douyinpic.com/contact.jpg",
+      },
+      {
+        id: "friend-2",
+        kind: "friend",
+        name: "联系人乙",
+      },
+    ]);
+  });
+
+  it("joins a direct conversation with the participant profile store", async () => {
+    const previousConversationStore = globalThis.conversationStore;
+    const previousUserInfoStore = globalThis.userInfoStore;
+    globalThis.conversationStore = {
+      sortedConversationIdList: ["friend-1", "group-1"],
+      sortedStrangerConversationIdList: [],
+      conversationMap: new Map([
+        ["friend-1", { toParticipantSecUserId: "sec-friend" }],
+        ["group-1", { toParticipantSecUserId: "" }],
+      ]),
+      strangerConversationMap: new Map(),
+      participantMapWithConversationId: new Map([
+        ["friend-1", new Map([
+          ["me", { userId: "me", secUid: "sec-me" }],
+          ["friend", { userId: "friend", secUid: "sec-friend" }],
+        ])],
+        ["group-1", new Map([
+          ["me", { userId: "me", secUid: "sec-me" }],
+          ["member-1", { userId: "member-1", secUid: "sec-member-1" }],
+          ["member-2", { userId: "member-2", secUid: "sec-member-2" }],
+        ])],
+      ]),
+    };
+    globalThis.userInfoStore = {
+      curLoginUserInfo: { uid: "me" },
+      usersInfoMap: new Map([["friend", {
+        nickname: "联系人甲",
+        avatar_thumb: { url_list: ["https://p3.douyinpic.com/contact.jpg"] },
+      }]]),
+    };
+    try {
+      const page = { evaluate: async (callback) => callback() };
+      expect(await readChatConversationCatalog(page)).toEqual([
+        {
+          id: "friend-1",
+          kind: "friend",
+          name: "联系人甲",
+          avatarUrl: "https://p3.douyinpic.com/contact.jpg",
+        },
+        {
+          id: "group-1",
+          kind: "group",
+          name: null,
+        },
+      ]);
+    } finally {
+      if (previousConversationStore === undefined) delete globalThis.conversationStore;
+      else globalThis.conversationStore = previousConversationStore;
+      if (previousUserInfoStore === undefined) delete globalThis.userInfoStore;
+      else globalThis.userInfoStore = previousUserInfoStore;
+    }
+  });
+});
 
 function fakeContext(page) {
   const handlers = new Map();
@@ -414,8 +500,8 @@ describe("DouyinCollector manual observation", () => {
       url: () => "https://www.douyin.com/",
       evaluate: vi.fn(async (fn) => {
         const source = String(fn);
-        if (source.includes("userInfoStore")) return "me";
         if (source.includes("sortedConversationIdList")) return [{ id: "friend-once", kind: "friend", name: "好友" }];
+        if (source.includes("userInfoStore")) return "me";
         if (source.includes("setCurConversation")) return true;
         return null;
       }),

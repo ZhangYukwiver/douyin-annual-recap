@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ChatConversationAccumulator,
+  ChatMessageAccumulator,
   matchImapiEndpoint,
   normalizeImapiResponse,
 } from "./chatNormalizer.mjs";
@@ -183,6 +184,34 @@ describe("normalizeImapiResponse", () => {
     });
   });
 
+  it("uses nested contact profile metadata when a response omits the catalog", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        conv_id: "friend-profile",
+        conversation_type: 1,
+        server_id: "profile-message-1",
+        sender: {
+          uid: "contact-1",
+          nickname: "联系人乙",
+          avatar_thumb: { url_list: ["https://p3.douyinpic.com/contact-2.jpg"] },
+        },
+        type_code: 7,
+        content_json: { text: "在吗" },
+      }],
+    });
+
+    expect(result.chatMessages[0]).toMatchObject({
+      senderId: "contact-1",
+      senderName: "联系人乙",
+      senderAvatarUrl: "https://p3.douyinpic.com/contact-2.jpg",
+    });
+    expect(result.conversations[0]).toMatchObject({
+      id: "friend-profile",
+      avatarUrl: "https://p3.douyinpic.com/contact-2.jpg",
+    });
+  });
+
   it("normalizes protobuf chat responses with the nested imapi wrapper", () => {
     const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_user");
     const message = encodeMessageProto({
@@ -207,6 +236,43 @@ describe("normalizeImapiResponse", () => {
       senderId: "user-5",
       type: "text",
       text: "protobuf text",
+    })]);
+  });
+
+  it("does not turn a pagination-only protobuf section into an unknown message", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const section = encodeMessage([
+      // These are pagination fields, not a message envelope.
+      encodeField(2, 0, 12345),
+      encodeField(3, 0, 1),
+    ]);
+    const response = encodeField(6, 2, encodeField(301, 2, section));
+
+    const result = normalizeImapiResponse(endpoint, response);
+
+    expect(result.pagination).toEqual({ hasMore: true, cursor: "12345" });
+    expect(result.chatMessages).toEqual([]);
+  });
+
+  it("drops empty numeric unknown records produced by an old adapter while keeping identified unknown messages", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        conv_id: "conv-legacy",
+        server_id: "7678560234599844388",
+        sender_uid: "user-1",
+      }, {
+        conv_id: "conv-legacy",
+        server_id: "legacy-file-1",
+        sender_uid: "user-2",
+        sender_name: "联系人",
+      }],
+    });
+
+    expect(result.chatMessages).toEqual([expect.objectContaining({
+      id: "legacy-file-1",
+      type: "unknown",
+      senderName: "联系人",
     })]);
   });
 
@@ -325,7 +391,12 @@ describe("normalizeImapiResponse", () => {
   it("returns conversation metadata so group bodies can be discarded", () => {
     const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
     const result = normalizeImapiResponse(endpoint, {
-      conversations: [{ id: "group-1", type: 2, name: "测试群" }],
+      conversations: [{
+        id: "group-1",
+        type: 2,
+        name: "测试群",
+        avatar_thumb: { url_list: ["https://p3.douyinpic.com/group-avatar.jpg"] },
+      }],
       msgs: [{
         conv_id: "group-1",
         conversation_type: 2,
@@ -340,6 +411,7 @@ describe("normalizeImapiResponse", () => {
       id: "group-1",
       kind: "group",
       name: "测试群",
+      avatarUrl: "https://p3.douyinpic.com/group-avatar.jpg",
     }]);
     expect(result.chatMessages[0]).toMatchObject({ conversationType: "group" });
   });
@@ -362,5 +434,48 @@ describe("ChatConversationAccumulator", () => {
       messageCount: 2,
       ownMessageCount: 1,
     })]);
+  });
+
+  it("keeps a contact nickname and allow-listed avatar across catalog and messages", () => {
+    const accumulator = new ChatConversationAccumulator([], "me");
+    accumulator.addConversations([{
+      id: "friend-1",
+      kind: "friend",
+      nickname: "小红",
+      avatar: { url_list: ["https://p3.douyinpic.com/friend-avatar.jpg"] },
+    }]);
+    accumulator.addMessages([{
+      id: "friend-message-1",
+      conversationId: "friend-1",
+      conversationType: "friend",
+      senderId: "friend-id",
+      senderName: "小红",
+    }]);
+    expect(accumulator.snapshot()).toEqual([expect.objectContaining({
+      id: "friend-1",
+      name: "小红",
+      avatarUrl: "https://p3.douyinpic.com/friend-avatar.jpg",
+      messageCount: 1,
+    })]);
+  });
+
+  it("does not reintroduce an empty numeric placeholder through the message accumulator", () => {
+    const accumulator = new ChatMessageAccumulator();
+    accumulator.addMessages([{
+      id: "7678560234599844388",
+      conversationId: "conv-1",
+      conversationType: "friend",
+      conversationName: null,
+      senderId: "me",
+      senderName: null,
+      sentAt: "2026-08-27T04:15:21.000Z",
+      type: "unknown",
+      text: null,
+      mediaUrl: null,
+      share: null,
+      callDurationSeconds: null,
+    }]);
+
+    expect(accumulator.snapshot()).toEqual([]);
   });
 });
