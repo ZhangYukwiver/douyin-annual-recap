@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   directContextLaunchOptions,
   DouyinCollector,
+  normalizeChatConversationCatalog,
   normalizeOwnProfileUrl,
   profileTabUrl,
+  readChatConversationCatalog,
 } from "./douyinCollector.mjs";
 import { createEmptyRecords } from "./normalizer.mjs";
 import { createEndpointProgress } from "./progress.mjs";
@@ -15,6 +17,8 @@ function emptySnapshot() {
     schemaVersion: 2,
     updatedAt: "2026-08-09T00:00:00.000Z",
     records: createEmptyRecords(),
+    chatMessages: [],
+    chatConversations: [],
     warnings: [],
     directSync: normalizeDirectSyncState(null),
   };
@@ -26,6 +30,8 @@ function mockStore(updatedAt = "2026-08-09T00:10:00.000Z") {
       schemaVersion: 2,
       updatedAt,
       records: structuredClone(records),
+      chatMessages: structuredClone(options.chatMessages ?? []),
+      chatConversations: structuredClone(options.chatConversations ?? []),
       warnings: structuredClone(warnings),
       directSync: normalizeDirectSyncState(options.directSync),
     })),
@@ -41,6 +47,90 @@ function fakeResponse(pathname, payload) {
     json: () => typeof payload === "function" ? payload() : Promise.resolve(payload),
   };
 }
+
+describe("normalizeChatConversationCatalog", () => {
+  it("normalizes contact nickname aliases and safe avatar candidates", () => {
+    expect(normalizeChatConversationCatalog([
+      {
+        id: "friend-1",
+        kind: "friend",
+        nickname: "联系人甲",
+        avatar_thumb: { url_list: ["https://p3.douyinpic.com/contact.jpg"] },
+      },
+      {
+        id: "friend-2",
+        kind: "friend",
+        nickName: "联系人乙",
+        avatarUrl: "https://evil.example/avatar.jpg",
+      },
+    ])).toEqual([
+      {
+        id: "friend-1",
+        kind: "friend",
+        name: "联系人甲",
+        avatarUrl: "https://p3.douyinpic.com/contact.jpg",
+      },
+      {
+        id: "friend-2",
+        kind: "friend",
+        name: "联系人乙",
+      },
+    ]);
+  });
+
+  it("joins a direct conversation with the participant profile store", async () => {
+    const previousConversationStore = globalThis.conversationStore;
+    const previousUserInfoStore = globalThis.userInfoStore;
+    globalThis.conversationStore = {
+      sortedConversationIdList: ["friend-1", "group-1"],
+      sortedStrangerConversationIdList: [],
+      conversationMap: new Map([
+        ["friend-1", { toParticipantSecUserId: "sec-friend" }],
+        ["group-1", { toParticipantSecUserId: "" }],
+      ]),
+      strangerConversationMap: new Map(),
+      participantMapWithConversationId: new Map([
+        ["friend-1", new Map([
+          ["me", { userId: "me", secUid: "sec-me" }],
+          ["friend", { userId: "friend", secUid: "sec-friend" }],
+        ])],
+        ["group-1", new Map([
+          ["me", { userId: "me", secUid: "sec-me" }],
+          ["member-1", { userId: "member-1", secUid: "sec-member-1" }],
+          ["member-2", { userId: "member-2", secUid: "sec-member-2" }],
+        ])],
+      ]),
+    };
+    globalThis.userInfoStore = {
+      curLoginUserInfo: { uid: "me" },
+      usersInfoMap: new Map([["friend", {
+        nickname: "联系人甲",
+        avatar_thumb: { url_list: ["https://p3.douyinpic.com/contact.jpg"] },
+      }]]),
+    };
+    try {
+      const page = { evaluate: async (callback) => callback() };
+      expect(await readChatConversationCatalog(page)).toEqual([
+        {
+          id: "friend-1",
+          kind: "friend",
+          name: "联系人甲",
+          avatarUrl: "https://p3.douyinpic.com/contact.jpg",
+        },
+        {
+          id: "group-1",
+          kind: "group",
+          name: null,
+        },
+      ]);
+    } finally {
+      if (previousConversationStore === undefined) delete globalThis.conversationStore;
+      else globalThis.conversationStore = previousConversationStore;
+      if (previousUserInfoStore === undefined) delete globalThis.userInfoStore;
+      else globalThis.userInfoStore = previousUserInfoStore;
+    }
+  });
+});
 
 function fakeContext(page) {
   const handlers = new Map();
@@ -291,6 +381,224 @@ describe("DouyinCollector manual observation", () => {
 
     await expect(collector.stopObservation()).resolves.toBe(true);
     expect(collector.getStatus().state).toBe("idle");
+  });
+
+  it("captures IM chat responses into the independent chat message collection", async () => {
+    const page = { url: () => "https://www.douyin.com/" };
+    const context = fakeContext(page);
+    const store = mockStore("2026-08-09T00:25:00.000Z");
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
+    collector.snapshot = emptySnapshot();
+    collector.ensureBrowser = vi.fn().mockResolvedValue(context);
+    collector.currentPage = vi.fn().mockResolvedValue(page);
+    collector.visit = vi.fn().mockResolvedValue(undefined);
+    collector.waitForLogin = vi.fn().mockResolvedValue(undefined);
+
+    expect(collector.startChatObservation()).toBe(true);
+    await vi.waitFor(() => expect(collector.getStatus().state).toBe("observing"));
+    expect(collector.ensureBrowser).toHaveBeenCalledWith({ headless: true });
+
+    context.emit("response", {
+      url: () => "https://imapi.douyin.com/v1/message/get_by_conversation",
+      ok: () => true,
+      status: () => 200,
+      headers: () => ({}),
+      json: () => Promise.resolve({ msgs: [{
+        conv_id: "conv-1",
+        server_id: "chat-call-1",
+        type_code: 193,
+        content_json: { aweType: 193, tips: "通话了 3 分 28 秒" },
+      }] }),
+    });
+    await vi.waitFor(() => expect(store.save).toHaveBeenCalledTimes(1));
+    expect(collector.getSnapshot().chatMessages).toMatchObject([{
+      id: "chat-call-1",
+      type: "call",
+      callDurationSeconds: 208,
+    }]);
+
+    await expect(collector.stopObservation()).resolves.toBe(true);
+  });
+
+  it("reloads an already-open chat page so its initial messages are not missed", async () => {
+    let context;
+    const page = {
+      url: () => "https://www.douyin.com/chat?isPopup=1",
+      reload: vi.fn(async () => {
+        context.emit("response", {
+          url: () => "https://imapi.douyin.com/v1/message/get_by_conversation",
+          ok: () => true,
+          status: () => 200,
+          headers: () => ({}),
+          json: () => Promise.resolve({ msgs: [{
+            conv_id: "conv-reload",
+            server_id: "chat-reload-1",
+            type_code: 7,
+            content_json: { text: "重载后捕获" },
+          }] }),
+        });
+      }),
+    };
+    context = fakeContext(page);
+    const store = mockStore("2026-08-09T00:30:00.000Z");
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
+    collector.snapshot = emptySnapshot();
+    collector.ensureBrowser = vi.fn().mockResolvedValue(context);
+    collector.currentPage = vi.fn().mockResolvedValue(page);
+    collector.waitForLogin = vi.fn().mockResolvedValue(undefined);
+
+    expect(collector.startChatObservation()).toBe(true);
+    await vi.waitFor(() => expect(store.save).toHaveBeenCalledTimes(1));
+    expect(collector.ensureBrowser).toHaveBeenCalledWith({ headless: true });
+    expect(page.reload).toHaveBeenCalledTimes(1);
+    expect(collector.getSnapshot().chatMessages).toMatchObject([{ id: "chat-reload-1", text: "重载后捕获" }]);
+
+    await expect(collector.stopObservation()).resolves.toBe(true);
+  });
+
+  it("stores friend bodies but only group aggregates", async () => {
+    const page = {
+      url: () => "https://www.douyin.com/",
+      evaluate: vi.fn(async (fn) => String(fn).includes("userInfoStore") ? "me" : []),
+    };
+    const context = fakeContext(page);
+    const store = mockStore("2026-08-09T00:26:00.000Z");
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
+    collector.snapshot = emptySnapshot();
+    collector.ensureBrowser = vi.fn().mockResolvedValue(context);
+    collector.currentPage = vi.fn().mockResolvedValue(page);
+    collector.visit = vi.fn().mockResolvedValue(undefined);
+    collector.waitForLogin = vi.fn().mockResolvedValue(undefined);
+
+    expect(collector.startChatObservation()).toBe(true);
+    await vi.waitFor(() => expect(collector.getStatus().state).toBe("observing"));
+    context.emit("response", {
+      url: () => "https://imapi.douyin.com/v1/message/get_by_conversation",
+      ok: () => true,
+      status: () => 200,
+      headers: () => ({}),
+      json: () => Promise.resolve({
+        conversations: [{ id: "group-1", kind: "group", name: "测试群" }],
+        msgs: [
+          { conv_id: "group-1", conversation_type: 2, server_id: "group-1", sender_uid: "me", type_code: 7, content_json: { text: "群正文" } },
+          { conv_id: "friend-1", conversation_type: 1, server_id: "friend-1", sender_uid: "me", type_code: 7, content_json: { text: "好友正文" } },
+        ],
+      }),
+    });
+    await vi.waitFor(() => expect(store.save).toHaveBeenCalledTimes(1));
+    expect(collector.getSnapshot().chatMessages).toEqual([expect.objectContaining({ id: "friend-1", text: "好友正文" })]);
+    expect(collector.getSnapshot().chatMessages).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "group-1" })]));
+    expect(collector.getSnapshot().chatConversations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "group-1", kind: "group", name: "测试群", messageCount: 1, ownMessageCount: 1 }),
+      expect.objectContaining({ id: "friend-1", kind: "friend", messageCount: 1, ownMessageCount: 1 }),
+    ]));
+    await expect(collector.stopObservation()).resolves.toBe(true);
+  });
+
+  it("finishes one chat snapshot and removes its response listener automatically", async () => {
+    const page = {
+      url: () => "https://www.douyin.com/",
+      evaluate: vi.fn(async (fn) => {
+        const source = String(fn);
+        if (source.includes("sortedConversationIdList")) return [{ id: "friend-once", kind: "friend", name: "好友" }];
+        if (source.includes("userInfoStore")) return "me";
+        if (source.includes("setCurConversation")) return true;
+        return null;
+      }),
+    };
+    const context = fakeContext(page);
+    const removeListener = vi.spyOn(context, "off");
+    context.close = vi.fn(async () => undefined);
+    const store = mockStore("2026-08-09T00:27:00.000Z");
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
+    collector.snapshot = emptySnapshot();
+    collector.ensureBrowser = vi.fn().mockResolvedValue(context);
+    collector.currentPage = vi.fn().mockResolvedValue(page);
+    collector.visit = vi.fn().mockResolvedValue(undefined);
+    collector.waitForLogin = vi.fn().mockResolvedValue(undefined);
+    const statusUpdates = vi.spyOn(collector, "updateStatus");
+
+    expect(collector.startChatObservation()).toBe(true);
+    await vi.waitFor(() => expect(collector.getStatus().state).toBe("observing"));
+    context.emit("response", {
+      url: () => "https://imapi.douyin.com/v1/message/get_by_conversation",
+      ok: () => true,
+      status: () => 200,
+      headers: () => ({}),
+      json: () => Promise.resolve({
+        has_more: 0,
+        msgs: [{
+          conv_id: "friend-once",
+          conversation_type: 1,
+          server_id: "chat-once-1",
+          sender_uid: "me",
+          type_code: 7,
+          content_json: { text: "只读取这一轮" },
+        }],
+      }),
+    });
+
+    await vi.waitFor(() => expect(collector.getStatus().state).toBe("complete"), { timeout: 5_000 });
+    await vi.waitFor(() => expect(collector.observationPromise).toBeNull());
+    expect(collector.getStatus()).toMatchObject({ state: "complete", phase: null, browserOpen: false });
+    expect(statusUpdates.mock.calls.some(([patch]) => patch.progress?.current === 1 && patch.progress?.total === 1)).toBe(true);
+    expect(statusUpdates.mock.calls.some(([patch]) => /聊天全量读取.*1\/1/u.test(patch.message ?? ""))).toBe(true);
+    expect(collector.getStatus().progress).toBeNull();
+    expect(removeListener).toHaveBeenCalledWith("response", expect.any(Function));
+    expect(context.close).toHaveBeenCalledTimes(1);
+    expect(collector.getSnapshot().chatMessages).toEqual([expect.objectContaining({ id: "chat-once-1" })]);
+
+    const saveCount = store.save.mock.calls.length;
+    context.emit("response", {
+      url: () => "https://imapi.douyin.com/v1/message/get_by_conversation",
+      ok: () => true,
+      status: () => 200,
+      headers: () => ({}),
+      json: () => Promise.resolve({ msgs: [{
+        conv_id: "friend-once",
+        server_id: "chat-after-close",
+        type_code: 7,
+        content_json: { text: "不应持续读取" },
+      }] }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(store.save).toHaveBeenCalledTimes(saveCount);
+    expect(collector.getSnapshot().chatMessages).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "chat-after-close" })]));
+  });
+
+  it("closes a chat context before waiting for a pending navigation to cancel", async () => {
+    let rejectVisit;
+    const page = { url: () => "https://www.douyin.com/" };
+    const context = fakeContext(page);
+    context.close = vi.fn(async () => rejectVisit?.(new Error("context closed")));
+    const pendingVisit = new Promise((_, reject) => { rejectVisit = reject; });
+    const store = mockStore("2026-08-09T00:28:00.000Z");
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store });
+    collector.snapshot = emptySnapshot();
+    collector.context = context;
+    collector.contextHeadless = true;
+    collector.ensureBrowser = vi.fn().mockResolvedValue(context);
+    collector.currentPage = vi.fn().mockResolvedValue(page);
+    collector.visit = vi.fn().mockReturnValue(pendingVisit);
+    collector.waitForLogin = vi.fn().mockResolvedValue(undefined);
+
+    expect(collector.startChatObservation()).toBe(true);
+    await vi.waitFor(() => expect(collector.visit).toHaveBeenCalled());
+    await expect(collector.stopObservation()).resolves.toBe(true);
+    expect(context.close).toHaveBeenCalledTimes(1);
+    expect(collector.getStatus().state).toBe("idle");
+  });
+
+  it("falls back to the browser handle when a context refuses to close", async () => {
+    const browser = { close: vi.fn(async () => undefined) };
+    const context = {
+      close: vi.fn(async () => { throw new Error("context already closed"); }),
+      browser: () => browser,
+    };
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.context = context;
+    await collector.close();
+    expect(browser.close).toHaveBeenCalledTimes(1);
   });
 });
 

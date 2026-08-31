@@ -24,6 +24,45 @@ describe("CollectorStore", () => {
       await store.save(records, ["第一次"]);
       await store.save(records, ["第二次"], {
         directSync: { watch_history: true, liked_videos: false, favorite_videos: true },
+        chatMessages: [{
+          id: "chat-1",
+          conversationId: "conv-1",
+          conversationName: "会话",
+          senderId: "user-1",
+          senderName: "联系人",
+          sentAt: "2026-08-20T00:00:00.000Z",
+          type: "call",
+          text: "通话",
+          mediaUrl: "https://evil.example/image.jpg",
+          share: {
+            title: "视频标题",
+            author: "作者",
+            coverUrl: "https://p3.douyinpic.com/cover.jpg",
+            url: "https://www.douyin.com/video/123?token=secret",
+          },
+          callDurationSeconds: 208,
+        }, {
+          id: "group-body-1",
+          conversationId: "group-1",
+          conversationType: "group",
+          conversationName: "群聊",
+          senderId: "user-1",
+          senderName: "成员",
+          sentAt: "2026-08-20T00:01:00.000Z",
+          type: "text",
+          text: "不应落盘",
+          mediaUrl: null,
+          share: null,
+          callDurationSeconds: null,
+        }],
+        chatConversations: [{
+          id: "group-1",
+          kind: "group",
+          name: "测试群",
+          avatarUrl: "https://p3.douyinpic.com/group-avatar.jpg",
+          messageCount: 12,
+          ownMessageCount: 3,
+        }],
       });
 
       const loaded = await store.load();
@@ -36,6 +75,32 @@ describe("CollectorStore", () => {
         liked_videos: false,
         favorite_videos: true,
       });
+      expect(loaded.chatMessages).toMatchObject([{
+        id: "chat-1",
+        callDurationSeconds: 208,
+        mediaUrl: null,
+        share: {
+          coverUrl: "https://p3.douyinpic.com/cover.jpg",
+          url: "https://www.douyin.com/video/123",
+        },
+      }]);
+      expect(loaded.chatMessages).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "group-body-1" })]));
+      expect(loaded.chatConversations).toEqual([expect.objectContaining({
+        id: "group-1",
+        kind: "group",
+        name: "测试群",
+        avatarUrl: "https://p3.douyinpic.com/group-avatar.jpg",
+        messageCount: 12,
+        ownMessageCount: 3,
+      })]);
+      expect(Object.keys(loaded.chatConversations[0])).toEqual([
+        "id",
+        "kind",
+        "name",
+        "avatarUrl",
+        "messageCount",
+        "ownMessageCount",
+      ]);
       expect(raw).not.toMatch(/cookie|msToken|a_bogus|x-bogus/iu);
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -103,6 +168,62 @@ describe("CollectorStore", () => {
         liked_videos: true,
         favorite_videos: true,
       });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("removes legacy empty numeric chat placeholders when loading a snapshot", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "douyin-collector-store-chat-migration-"));
+    try {
+      const filePath = path.join(directory, "records.json");
+      await writeFile(filePath, JSON.stringify({
+        schemaVersion: 2,
+        updatedAt: "2026-08-30T00:00:00.000Z",
+        records: createEmptyRecords(),
+        chatConversations: [{
+          id: "conv-1",
+          kind: "friend",
+          name: "联系人",
+          messageCount: 2,
+          ownMessageCount: 1,
+        }],
+        chatMessages: [{
+          id: "7678560234599844388",
+          conversationId: "conv-1",
+          conversationType: "friend",
+          conversationName: "联系人",
+          senderId: "me",
+          senderName: null,
+          sentAt: "2026-08-27T04:15:21.000Z",
+          type: "unknown",
+          text: null,
+          mediaUrl: null,
+          share: null,
+          callDurationSeconds: null,
+        }, {
+          id: "unknown-file-1",
+          conversationId: "conv-1",
+          conversationType: "friend",
+          conversationName: "联系人",
+          senderId: "friend",
+          senderName: "联系人",
+          sentAt: "2026-08-27T04:16:00.000Z",
+          type: "unknown",
+          text: null,
+          mediaUrl: null,
+          share: null,
+          callDurationSeconds: null,
+        }],
+        warnings: [],
+      }), "utf8");
+
+      const loaded = await new CollectorStore(directory).load();
+      const persisted = JSON.parse(await readFile(filePath, "utf8"));
+
+      expect(loaded.chatMessages.map((message) => message.id)).toEqual(["unknown-file-1"]);
+      expect(persisted.chatMessages.map((message) => message.id)).toEqual(["unknown-file-1"]);
+      expect(persisted.records).toEqual(createEmptyRecords());
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

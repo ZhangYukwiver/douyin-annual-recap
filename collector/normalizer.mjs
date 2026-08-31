@@ -10,7 +10,6 @@ const ENDPOINT_BY_PATH = new Map([
 
 const RECORD_TYPES = ["watch_history", "liked_videos", "favorite_videos"];
 const RELIABLE_EVENT_SOURCES = new Set(["platform_action", "archive_action"]);
-const MIN_WATCH_PROGRESS_PERCENT = 20;
 const MAX_RECORDS_PER_TYPE = 50_000;
 const MAX_STRING_LENGTH = 500;
 const MAX_URL_LENGTH = 2_048;
@@ -681,10 +680,7 @@ export class RecordAccumulator {
         pagination: normalized.pagination,
       };
     }
-    const acceptedRecords = endpoint.kind === "watch_history"
-      ? normalized.records.filter((record) => record.watchProgress?.percent === undefined
-        || record.watchProgress.percent >= MIN_WATCH_PROGRESS_PERCENT)
-      : normalized.records;
+    const acceptedRecords = normalized.records;
     const acceptedIds = new Set(acceptedRecords.map((record) => record.id));
     return {
       added: this.addRecords(endpoint.kind, acceptedRecords),

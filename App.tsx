@@ -1,49 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   AppState,
   Alert,
-  FlatList,
   Linking,
   Platform,
-  Pressable,
-  ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
-  View,
 } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import {
-  Activity,
-  AlertTriangle,
-  Bookmark,
-  Eye,
-  ExternalLink,
-  FileArchive,
-  Heart,
-  History,
-  Link2,
-  LockKeyhole,
-  Pause,
-  Play,
-  RefreshCw,
-  Server,
-  Sparkles,
-  Trash2,
-  Unplug,
-} from "lucide-react-native";
-
-import { StatusBadge } from "./src/components/StatusBadge";
-import {
   ContentWorkspace,
+  LegacyContentWorkspace,
   SetupWorkspace,
-  type WorkspaceViewKey,
+  type LegacyWorkspaceViewKey,
   workspaceColors,
 } from "./src/components/workspace";
-import { AnnualScrollStory } from "./src/components/story/AnnualScrollStory";
 import { buildPersonalSummary } from "./src/domain/annualReport";
 import { buildLivingReport } from "./src/domain/livingReport";
 import {
@@ -53,12 +25,10 @@ import {
 import {
   countPersonalRecords,
   createEmptyPersonalRecords,
-  PERSONAL_RECORD_TYPES,
   type PersonalArchiveData,
   type PersonalRecordCollection,
-  type PersonalRecordType,
-  type PersonalVideoRecord,
 } from "./src/domain/personalRecords";
+import type { ChatConversationSummary, ChatMessage } from "./src/domain/chatRecords";
 import {
   checkCollectorHealth,
   clearCollectorRecords,
@@ -73,8 +43,10 @@ import {
   startCollectorSync,
   startDirectRecordsSync,
   startCollectorObservation,
+  startCollectorChatObservation,
   stopCollectorSync,
   stopCollectorObservation,
+  stopCollectorChatObservation,
   switchCollectorAccount,
   type CollectorSnapshot,
   type CollectorStatus,
@@ -85,10 +57,8 @@ import {
 } from "./src/services/importPersonalArchive";
 import { getDesktopCollectorConfig } from "./src/desktopRuntime";
 import { shouldAutoSync } from "./src/services/autoSync";
-import { colors } from "./src/theme";
 
-type ViewKey = "summary" | "highlights" | "records" | "sources";
-type BadgeState = "ready" | "not_configured" | "invalid" | "manual_action";
+type ViewKey = "summary" | "highlights" | "records" | "chat" | "sources";
 
 interface SelectedArchive {
   name: string;
@@ -101,31 +71,10 @@ interface SelectedArchive {
 interface DisplaySnapshot {
   source: "collector" | "archive";
   records: PersonalRecordCollection;
+  chatMessages: ChatMessage[];
+  chatConversations: ChatConversationSummary[];
   warnings: string[];
   updatedAt: string | null;
-}
-
-function getStoryDataVersion(snapshot: DisplaySnapshot | null): string | null {
-  if (!snapshot || countPersonalRecords(snapshot.records) === 0) return null;
-  if (snapshot.source === "collector" && snapshot.updatedAt) {
-    return `collector:${snapshot.updatedAt}`;
-  }
-
-  let hash = 2_166_136_261;
-  for (const type of PERSONAL_RECORD_TYPES) {
-    for (const character of type.id) {
-      hash ^= character.charCodeAt(0);
-      hash = Math.imul(hash, 16_777_619);
-    }
-    const records = snapshot.records[type.id];
-    for (const record of records) {
-      for (const character of record.id) {
-        hash ^= character.charCodeAt(0);
-        hash = Math.imul(hash, 16_777_619);
-      }
-    }
-  }
-  return `${snapshot.source}:${hash >>> 0}`;
 }
 
 interface CollectorConnectionOptions {
@@ -134,18 +83,6 @@ interface CollectorConnectionOptions {
   revealSources?: boolean;
   automaticPairing?: boolean;
 }
-
-const recordIcons = {
-  watch_history: History,
-  liked_videos: Heart,
-  favorite_videos: Bookmark,
-} satisfies Record<PersonalRecordType, typeof History>;
-
-const navigationItems = [
-  { id: "summary", label: "持续报告", icon: Sparkles },
-  { id: "records", label: "记录", icon: History },
-  { id: "sources", label: "数据源", icon: Link2 },
-] as const;
 
 const TERMINAL_COLLECTOR_STATES = new Set(["idle", "complete", "partial", "error"]);
 
@@ -191,468 +128,14 @@ function formatBytes(value: number | null): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatDate(value: string | null): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false });
-}
-
-function describeRecord(record: PersonalVideoRecord): string {
-  return [record.author, formatDate(record.occurredAt)].filter(Boolean).join(" | ") || "抖音视频";
-}
-
-function collectorBadgeState(status: CollectorStatus | null, connected: boolean): BadgeState {
-  if (!connected) return "not_configured";
-  if (status?.state === "complete") return "ready";
-  if (status?.state === "error") return "invalid";
-  return "manual_action";
-}
-
 function collectorErrorMessage(error: unknown): string {
   return error instanceof LocalCollectorError ? error.message : "本地采集服务暂时不可用。";
 }
 
-interface RecordsViewProps {
-  activeRecord: PersonalRecordType;
-  onChangeRecord: (record: PersonalRecordType) => void;
-  snapshot: DisplaySnapshot | null;
-  collectorConnected: boolean;
-  collectorBusy: boolean;
-  collectorStatus: CollectorStatus | null;
-  onOpenRecord: (url: string) => Promise<void>;
-  onOpenSources: () => void;
-  onSync: () => Promise<void>;
-  onClear: () => void;
-}
-
-function RecordsView({
-  activeRecord,
-  onChangeRecord,
-  snapshot,
-  collectorConnected,
-  collectorBusy,
-  collectorStatus,
-  onOpenRecord,
-  onOpenSources,
-  onSync,
-  onClear,
-}: RecordsViewProps) {
-  const selectedRecord = PERSONAL_RECORD_TYPES.find((record) => record.id === activeRecord) ?? PERSONAL_RECORD_TYPES[0];
-  const RecordIcon = recordIcons[selectedRecord.id];
-  const records = snapshot?.records[selectedRecord.id] ?? [];
-  const allRecords = snapshot?.records ?? createEmptyPersonalRecords();
-  const totalRecords = countPersonalRecords(allRecords);
-  const sourceLabel = snapshot?.source === "collector" ? "本地浏览器采集" : snapshot?.source === "archive" ? "备用文件导入" : "尚未连接";
-  const meta = collectorStatus?.message ?? (snapshot ? `${totalRecords} 条记录` : "等待本地采集器");
-  const currentCategoryVerifiedEmpty = snapshot?.source === "archive"
-    || (snapshot?.source === "collector" && collectorStatus?.state === "complete");
-  const warningText = snapshot?.warnings.length
-    ? [
-        ...snapshot.warnings.slice(0, 3),
-        ...(snapshot.warnings.length > 3 ? [`另有 ${snapshot.warnings.length - 3} 条提示`] : []),
-      ].join("\n")
-    : null;
-
-  const listHeader = (
-    <View>
-      <View style={styles.sectionHeader}>
-        <View style={styles.sectionHeaderCopy}>
-          <Text style={styles.sectionTitle}>个人记录</Text>
-          <Text numberOfLines={1} style={styles.sectionMeta}>{meta}</Text>
-        </View>
-        <StatusBadge state={collectorBadgeState(collectorStatus, collectorConnected || snapshot !== null)} />
-      </View>
-
-      <View accessibilityRole="tablist" style={styles.recordTabs}>
-        {PERSONAL_RECORD_TYPES.map((record) => {
-          const TabIcon = recordIcons[record.id];
-          const selected = record.id === activeRecord;
-          return (
-            <Pressable
-              key={record.id}
-              accessibilityRole="tab"
-              accessibilityState={{ selected }}
-              accessibilityLabel={`${record.label}，${allRecords[record.id].length} 条`}
-              onPress={() => onChangeRecord(record.id)}
-              style={({ pressed }) => [
-                styles.recordTab,
-                selected && styles.recordTabActive,
-                pressed && styles.pressed,
-              ]}
-            >
-              <TabIcon color={selected ? colors.accent : colors.secondaryText} size={16} />
-              <Text numberOfLines={1} style={[styles.recordTabLabel, selected && styles.recordTabLabelActive]}>
-                {record.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {snapshot ? (
-        <View style={styles.sourceBand}>
-          {snapshot.source === "collector"
-            ? <Server color={colors.cyan} size={20} />
-            : <FileArchive color={colors.accent} size={20} />}
-          <View style={styles.sourceBandCopy}>
-            <Text style={styles.sourceBandTitle}>{sourceLabel}</Text>
-            <Text style={styles.sourceBandDetail}>
-              {snapshot.updatedAt ? `更新于 ${formatDate(snapshot.updatedAt)}` : `${totalRecords} 条记录`}
-            </Text>
-          </View>
-          {collectorConnected ? (
-            <Pressable
-              accessibilityLabel="重新增量读取记录"
-              accessibilityRole="button"
-              disabled={collectorBusy}
-              onPress={() => void onSync()}
-              style={({ pressed }) => [styles.iconButton, collectorBusy && styles.disabled, pressed && styles.pressed]}
-            >
-              {collectorBusy
-                ? <ActivityIndicator color={colors.accent} size="small" />
-                : <RefreshCw color={colors.accent} size={18} />}
-            </Pressable>
-          ) : null}
-          <Pressable
-            accessibilityLabel="清除本地记录缓存"
-            accessibilityRole="button"
-            disabled={collectorBusy}
-            onPress={onClear}
-            style={({ pressed }) => [styles.iconButton, collectorBusy && styles.disabled, pressed && styles.pressed]}
-          >
-            <Trash2 color={colors.secondaryText} size={18} />
-          </Pressable>
-        </View>
-      ) : null}
-
-      {snapshot ? (
-        <View style={styles.recordSummary}>
-          {PERSONAL_RECORD_TYPES.map((record, index) => (
-            <View key={record.id} style={[styles.recordStat, index < 2 && styles.recordStatBorder]}>
-              <Text style={styles.recordStatValue}>{allRecords[record.id].length}</Text>
-              <Text numberOfLines={1} style={styles.recordStatLabel}>{record.label}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-
-      {warningText ? (
-        <View accessibilityLiveRegion="polite" style={styles.warningBand}>
-          <AlertTriangle color={colors.amber} size={18} />
-          <Text style={styles.warningText} numberOfLines={7}>{warningText}</Text>
-        </View>
-      ) : null}
-
-      {records.length > 0 ? <Text style={styles.groupLabel}>{selectedRecord.label}</Text> : null}
-    </View>
-  );
-
-  return (
-    <FlatList
-      contentContainerStyle={styles.recordsContent}
-      data={records}
-      keyExtractor={(record) => record.id}
-      ListHeaderComponent={listHeader}
-      ListEmptyComponent={(
-        <View style={styles.emptyState}>
-          <RecordIcon color={colors.mutedText} size={31} />
-          <Text style={styles.emptyTitle}>
-            {snapshot
-              ? currentCategoryVerifiedEmpty
-                ? `${selectedRecord.label}暂无记录`
-                : `${selectedRecord.label}尚未确认`
-              : `等待${selectedRecord.label}`}
-          </Text>
-          <Text accessibilityLiveRegion="polite" style={styles.emptyDetail}>
-            {collectorStatus?.message ?? "连接电脑上的本地采集服务"}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            disabled={collectorBusy}
-            onPress={collectorConnected ? () => void onSync() : onOpenSources}
-            style={({ pressed }) => [styles.primaryButton, collectorBusy && styles.primaryButtonDisabled, pressed && styles.pressed]}
-          >
-            {collectorBusy ? (
-              <ActivityIndicator color={colors.surface} size="small" />
-            ) : (
-              <>
-                {collectorConnected
-                  ? <RefreshCw color={colors.surface} size={17} />
-                  : <Link2 color={colors.surface} size={17} />}
-                <Text style={styles.primaryButtonText}>{collectorConnected ? "增量读取" : "连接采集器"}</Text>
-              </>
-            )}
-          </Pressable>
-        </View>
-      )}
-      renderItem={({ item }) => (
-        <Pressable
-          accessibilityLabel={`${item.title}，${describeRecord(item)}${item.url ? "，打开视频" : ""}`}
-          accessibilityRole={item.url ? "link" : undefined}
-          disabled={!item.url}
-          onPress={() => item.url && void onOpenRecord(item.url)}
-          style={({ pressed }) => [styles.recordRow, pressed && item.url && styles.recordRowPressed]}
-        >
-          <View style={styles.recordRowIcon}>
-            <RecordIcon color={colors.accent} size={18} />
-          </View>
-          <View style={styles.recordRowCopy}>
-            <Text numberOfLines={2} style={styles.recordRowTitle}>{item.title}</Text>
-            <Text numberOfLines={1} style={styles.recordRowMeta}>{describeRecord(item)}</Text>
-          </View>
-          {item.url ? <ExternalLink color={colors.mutedText} size={18} /> : null}
-        </Pressable>
-      )}
-      showsVerticalScrollIndicator={false}
-      style={styles.recordsList}
-    />
-  );
-}
-
-interface SourcesViewProps {
-  collectorUrl: string;
-  pairingCode: string;
-  connected: boolean;
-  busy: boolean;
-  observing: boolean;
-  switchingAccount: boolean;
-  status: CollectorStatus | null;
-  error: string | null;
-  archive: SelectedArchive | null;
-  pickingArchive: boolean;
-  onChangeCollectorUrl: (value: string) => void;
-  onChangePairingCode: (value: string) => void;
-  onClearCache: () => void;
-  onConnect: () => Promise<void>;
-  onDisconnect: () => Promise<void>;
-  onStartObservation: () => Promise<void>;
-  onStopObservation: () => Promise<void>;
-  onStartIncrementalSync: () => void;
-  onStartFullSync: () => void;
-  onSwitchAccount: () => void;
-  onPickArchive: () => Promise<void>;
-}
-
-function SourcesView({
-  collectorUrl,
-  pairingCode,
-  connected,
-  busy,
-  observing,
-  switchingAccount,
-  status,
-  error,
-  archive,
-  pickingArchive,
-  onChangeCollectorUrl,
-  onChangePairingCode,
-  onClearCache,
-  onConnect,
-  onDisconnect,
-  onStartObservation,
-  onStopObservation,
-  onStartIncrementalSync,
-  onStartFullSync,
-  onSwitchAccount,
-  onPickArchive,
-}: SourcesViewProps) {
-  return (
-    <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-      <View style={styles.sectionHeader}>
-        <View style={styles.sectionHeaderCopy}>
-          <Text style={styles.sectionTitle}>数据源</Text>
-          <Text style={styles.sectionMeta}>{status?.message ?? "本地浏览器采集"}</Text>
-        </View>
-        <StatusBadge state={collectorBadgeState(status, connected)} />
-      </View>
-
-      <View style={styles.collectorBand}>
-        <View style={styles.bandHeading}>
-          <View style={styles.bandIcon}><Server color={colors.cyan} size={21} /></View>
-          <View style={styles.bandHeadingCopy}>
-            <Text style={styles.bandTitle}>本地采集器</Text>
-            <Text style={styles.bandDetail}>独立 Chrome 会话</Text>
-          </View>
-        </View>
-
-        <Text style={styles.inputLabel}>服务地址</Text>
-        <TextInput
-          accessibilityLabel="服务地址"
-          autoCapitalize="none"
-          autoCorrect={false}
-          editable={!connected && !busy}
-          onChangeText={onChangeCollectorUrl}
-          placeholder="http://127.0.0.1:4765"
-          placeholderTextColor={colors.mutedText}
-          selectTextOnFocus
-          style={[styles.textInput, connected && styles.inputDisabled]}
-          value={collectorUrl}
-        />
-
-        {!connected ? (
-          <>
-            <Text style={styles.inputLabel}>配对码</Text>
-            <View style={styles.codeInputWrap}>
-              <LockKeyhole color={colors.secondaryText} size={18} />
-              <TextInput
-                accessibilityLabel="配对码"
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!busy}
-                keyboardType="number-pad"
-                maxLength={8}
-                onChangeText={(value) => onChangePairingCode(value.replace(/\D/gu, ""))}
-                placeholder="8 位数字"
-                placeholderTextColor={colors.mutedText}
-                style={styles.codeInput}
-                value={pairingCode}
-              />
-            </View>
-          </>
-        ) : null}
-
-        <View style={styles.actionRow}>
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy}
-            onPress={() => void (connected
-              ? (observing ? onStopObservation() : onStartObservation())
-              : onConnect())}
-            style={({ pressed }) => [styles.primaryButton, styles.flexButton, busy && styles.primaryButtonDisabled, pressed && styles.pressed]}
-          >
-            {busy
-              ? <ActivityIndicator color={colors.surface} size="small" />
-              : connected
-                ? observing
-                  ? <Pause color={colors.surface} size={17} />
-                  : <Eye color={colors.surface} size={17} />
-                : <Link2 color={colors.surface} size={17} />}
-            <Text style={styles.primaryButtonText}>
-              {connected ? (observing ? "停止监听" : "手动监听") : "连接采集器"}
-            </Text>
-          </Pressable>
-          {connected ? (
-            <>
-              <Pressable
-                accessibilityLabel="增量读取记录"
-                accessibilityRole="button"
-                disabled={busy || observing}
-                onPress={onStartIncrementalSync}
-                style={({ pressed }) => [styles.sampleButton, (busy || observing) && styles.disabled, pressed && styles.pressed]}
-              >
-                <Play color={colors.secondaryText} size={18} />
-                <Text style={styles.sampleButtonText}>增量读取</Text>
-              </Pressable>
-              <Pressable
-                accessibilityLabel="断开采集器"
-                accessibilityRole="button"
-                disabled={busy}
-                onPress={() => void onDisconnect()}
-                style={({ pressed }) => [styles.secondaryIconButton, pressed && styles.pressed]}
-              >
-                <Unplug color={colors.secondaryText} size={19} />
-              </Pressable>
-            </>
-          ) : null}
-        </View>
-
-        {connected ? (
-          <Pressable
-            accessibilityLabel="完整读取记录"
-            accessibilityRole="button"
-            disabled={busy || observing}
-            onPress={onStartFullSync}
-            style={({ pressed }) => [
-              styles.accountSwitchButton,
-              (busy || observing) && styles.disabled,
-              pressed && styles.pressed,
-            ]}
-          >
-            <History color={colors.secondaryText} size={18} />
-            <Text style={styles.accountSwitchText}>完整读取</Text>
-          </Pressable>
-        ) : null}
-
-        {connected ? (
-          <Pressable
-            accessibilityLabel="清除本地记录缓存"
-            accessibilityRole="button"
-            disabled={busy || observing}
-            onPress={onClearCache}
-            style={({ pressed }) => [
-              styles.accountSwitchButton,
-              (busy || observing) && styles.disabled,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Trash2 color={colors.secondaryText} size={18} />
-            <Text style={styles.accountSwitchText}>清除本地缓存</Text>
-          </Pressable>
-        ) : null}
-
-        {connected ? (
-          <Pressable
-            accessibilityRole="button"
-            disabled={switchingAccount || busy}
-            onPress={onSwitchAccount}
-            style={({ pressed }) => [
-              styles.accountSwitchButton,
-              (switchingAccount || busy) && styles.disabled,
-              pressed && styles.pressed,
-            ]}
-          >
-            {switchingAccount
-              ? <ActivityIndicator color={colors.secondaryText} size="small" />
-              : <Unplug color={colors.secondaryText} size={18} />}
-            <Text style={styles.accountSwitchText}>切换账号</Text>
-          </Pressable>
-        ) : null}
-
-        {error ? (
-          <View accessibilityLiveRegion="assertive" style={styles.inlineError}>
-            <AlertTriangle color={colors.accentPressed} size={17} />
-            <Text style={styles.inlineErrorText}>{error}</Text>
-          </View>
-        ) : null}
-
-        <Text style={styles.privacyNote}>Cookie 仅保留在本机专用浏览器配置</Text>
-      </View>
-
-      <Text style={styles.groupLabel}>备用导入</Text>
-      <View style={styles.archiveBand}>
-        <FileArchive color={colors.accent} size={22} />
-        <View style={styles.archiveCopy}>
-          <Text numberOfLines={1} style={styles.bandTitle}>{archive?.name ?? "JSON / ZIP"}</Text>
-          <Text numberOfLines={2} style={styles.bandDetail}>
-            {archive
-              ? archive.data
-                ? `${countPersonalRecords(archive.data.records)} 条 | ${formatBytes(archive.size)}`
-                : describeArchiveInspection(archive.inspection)
-              : "仅在当前会话读取"}
-          </Text>
-        </View>
-        <Pressable
-          accessibilityLabel={archive ? "重新选择备用文件" : "选择备用文件"}
-          accessibilityRole="button"
-          disabled={pickingArchive}
-          onPress={() => void onPickArchive()}
-          style={({ pressed }) => [styles.secondaryIconButton, pickingArchive && styles.disabled, pressed && styles.pressed]}
-        >
-          {pickingArchive
-            ? <ActivityIndicator color={colors.accent} size="small" />
-            : <FileArchive color={colors.accent} size={18} />}
-        </Pressable>
-      </View>
-    </ScrollView>
-  );
-}
-
 function AppContent() {
   const [activeView, setActiveView] = useState<ViewKey>("sources");
-  const [activeRecord, setActiveRecord] = useState<PersonalRecordType>("watch_history");
-  const [storyOpen, setStoryOpen] = useState(false);
-  const [storyMountKey, setStoryMountKey] = useState(0);
+  const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [dashboardView, setDashboardView] = useState<LegacyWorkspaceViewKey>("summary");
   const [privacy, setPrivacy] = useState(false);
   const [selectedArchive, setSelectedArchive] = useState<SelectedArchive | null>(null);
   const [pickingArchive, setPickingArchive] = useState(false);
@@ -671,14 +154,20 @@ function AppContent() {
   const connectingRef = useRef(false);
   const syncConfirmationOpenRef = useRef(false);
   const accountSwitchConfirmationOpenRef = useRef(false);
-  const lastAutoStoryVersionRef = useRef<string | null>(null);
-  const workspaceEnteredRef = useRef(false);
   const autoSyncInFlightRef = useRef(false);
   const autoSyncTriggerRef = useRef<() => void>(() => undefined);
+  const chatStartupPendingRef = useRef(false);
+  const chatStartupTriggeredRef = useRef(false);
+  const chatCollectionInFlightRef = useRef(false);
+  const chatPollRequestRef = useRef<number | null>(null);
 
   useEffect(() => () => {
     pollRequest.current += 1;
     importRequest.current += 1;
+    chatStartupPendingRef.current = false;
+    chatStartupTriggeredRef.current = false;
+    chatCollectionInFlightRef.current = false;
+    chatPollRequestRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -711,6 +200,8 @@ function AppContent() {
     ? {
         source: "collector",
         records: collectorSnapshot.records,
+        chatMessages: collectorSnapshot.chatMessages,
+        chatConversations: collectorSnapshot.chatConversations,
         warnings: collectorSnapshot.warnings,
         updatedAt: collectorSnapshot.updatedAt,
       }
@@ -718,6 +209,8 @@ function AppContent() {
       ? {
           source: "archive",
           records: selectedArchive.data.records,
+          chatMessages: [],
+          chatConversations: [],
           warnings: selectedArchive.data.warnings,
           updatedAt: null,
         }
@@ -779,24 +272,24 @@ function AppContent() {
   }, [autoSyncEnabled, collectorToken, displaySnapshot?.source]);
 
   useEffect(() => {
-    if (storyOpen && (!personalSummary || personalSummary.status === "empty")) {
-      setStoryOpen(false);
-    }
-  }, [personalSummary, storyOpen]);
+    if (!collectorToken || displaySnapshot?.source !== "collector" || !chatStartupPendingRef.current) return undefined;
+    if (collectorBusy || switchingAccount || autoSyncInFlightRef.current || chatCollectionInFlightRef.current) return undefined;
+    if (collectorStatus && !TERMINAL_COLLECTOR_STATES.has(collectorStatus.state)) return undefined;
+
+    // Let the foreground record refresh claim the collector first. The chat
+    // snapshot starts once per app session, then the collector closes it.
+    const timer = setTimeout(() => {
+      if (!chatStartupPendingRef.current || !collectorToken || collectorBusy || switchingAccount || autoSyncInFlightRef.current || chatCollectionInFlightRef.current) return;
+      chatStartupPendingRef.current = false;
+      void beginChatObservation(collectorUrl, collectorToken);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [collectorBusy, collectorStatus?.state, collectorToken, collectorUrl, displaySnapshot?.source, switchingAccount]);
 
   async function refreshCollectorSnapshot(baseUrl: string, token: string, requestId?: number): Promise<boolean> {
     const snapshot = await getCollectorRecords(baseUrl, token);
     if (requestId !== undefined && pollRequest.current !== requestId) return false;
     setCollectorSnapshot(snapshot);
-    if (workspaceEnteredRef.current && autoSyncInFlightRef.current) {
-      const version = getStoryDataVersion({
-        source: "collector",
-        records: snapshot.records,
-        warnings: snapshot.warnings,
-        updatedAt: snapshot.updatedAt,
-      });
-      if (version) lastAutoStoryVersionRef.current = version;
-    }
     return true;
   }
 
@@ -811,7 +304,7 @@ function AppContent() {
         if (status.state === "observing") {
           await refreshCollectorSnapshot(baseUrl, token, requestId);
           if (pollRequest.current !== requestId) return;
-          setCollectorBusy(false);
+          if (status.phase !== "chat_messages") setCollectorBusy(false);
           continue;
         }
         if (TERMINAL_COLLECTOR_STATES.has(status.state)) {
@@ -819,6 +312,14 @@ function AppContent() {
           if (pollRequest.current !== requestId) return;
           setCollectorBusy(false);
           autoSyncInFlightRef.current = false;
+          if (chatPollRequestRef.current === requestId) {
+            chatCollectionInFlightRef.current = false;
+            chatPollRequestRef.current = null;
+          }
+          if (chatStartupPendingRef.current && !chatCollectionInFlightRef.current) {
+            chatStartupPendingRef.current = false;
+            void beginChatObservation(baseUrl, token);
+          }
           return;
         }
       }
@@ -826,6 +327,10 @@ function AppContent() {
       if (pollRequest.current !== requestId) return;
       setCollectorBusy(false);
       autoSyncInFlightRef.current = false;
+      if (chatPollRequestRef.current === requestId) {
+        chatCollectionInFlightRef.current = false;
+        chatPollRequestRef.current = null;
+      }
       const message = collectorErrorMessage(error);
       setCollectorError(message);
       showAlert("无法读取同步状态", message);
@@ -920,6 +425,44 @@ function AppContent() {
     }
   }
 
+  async function beginChatObservation(baseUrl: string, token: string) {
+    if (chatCollectionInFlightRef.current || switchingAccount) return;
+    chatCollectionInFlightRef.current = true;
+    const requestId = pollRequest.current + 1;
+    pollRequest.current = requestId;
+    chatPollRequestRef.current = requestId;
+    setCollectorBusy(true);
+    setCollectorError(null);
+    try {
+      const status = await startCollectorChatObservation(baseUrl, token);
+      if (pollRequest.current !== requestId) {
+        if (chatPollRequestRef.current === requestId) {
+          chatCollectionInFlightRef.current = false;
+          chatPollRequestRef.current = null;
+        }
+        return;
+      }
+      setCollectorStatus(status);
+      void pollCollector(baseUrl, token, requestId);
+    } catch (error) {
+      if (pollRequest.current !== requestId) {
+        if (chatPollRequestRef.current === requestId) {
+          chatCollectionInFlightRef.current = false;
+          chatPollRequestRef.current = null;
+        }
+        return;
+      }
+      if (chatPollRequestRef.current === requestId) {
+        chatCollectionInFlightRef.current = false;
+        chatPollRequestRef.current = null;
+      }
+      setCollectorBusy(false);
+      const message = collectorErrorMessage(error);
+      setCollectorError(message);
+      showAlert("无法读取聊天", message);
+    }
+  }
+
   async function endObservation(baseUrl: string, token: string) {
     const requestId = pollRequest.current + 1;
     pollRequest.current = requestId;
@@ -938,6 +481,31 @@ function AppContent() {
       const message = collectorErrorMessage(error);
       setCollectorError(message);
       showAlert("无法停止手动监听", message);
+    }
+  }
+
+  async function endChatObservation(baseUrl: string, token: string) {
+    const requestId = pollRequest.current + 1;
+    pollRequest.current = requestId;
+    setCollectorBusy(true);
+    setCollectorError(null);
+    try {
+      const status = await stopCollectorChatObservation(baseUrl, token);
+      if (pollRequest.current !== requestId) return;
+      setCollectorStatus(status);
+      await refreshCollectorSnapshot(baseUrl, token, requestId);
+      if (pollRequest.current !== requestId) return;
+      chatCollectionInFlightRef.current = false;
+      chatPollRequestRef.current = null;
+      setCollectorBusy(false);
+    } catch (error) {
+      if (pollRequest.current !== requestId) return;
+      chatCollectionInFlightRef.current = false;
+      chatPollRequestRef.current = null;
+      setCollectorBusy(false);
+      const message = collectorErrorMessage(error);
+      setCollectorError(message);
+      showAlert("无法取消聊天读取", message);
     }
   }
 
@@ -1006,6 +574,10 @@ function AppContent() {
       setCollectorUrl(normalizedUrl);
       setCollectorStatus(status);
       setCollectorSnapshot(snapshot);
+      if (!chatStartupTriggeredRef.current) {
+        chatStartupTriggeredRef.current = true;
+        chatStartupPendingRef.current = true;
+      }
       if (revealSources) setActiveView("sources");
       if (TERMINAL_COLLECTOR_STATES.has(status.state)) {
         setCollectorBusy(false);
@@ -1014,6 +586,9 @@ function AppContent() {
       }
     } catch (error) {
       if (pollRequest.current !== requestId) return;
+      chatStartupPendingRef.current = false;
+      chatCollectionInFlightRef.current = false;
+      chatPollRequestRef.current = null;
       setCollectorBusy(false);
       const message = collectorErrorMessage(error);
       setCollectorError(pairedToken
@@ -1058,8 +633,9 @@ function AppContent() {
     if (!token) return;
     pollRequest.current += 1;
     autoSyncInFlightRef.current = false;
-    workspaceEnteredRef.current = false;
-    lastAutoStoryVersionRef.current = null;
+    chatStartupPendingRef.current = false;
+    chatCollectionInFlightRef.current = false;
+    chatPollRequestRef.current = null;
     setCollectorBusy(true);
     let stopError: string | null = null;
     try {
@@ -1067,14 +643,13 @@ function AppContent() {
     } catch (error) {
       stopError = collectorErrorMessage(error);
     } finally {
-      setStoryOpen(false);
       setCollectorToken(null);
       setCollectorStatus(null);
       setCollectorSnapshot(null);
       setStoppingSync(false);
       setCollectorBusy(false);
       setCollectorError(stopError
-        ? `已断开应用，但无法确认手动监听已停止：${stopError}`
+        ? `已断开应用，但无法确认采集任务已停止：${stopError}`
         : null);
     }
   }
@@ -1084,12 +659,12 @@ function AppContent() {
     const requestId = pollRequest.current + 1;
     pollRequest.current = requestId;
     autoSyncInFlightRef.current = false;
-    workspaceEnteredRef.current = false;
-    lastAutoStoryVersionRef.current = null;
+    chatStartupPendingRef.current = false;
+    chatCollectionInFlightRef.current = false;
+    chatPollRequestRef.current = null;
     setSwitchingAccount(true);
     setCollectorBusy(true);
     setCollectorError(null);
-    setStoryOpen(false);
     setCollectorSnapshot(null);
     try {
       const status = await switchCollectorAccount(collectorUrl, collectorToken);
@@ -1168,7 +743,6 @@ function AppContent() {
       "清除缓存",
       (confirmed) => {
         if (!confirmed) return;
-        setStoryOpen(false);
         autoSyncInFlightRef.current = false;
         if (collectorToken) {
           const requestId = pollRequest.current + 1;
@@ -1212,7 +786,6 @@ function AppContent() {
   }
 
   const workspaceRecords = displaySnapshot?.records ?? createEmptyPersonalRecords();
-  const workspaceView: WorkspaceViewKey = activeView === "summary" || activeView === "highlights" ? activeView : activeRecord;
   const sourceLabel = displaySnapshot?.source === "collector"
     ? "本地浏览器采集"
     : displaySnapshot?.source === "archive"
@@ -1227,52 +800,30 @@ function AppContent() {
       }
     : null;
 
-  function enterDashboard() {
-    setStoryOpen(false);
-    setActiveView("summary");
-  }
-
   function enterWorkspace() {
-    workspaceEnteredRef.current = true;
-    const storyVersion = getStoryDataVersion(displaySnapshot);
+    setDashboardOpen(false);
     setActiveView("summary");
-    if (
-      storyVersion
-      && personalSummary
-      && personalSummary.status !== "empty"
-      && lastAutoStoryVersionRef.current !== storyVersion
-    ) {
-      lastAutoStoryVersionRef.current = storyVersion;
-      setStoryMountKey((key) => key + 1);
-      setStoryOpen(true);
-      return;
-    }
-    setStoryOpen(false);
   }
 
   function replayStory() {
-    if (!personalSummary || personalSummary.status === "empty") return;
-    const storyVersion = getStoryDataVersion(displaySnapshot);
-    if (storyVersion) lastAutoStoryVersionRef.current = storyVersion;
+    setDashboardOpen(false);
     setActiveView("summary");
-    setStoryMountKey((key) => key + 1);
-    setStoryOpen(true);
+  }
+
+  function openDashboard() {
+    setDashboardView("summary");
+    setDashboardOpen(true);
+  }
+
+  function openSettings() {
+    setDashboardOpen(false);
+    setActiveView("sources");
   }
 
   return (
     <SafeAreaView edges={["top", "bottom"]} style={styles.safeArea}>
       <StatusBar style="light" />
-      {storyOpen && personalSummary && personalSummary.status !== "empty" ? (
-        <AnnualScrollStory
-          key={`annual-story-${storyMountKey}`}
-          onEnterDashboard={enterDashboard}
-          privacy={privacy}
-          records={workspaceRecords}
-          livingReport={livingReport}
-          report={personalSummary}
-          sourceLabel={sourceLabel}
-        />
-      ) : activeView === "sources" ? (
+      {activeView === "sources" ? (
         <SetupWorkspace
           archive={archiveInfo}
           busy={collectorBusy}
@@ -1294,13 +845,22 @@ function AppContent() {
           onPickArchive={pickArchive}
           onStartIncrementalSync={confirmIncrementalSync}
           onStartObservation={() => collectorToken ? beginObservation(collectorUrl, collectorToken) : Promise.resolve()}
+          onStartChatObservation={() => {
+            chatStartupTriggeredRef.current = true;
+            chatStartupPendingRef.current = false;
+            return collectorToken ? beginChatObservation(collectorUrl, collectorToken) : Promise.resolve();
+          }}
           onStartFullSync={confirmFullSync}
           onStopSync={() => collectorToken ? endSync(collectorUrl, collectorToken) : Promise.resolve()}
-          onStopObservation={() => collectorToken ? endObservation(collectorUrl, collectorToken) : Promise.resolve()}
+          onStopObservation={() => collectorToken
+            ? collectorStatus?.phase === "chat_messages"
+              ? endChatObservation(collectorUrl, collectorToken)
+              : endObservation(collectorUrl, collectorToken)
+            : Promise.resolve()}
           onSwitchAccount={confirmAccountSwitch}
           autoSyncEnabled={autoSyncEnabled}
           onToggleAutoSync={() => setAutoSyncEnabled((value) => !value)}
-          observing={collectorStatus?.state === "observing"}
+          observing={collectorStatus?.state === "observing" && collectorStatus?.phase !== "chat_messages"}
           pairingCode={pairingCode}
           pickingArchive={pickingArchive}
           records={workspaceRecords}
@@ -1310,26 +870,47 @@ function AppContent() {
           stoppingSync={stoppingSync}
           switchingAccount={switchingAccount}
         />
+      ) : dashboardOpen ? (
+        <LegacyContentWorkspace
+          activeView={dashboardView}
+          busy={collectorBusy}
+          chatConversations={displaySnapshot?.chatConversations ?? []}
+          chatMessages={displaySnapshot?.chatMessages ?? []}
+          onChangeView={setDashboardView}
+          onOpenRecord={openRecord}
+          onOpenSettings={openSettings}
+          onReplayStory={replayStory}
+          onSync={() => collectorToken ? confirmIncrementalSync() : openSettings()}
+          onTogglePrivacy={() => setPrivacy((value) => !value)}
+          privacy={privacy}
+          records={workspaceRecords}
+          report={personalSummary ?? livingReport}
+          sourceLabel={sourceLabel}
+          status={collectorStatus}
+          updatedAt={displaySnapshot?.updatedAt ?? null}
+        />
       ) : (
         <ContentWorkspace
-          activeView={workspaceView}
+          activeView={activeView === "chat" ? "chat" : activeView === "highlights" ? "highlights" : "summary"}
           busy={collectorBusy}
+          onOpenDashboard={openDashboard}
           onChangeView={(view) => {
-            if (view === "summary" || view === "highlights") {
+            if (view === "summary" || view === "highlights" || view === "chat") {
               setActiveView(view);
               return;
             }
-            setActiveRecord(view);
-            setActiveView("records");
+            setActiveView("summary");
           }}
           onOpenRecord={openRecord}
-          onOpenSettings={() => setActiveView("sources")}
+          onOpenSettings={openSettings}
           onReplayStory={replayStory}
           onSync={() => collectorToken ? confirmIncrementalSync() : setActiveView("sources")}
           onTogglePrivacy={() => setPrivacy((value) => !value)}
           privacy={privacy}
           records={workspaceRecords}
-          report={livingReport}
+          chatMessages={displaySnapshot?.chatMessages ?? []}
+          chatConversations={displaySnapshot?.chatConversations ?? []}
+          report={personalSummary ?? livingReport}
           sourceLabel={sourceLabel}
           status={collectorStatus}
           updatedAt={displaySnapshot?.updatedAt ?? null}
@@ -1349,281 +930,4 @@ export default function App() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: workspaceColors.canvas },
-  appFrame: {
-    flex: 1,
-    width: "100%",
-    maxWidth: Platform.OS === "web" ? 520 : undefined,
-    alignSelf: "center",
-    backgroundColor: colors.background,
-  },
-  header: {
-    height: 64,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 18,
-    backgroundColor: colors.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  brandMark: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.text,
-  },
-  headerCopy: { flex: 1, marginLeft: 11 },
-  title: { color: colors.text, fontSize: 17, fontWeight: "800" },
-  subtitle: { color: colors.secondaryText, fontSize: 12, marginTop: 2 },
-  pressed: { opacity: 0.68 },
-  disabled: { opacity: 0.48 },
-  recordsList: { flex: 1 },
-  recordsContent: { padding: 18, paddingBottom: 30 },
-  scrollContent: { padding: 18, paddingBottom: 30 },
-  sectionHeader: {
-    minHeight: 48,
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    marginBottom: 14,
-  },
-  sectionHeaderCopy: { flex: 1, minWidth: 0, paddingRight: 12 },
-  sectionTitle: { color: colors.text, fontSize: 22, fontWeight: "800" },
-  sectionMeta: { color: colors.secondaryText, fontSize: 13, marginTop: 4 },
-  recordTabs: {
-    height: 54,
-    flexDirection: "row",
-    gap: 3,
-    padding: 3,
-    borderRadius: 8,
-    backgroundColor: colors.inkSoft,
-  },
-  recordTab: {
-    flex: 1,
-    height: 48,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
-    borderRadius: 6,
-  },
-  recordTabActive: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
-  recordTabLabel: { color: colors.secondaryText, fontSize: 12, fontWeight: "700" },
-  recordTabLabelActive: { color: colors.accent },
-  sourceBand: {
-    minHeight: 68,
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 14,
-    paddingLeft: 14,
-    paddingRight: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  sourceBandCopy: { flex: 1, minWidth: 0, marginHorizontal: 11 },
-  sourceBandTitle: { color: colors.text, fontSize: 14, fontWeight: "700" },
-  sourceBandDetail: { color: colors.secondaryText, fontSize: 12, marginTop: 4 },
-  iconButton: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: 8 },
-  recordSummary: {
-    minHeight: 76,
-    flexDirection: "row",
-    marginTop: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    overflow: "hidden",
-  },
-  recordStat: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
-  recordStatBorder: { borderRightWidth: 1, borderRightColor: colors.border },
-  recordStatValue: { color: colors.text, fontSize: 20, fontWeight: "800" },
-  recordStatLabel: { color: colors.secondaryText, fontSize: 11, fontWeight: "700", marginTop: 3 },
-  warningBand: {
-    minHeight: 52,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-    marginTop: 10,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: colors.amberSoft,
-  },
-  warningText: { flex: 1, color: colors.amber, fontSize: 12, lineHeight: 18 },
-  groupLabel: { color: colors.text, fontSize: 14, fontWeight: "800", marginTop: 24, marginBottom: 10 },
-  emptyState: {
-    minHeight: 230,
-    marginTop: 14,
-    paddingHorizontal: 22,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderStyle: "dashed",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surface,
-  },
-  emptyTitle: { color: colors.text, fontSize: 14, fontWeight: "700", marginTop: 12 },
-  emptyDetail: { color: colors.secondaryText, fontSize: 12, lineHeight: 18, marginTop: 5, textAlign: "center" },
-  primaryButton: {
-    minWidth: 112,
-    height: 48,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-    marginTop: 20,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: colors.accent,
-  },
-  primaryButtonDisabled: { backgroundColor: colors.secondaryText },
-  primaryButtonText: { color: colors.surface, fontSize: 13, fontWeight: "700" },
-  recordRow: {
-    minHeight: 78,
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 8,
-    paddingHorizontal: 13,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  recordRowPressed: { backgroundColor: colors.inkSoft },
-  recordRowIcon: {
-    width: 36,
-    height: 36,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 8,
-    backgroundColor: colors.redSoft,
-  },
-  recordRowCopy: { flex: 1, minWidth: 0, marginHorizontal: 11 },
-  recordRowTitle: { color: colors.text, fontSize: 14, fontWeight: "700", lineHeight: 19 },
-  recordRowMeta: { color: colors.secondaryText, fontSize: 12, marginTop: 4 },
-  collectorBand: {
-    padding: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  bandHeading: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-  bandIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#E8F6F8",
-  },
-  bandHeadingCopy: { flex: 1, minWidth: 0, marginLeft: 11 },
-  bandTitle: { color: colors.text, fontSize: 14, fontWeight: "700" },
-  bandDetail: { color: colors.secondaryText, fontSize: 12, marginTop: 4 },
-  inputLabel: { color: colors.secondaryText, fontSize: 12, fontWeight: "700", marginBottom: 6, marginTop: 10 },
-  textInput: {
-    width: "100%",
-    height: 48,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    color: colors.text,
-    backgroundColor: colors.surface,
-    fontSize: 16,
-  },
-  inputDisabled: { color: colors.secondaryText, backgroundColor: colors.inkSoft },
-  codeInputWrap: {
-    width: "100%",
-    height: 48,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  codeInput: { flex: 1, height: 46, color: colors.text, fontSize: 16 },
-  actionRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  flexButton: { flex: 1 },
-  secondaryIconButton: {
-    width: 48,
-    height: 48,
-    marginTop: 20,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surface,
-  },
-  sampleButton: {
-    minWidth: 102,
-    height: 48,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    marginTop: 20,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  sampleButtonText: { color: colors.secondaryText, fontSize: 12, fontWeight: "700" },
-  accountSwitchButton: {
-    width: "100%",
-    height: 48,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-    marginTop: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  accountSwitchText: { color: colors.secondaryText, fontSize: 13, fontWeight: "700" },
-  privacyNote: { color: colors.green, fontSize: 12, lineHeight: 18, marginTop: 12 },
-  inlineError: {
-    minHeight: 48,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginTop: 10,
-    paddingHorizontal: 11,
-    borderRadius: 8,
-    backgroundColor: colors.redSoft,
-  },
-  inlineErrorText: { flex: 1, color: colors.accentPressed, fontSize: 12, lineHeight: 18 },
-  archiveBand: {
-    minHeight: 76,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingLeft: 14,
-    paddingRight: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  archiveCopy: { flex: 1, minWidth: 0, marginHorizontal: 11 },
-  tabBar: {
-    height: 68,
-    flexDirection: "row",
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  tab: { flex: 1, alignItems: "center", justifyContent: "center", gap: 4 },
-  tabLabel: { color: colors.mutedText, fontSize: 11, fontWeight: "700" },
-  tabLabelActive: { color: colors.accent },
 });

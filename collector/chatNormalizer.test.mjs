@@ -1,0 +1,481 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  ChatConversationAccumulator,
+  ChatMessageAccumulator,
+  matchImapiEndpoint,
+  normalizeImapiResponse,
+} from "./chatNormalizer.mjs";
+
+function encodeVarint(value) {
+  let current = value;
+  const bytes = [];
+  while (current >= 0x80) {
+    bytes.push((current & 0x7f) | 0x80);
+    current = Math.floor(current / 0x80);
+  }
+  bytes.push(current);
+  return Uint8Array.from(bytes);
+}
+
+function encodeField(field, wireType, valueBytes) {
+  const tag = (field << 3) | wireType;
+  const tagBytes = encodeVarint(tag);
+  if (wireType === 0) {
+    return Uint8Array.from([...tagBytes, ...encodeVarint(valueBytes)]);
+  }
+  if (wireType !== 2) throw new Error(`unsupported wire type ${wireType}`);
+  return Uint8Array.from([...tagBytes, ...encodeVarint(valueBytes.length), ...valueBytes]);
+}
+
+function encodeStringField(field, value) {
+  return encodeField(field, 2, new TextEncoder().encode(value));
+}
+
+function encodeMessage(fields) {
+  const chunks = fields.flatMap((chunk) => [...chunk]);
+  return Uint8Array.from(chunks);
+}
+
+function concatBytes(...chunks) {
+  const size = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const output = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return output;
+}
+
+function encodeMessageProto(message) {
+  const fields = [
+    encodeStringField(1, message.conv_id),
+    encodeStringField(3, message.server_id),
+    encodeField(4, 0, message.created_at_us),
+    encodeField(5, 0, message.order),
+    encodeField(6, 0, message.type_code),
+    encodeStringField(7, message.sender_uid),
+    encodeStringField(8, message.content_json),
+  ];
+  return encodeMessage(fields);
+}
+
+function encodeMessageBodyProto(message) {
+  return encodeMessage([
+    encodeStringField(1, message.conv_id),
+    encodeField(3, 0, message.server_id),
+    encodeField(6, 0, message.type_code),
+    encodeStringField(7, message.sender_uid),
+    encodeStringField(8, message.content),
+    encodeField(10, 0, message.create_time),
+  ]);
+}
+
+function encodeResponseEnvelope(command, body) {
+  return encodeMessage([
+    encodeField(1, 0, command),
+    encodeField(6, 2, encodeField(command, 2, body)),
+  ]);
+}
+
+describe("matchImapiEndpoint", () => {
+  it("matches the supported IM API message endpoint", () => {
+    expect(matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation/?cursor=1"))
+      .toEqual({ kind: "chat_messages", pathname: "/v1/message/get_by_conversation" });
+    expect(matchImapiEndpoint("https://evil.example/v1/message/get_by_conversation")).toBeNull();
+    expect(matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_message_by_init")).toEqual({
+      kind: "chat_messages",
+      pathname: "/v1/message/get_message_by_init",
+    });
+    expect(matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_user_message/")).toEqual({
+      kind: "chat_messages",
+      pathname: "/v1/message/get_user_message",
+    });
+  });
+});
+
+describe("normalizeImapiResponse", () => {
+  it("normalizes JSON chat responses for text, image, sticker, share, and call messages", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation/");
+    const result = normalizeImapiResponse(endpoint, {
+      has_more: 1,
+      next_ts: "1700000000000000",
+      msgs: [
+        {
+          conv_id: "conv-1",
+          server_id: "text-1",
+          created_at_us: "1700000000000000",
+          sender_uid: "user-1",
+          type_code: 7,
+          content_json: "{\"text\":\"你好呀\"}",
+        },
+        {
+          conv_id: "conv-1",
+          server_id: "image-1",
+          created_at_us: "1700000001000000",
+          sender_uid: "user-2",
+          type_code: "image",
+          content_json: { image_url: "https://p3.douyinpic.com/image.jpg" },
+        },
+        {
+          conv_id: "conv-1",
+          server_id: "sticker-1",
+          created_at_us: "1700000002000000",
+          sender_uid: "user-2",
+          type_code: "sticker",
+          content_json: { sticker_url: "https://p3.douyinpic.com/sticker.png", text: "贴纸" },
+        },
+        {
+          conv_id: "conv-1",
+          server_id: "share-1",
+          created_at_us: "1700000003000000",
+          sender_uid: "user-3",
+          type_code: "share",
+          content_json: {
+            share: {
+              title: "分享视频",
+              author: "作者甲",
+              cover_url: "https://p3.douyinpic.com/cover.jpg",
+              share_url: "https://www.douyin.com/video/123?token=secret#trace",
+            },
+          },
+        },
+        {
+          conv_id: "conv-1",
+          server_id: "call-1",
+          created_at_us: "1700000004000000",
+          sender_uid: "user-4",
+          type_code: "call",
+          content_json: { duration_ms: 125000 },
+        },
+      ],
+    });
+
+    expect(result.pagination).toEqual({ hasMore: true, cursor: "1700000000000000" });
+    expect(result.chatMessages).toHaveLength(5);
+    expect(result.chatMessages.find((message) => message.id === "text-1")).toMatchObject({
+      type: "text",
+      text: "你好呀",
+      sentAt: "2023-11-14T22:13:20.000Z",
+    });
+    expect(result.chatMessages.find((message) => message.id === "image-1")).toMatchObject({
+      type: "image",
+      mediaUrl: "https://p3.douyinpic.com/image.jpg",
+    });
+    expect(result.chatMessages.find((message) => message.id === "sticker-1")).toMatchObject({
+      type: "sticker",
+      mediaUrl: "https://p3.douyinpic.com/sticker.png",
+      text: "贴纸",
+    });
+    expect(result.chatMessages.find((message) => message.id === "share-1")).toMatchObject({
+      type: "share",
+      text: "分享视频",
+      share: {
+        title: "分享视频",
+        author: "作者甲",
+        coverUrl: "https://p3.douyinpic.com/cover.jpg",
+        url: "https://www.douyin.com/video/123",
+      },
+    });
+    expect(result.chatMessages.find((message) => message.id === "call-1")).toMatchObject({
+      type: "call",
+      callDurationSeconds: 125,
+    });
+  });
+
+  it("uses nested contact profile metadata when a response omits the catalog", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        conv_id: "friend-profile",
+        conversation_type: 1,
+        server_id: "profile-message-1",
+        sender: {
+          uid: "contact-1",
+          nickname: "联系人乙",
+          avatar_thumb: { url_list: ["https://p3.douyinpic.com/contact-2.jpg"] },
+        },
+        type_code: 7,
+        content_json: { text: "在吗" },
+      }],
+    });
+
+    expect(result.chatMessages[0]).toMatchObject({
+      senderId: "contact-1",
+      senderName: "联系人乙",
+      senderAvatarUrl: "https://p3.douyinpic.com/contact-2.jpg",
+    });
+    expect(result.conversations[0]).toMatchObject({
+      id: "friend-profile",
+      avatarUrl: "https://p3.douyinpic.com/contact-2.jpg",
+    });
+  });
+
+  it("normalizes protobuf chat responses with the nested imapi wrapper", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_user");
+    const message = encodeMessageProto({
+      conv_id: "conv-2",
+      server_id: "proto-1",
+      created_at_us: 1_700_000_005_000_000,
+      order: 1,
+      type_code: 7,
+      sender_uid: "user-5",
+      content_json: "{\"text\":\"protobuf text\"}",
+    });
+    const section = encodeField(1, 2, message);
+    const wrapper = encodeField(301, 2, section);
+    const response = encodeField(6, 2, wrapper);
+
+    const result = normalizeImapiResponse(endpoint, response);
+
+    expect(result.pagination).toEqual({ hasMore: null, cursor: null });
+    expect(result.chatMessages).toEqual([expect.objectContaining({
+      id: "proto-1",
+      conversationId: "conv-2",
+      senderId: "user-5",
+      type: "text",
+      text: "protobuf text",
+    })]);
+  });
+
+  it("does not turn a pagination-only protobuf section into an unknown message", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const section = encodeMessage([
+      // These are pagination fields, not a message envelope.
+      encodeField(2, 0, 12345),
+      encodeField(3, 0, 1),
+    ]);
+    const response = encodeField(6, 2, encodeField(301, 2, section));
+
+    const result = normalizeImapiResponse(endpoint, response);
+
+    expect(result.pagination).toEqual({ hasMore: true, cursor: "12345" });
+    expect(result.chatMessages).toEqual([]);
+  });
+
+  it("drops empty numeric unknown records produced by an old adapter while keeping identified unknown messages", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        conv_id: "conv-legacy",
+        server_id: "7678560234599844388",
+        sender_uid: "user-1",
+      }, {
+        conv_id: "conv-legacy",
+        server_id: "legacy-file-1",
+        sender_uid: "user-2",
+        sender_name: "联系人",
+      }],
+    });
+
+    expect(result.chatMessages).toEqual([expect.objectContaining({
+      id: "legacy-file-1",
+      type: "unknown",
+      senderName: "联系人",
+    })]);
+  });
+
+  it("unwraps the initial message feed and keeps the conversation id", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_message_by_init");
+    const message = encodeMessageBodyProto({
+      conv_id: "",
+      server_id: 123456789,
+      type_code: 7,
+      sender_uid: 99,
+      content: "{\"text\":\"初始化消息\"}",
+      create_time: 1_700_000_005_000,
+    });
+    const conversation = encodeMessage([
+      encodeField(1, 2, encodeStringField(1, "conv-init")),
+      encodeField(2, 2, message),
+    ]);
+    const body = encodeMessage([
+      encodeField(1, 2, conversation),
+      encodeField(2, 0, 0),
+      encodeField(3, 0, 1_700_000_005_000),
+    ]);
+
+    const result = normalizeImapiResponse(endpoint, encodeResponseEnvelope(2043, body));
+
+    expect(result.pagination).toEqual({ hasMore: false, cursor: "1700000005000" });
+    expect(result.chatMessages).toEqual([expect.objectContaining({
+      id: "123456789",
+      conversationId: "conv-init",
+      type: "text",
+      text: "初始化消息",
+      sentAt: "2023-11-14T22:13:25.000Z",
+    })]);
+  });
+
+  it("reads a Chinese call duration without using adjacent message timestamps", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        conv_id: "conv-call",
+        server_id: "call-text-1",
+        created_at_us: "1700000000000000",
+        type_code: 0,
+        content_json: { aweType: 193, tips: "通话了 3 分 28 秒" },
+      }],
+    });
+
+    expect(result.chatMessages[0]).toMatchObject({
+      type: "call",
+      callDurationSeconds: 208,
+      sentAt: "2023-11-14T22:13:20.000Z",
+    });
+  });
+
+  it("reads the nested message returned by get_by_id", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_id");
+    const message = encodeMessageProto({
+      conv_id: "conv-by-id",
+      server_id: "by-id-1",
+      created_at_us: 1_700_000_005_000_000,
+      order: 1,
+      type_code: 7,
+      sender_uid: "user-by-id",
+      content_json: "{\"text\":\"按 ID 读取\"}",
+    });
+    const envelope = encodeMessage([
+      encodeField(1, 0, 0),
+      encodeField(2, 2, message),
+    ]);
+    const command = encodeField(211, 2, encodeField(1, 2, envelope));
+    const response = encodeMessage([encodeField(6, 2, command)]);
+
+    const result = normalizeImapiResponse(endpoint, response);
+
+    expect(result.chatMessages).toEqual([expect.objectContaining({
+      id: "by-id-1",
+      conversationId: "conv-by-id",
+      text: "按 ID 读取",
+    })]);
+  });
+
+  it("leaves duration unavailable when the call system message omits it", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{ server_id: "call-no-duration", content_json: { aweType: 193, tips: "通话成功" } }],
+    });
+    expect(result.chatMessages[0]).toMatchObject({ type: "call", callDurationSeconds: null });
+  });
+
+  it("uses Douyin's direct share-card fields when no nested share object exists", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        server_id: "share-direct",
+        type_code: 0,
+        content_json: {
+          aweType: 11054,
+          content_title: "直接分享标题",
+          content_name: "分享作者",
+          cover_url: { url_list: ["https://p3.douyinpic.com/direct-cover.jpg"] },
+          itemId: "456",
+        },
+      }],
+    });
+    expect(result.chatMessages[0]).toMatchObject({
+      type: "share",
+      share: {
+        title: "直接分享标题",
+        author: "分享作者",
+        coverUrl: "https://p3.douyinpic.com/direct-cover.jpg",
+        url: "https://www.douyin.com/video/456",
+      },
+    });
+  });
+
+  it("returns conversation metadata so group bodies can be discarded", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      conversations: [{
+        id: "group-1",
+        type: 2,
+        name: "测试群",
+        avatar_thumb: { url_list: ["https://p3.douyinpic.com/group-avatar.jpg"] },
+      }],
+      msgs: [{
+        conv_id: "group-1",
+        conversation_type: 2,
+        server_id: "group-message-1",
+        sender_uid: "user-1",
+        type_code: 7,
+        content_json: { text: "群聊正文" },
+      }],
+    });
+
+    expect(result.conversations).toEqual([{
+      id: "group-1",
+      kind: "group",
+      name: "测试群",
+      avatarUrl: "https://p3.douyinpic.com/group-avatar.jpg",
+    }]);
+    expect(result.chatMessages[0]).toMatchObject({ conversationType: "group" });
+  });
+});
+
+describe("ChatConversationAccumulator", () => {
+  it("counts unique group messages and messages sent by the current user", () => {
+    const accumulator = new ChatConversationAccumulator([], "me");
+    accumulator.addConversations([{ id: "group-1", kind: "group", name: "测试群" }]);
+    accumulator.addMessages([
+      { id: "m-1", conversationId: "group-1", conversationType: "group", senderId: "me" },
+      { id: "m-1", conversationId: "group-1", conversationType: "group", senderId: "me" },
+      { id: "m-2", conversationId: "group-1", conversationType: "group", senderId: "other" },
+    ]);
+    accumulator.addConversations([{ id: "group-1", kind: "friend", name: "误分类" }]);
+    expect(accumulator.snapshot()).toEqual([expect.objectContaining({
+      id: "group-1",
+      kind: "group",
+      name: "测试群",
+      messageCount: 2,
+      ownMessageCount: 1,
+    })]);
+  });
+
+  it("keeps a contact nickname and allow-listed avatar across catalog and messages", () => {
+    const accumulator = new ChatConversationAccumulator([], "me");
+    accumulator.addConversations([{
+      id: "friend-1",
+      kind: "friend",
+      nickname: "小红",
+      avatar: { url_list: ["https://p3.douyinpic.com/friend-avatar.jpg"] },
+    }]);
+    accumulator.addMessages([{
+      id: "friend-message-1",
+      conversationId: "friend-1",
+      conversationType: "friend",
+      senderId: "friend-id",
+      senderName: "小红",
+    }]);
+    expect(accumulator.snapshot()).toEqual([expect.objectContaining({
+      id: "friend-1",
+      name: "小红",
+      avatarUrl: "https://p3.douyinpic.com/friend-avatar.jpg",
+      messageCount: 1,
+    })]);
+  });
+
+  it("does not reintroduce an empty numeric placeholder through the message accumulator", () => {
+    const accumulator = new ChatMessageAccumulator();
+    accumulator.addMessages([{
+      id: "7678560234599844388",
+      conversationId: "conv-1",
+      conversationType: "friend",
+      conversationName: null,
+      senderId: "me",
+      senderName: null,
+      sentAt: "2026-08-27T04:15:21.000Z",
+      type: "unknown",
+      text: null,
+      mediaUrl: null,
+      share: null,
+      callDurationSeconds: null,
+    }]);
+
+    expect(accumulator.snapshot()).toEqual([]);
+  });
+});

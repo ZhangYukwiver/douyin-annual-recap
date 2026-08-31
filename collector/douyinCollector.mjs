@@ -17,6 +17,15 @@ import {
 } from "./directHistory.mjs";
 import { CollectorAdapterError, RecordAccumulator, matchDouyinEndpoint, mergeRecords } from "./normalizer.mjs";
 import {
+  ChatAdapterError,
+  ChatConversationAccumulator,
+  ChatMessageAccumulator,
+  matchChatEndpoint,
+  normalizeChatAvatarUrl,
+  normalizeChatConversation,
+  normalizeChatPayload,
+} from "./chatNormalizer.mjs";
+import {
   createEndpointProgress,
   isEndpointComplete,
   recordEndpointMatch,
@@ -25,6 +34,7 @@ import {
 import { normalizeDirectSyncState } from "./store.mjs";
 
 const HOME_URL = "https://www.douyin.com/";
+const CHAT_URL = "https://www.douyin.com/chat?isPopup=1";
 const SELF_PROFILE_URL = "https://www.douyin.com/user/self";
 const LOGIN_COOKIE_NAMES = new Set(["sessionid", "sessionid_ss", "sid_tt", "sid_guard"]);
 const REQUIRED_TYPES = ["watch_history", "liked_videos", "favorite_videos"];
@@ -40,12 +50,18 @@ const TYPE_LABELS = {
 };
 const MAX_LOGIN_WAIT_MS = 10 * 60 * 1000;
 const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
+const MAX_CHAT_MESSAGES = 100_000;
+// ponytail: bound a broken cursor chain while still allowing the 100k-message
+// local cap to be reached for a genuinely long friend conversation.
+const CHAT_FRIEND_HISTORY_PAGE_LIMIT = 2_000;
 const ENDPOINT_ACTIVATION_WAIT_MS = 8_000;
 const RESPONSE_DRAIN_WAIT_MS = 12_000;
 const RESPONSE_PROGRESS_SILENCE_MS = 20_000;
 const RESPONSE_REPLAY_TIMEOUT_MS = 8_000;
 const CONTEXT_CLOSE_TIMEOUT_MS = 5_000;
 const MANUAL_OBSERVATION_WARNING = "手动监听模式：仅保存你在独立浏览器中实际浏览到的数据，完整性不会自动验证。";
+const LEGACY_CHAT_OBSERVATION_WARNING = "聊天监听模式：使用无头浏览器自动读取；群聊只保存群名和消息统计，好友对话保存已加载的完整消息内容。";
+const CHAT_OBSERVATION_WARNING = "聊天读取（单次）：使用无头浏览器自动读取，完成后自动停止；群聊只保存群名和消息统计，好友对话保存已加载的完整消息内容。";
 const DIRECT_COMPLETE_WARNING_PREFIX = "无界面读取完成：";
 
 export function directContextLaunchOptions({ executablePath, userAgent, platform = process.platform }) {
@@ -74,18 +90,306 @@ class CollectorCancelledError extends Error {
   }
 }
 
-function recordCounts(records) {
+function recordCounts(records, chatMessages = [], chatConversations = []) {
+  const groupIds = new Set((chatConversations ?? [])
+    .filter((conversation) => conversation?.kind === "group")
+    .map((conversation) => conversation.id));
+  const friendMessageCount = (chatMessages ?? []).filter((message) => (
+    message?.conversationType !== "group" && !groupIds.has(message?.conversationId)
+  )).length;
+  const groupMessageCount = (chatConversations ?? [])
+    .filter((conversation) => conversation?.kind === "group")
+    .reduce((total, conversation) => total + (Number.isSafeInteger(conversation.messageCount) ? conversation.messageCount : 0), 0);
   return {
-    watch_history: records.watch_history.length,
-    liked_videos: records.liked_videos.length,
-    favorite_videos: records.favorite_videos.length,
+    watch_history: records.watch_history?.length ?? 0,
+    liked_videos: records.liked_videos?.length ?? 0,
+    favorite_videos: records.favorite_videos?.length ?? 0,
+    chat_messages: Math.min(MAX_CHAT_MESSAGES, friendMessageCount + groupMessageCount),
   };
+}
+
+async function readCurrentUserId(page) {
+  if (!page || typeof page.evaluate !== "function") return null;
+  return page.evaluate(() => {
+    const storeId = globalThis.userInfoStore?.curLoginUserInfo?.uid;
+    let savedId = null;
+    try {
+      savedId = JSON.parse(globalThis.localStorage?.getItem("user_info") ?? "null")?.uid ?? null;
+    } catch {
+      // A malformed local cache should not stop chat collection.
+    }
+    const value = storeId ?? savedId;
+    return value === null || value === undefined ? null : String(value);
+  }).catch(() => null);
+}
+
+export async function readChatConversationCatalog(page) {
+  if (!page || typeof page.evaluate !== "function") return [];
+  const rawCatalog = await page.evaluate(() => {
+    const store = globalThis.conversationStore;
+    if (!store) return [];
+    const read = (target, key) => {
+      try {
+        return target?.[key] ?? null;
+      } catch {
+        return null;
+      }
+    };
+    const firstText = (...values) => {
+      for (const value of values) {
+        if (typeof value !== "string" && typeof value !== "number") continue;
+        const text = String(value).trim();
+        if (text) return text.slice(0, 500);
+      }
+      return null;
+    };
+    const mapLookup = (map, key) => {
+      if (!map || key === null || key === undefined || key === "") return null;
+      try {
+        return map.get?.(key) ?? null;
+      } catch {
+        return null;
+      }
+    };
+    const firstUrl = (...values) => {
+      const queue = values.map((value) => ({ value, depth: 0 }));
+      const seenValues = new Set();
+      let inspected = 0;
+      while (queue.length > 0 && inspected < 80) {
+        const entry = queue.shift();
+        if (!entry || entry.depth > 4) continue;
+        inspected += 1;
+        const value = entry.value;
+        if (typeof value === "string") {
+          const text = value.trim();
+          if (/^https?:\/\//iu.test(text)) return text.slice(0, 2048);
+          continue;
+        }
+        if (Array.isArray(value)) {
+          for (const item of value.slice(0, 20)) queue.push({ value: item, depth: entry.depth + 1 });
+          continue;
+        }
+        if (!value || typeof value !== "object" || seenValues.has(value)) continue;
+        seenValues.add(value);
+        for (const key of [
+          "avatarUrl", "avatar_url", "avatar", "avatarThumb", "avatar_thumb", "avatarMedium", "avatar_medium", "avatarLarger", "avatar_larger",
+          "iconUrl", "icon_url", "icon", "url", "uri", "urlList", "url_list", "originUrlList", "origin_url_list",
+          "largeUrlList", "large_url_list", "mediumUrlList", "medium_url_list", "thumbUrlList", "thumb_url_list",
+        ]) {
+          queue.push({ value: read(value, key), depth: entry.depth + 1 });
+        }
+      }
+      return null;
+    };
+    const ids = [
+      ...(store.sortedConversationIdList ?? []),
+      ...(store.sortedStrangerConversationIdList ?? []),
+    ];
+    const result = [];
+    const seen = new Set();
+    for (const rawId of ids) {
+      const id = typeof rawId === "string" || typeof rawId === "number" ? String(rawId).trim() : "";
+      if (!id || seen.has(id)) continue;
+      const conversation = store.conversationMap?.get(rawId)
+        ?? store.strangerConversationMap?.get(rawId)
+        ?? store.conversationMap?.get(id)
+        ?? store.strangerConversationMap?.get(id);
+      if (!conversation) continue;
+      seen.add(id);
+      const core = read(conversation, "coreInfo") ?? read(conversation, "core_info");
+      const user = read(conversation, "userInfo")
+        ?? read(conversation, "user_info")
+        ?? read(conversation, "targetUser")
+        ?? read(conversation, "target_user")
+        ?? read(conversation, "user");
+      const coreUser = read(core, "userInfo") ?? read(core, "user_info");
+      const businessType = String(
+        read(conversation, "bizType") ?? read(conversation, "type") ?? read(conversation, "conversationType") ?? "",
+      ).toLowerCase();
+      const explicitGroup = businessType === "2" || businessType === "group" || businessType === "group_chat";
+      const participantMap = mapLookup(store.participantMapWithConversationId, id);
+      let participants = [];
+      try { participants = [...(participantMap?.values?.() ?? [])]; } catch { participants = []; }
+      const participantSecUid = firstText(
+        read(conversation, "toParticipantSecUserId"),
+        read(conversation, "to_participant_sec_user_id"),
+        read(conversation, "_toParticipantSecUserId"),
+      );
+      // The conversation objects in the current web client omit bizType. A
+      // direct chat carries one target sec UID, while group entries expose
+      // several participants and no target UID; use that as a conservative
+      // fallback only when the endpoint did not provide an explicit type.
+      const isGroup = explicitGroup || (!businessType && !participantSecUid && participants.length > 2);
+      const userInfoStore = globalThis.userInfoStore;
+      const selfUid = firstText(read(userInfoStore?.curLoginUserInfo, "uid"));
+      let participant = null;
+      let profile = null;
+      if (!isGroup) {
+        for (const candidate of participants) {
+          const candidateUid = firstText(read(candidate, "userId"), read(candidate, "uid"));
+          if (!candidateUid || candidateUid === selfUid) continue;
+          const candidateSecUid = firstText(read(candidate, "secUid"), read(candidate, "sec_uid"));
+          const candidateProfile = mapLookup(userInfoStore?.usersInfoMap, candidateUid)
+            ?? mapLookup(userInfoStore?.usersInfoMap, candidateSecUid);
+          participant ??= candidate;
+          profile ??= candidateProfile;
+          if (candidateProfile) {
+            participant = candidate;
+            profile = candidateProfile;
+            break;
+          }
+        }
+      }
+      const name = isGroup
+        ? firstText(
+            read(conversation, "name"),
+            read(conversation, "conversationName"),
+            read(conversation, "conversation_name"),
+            read(core, "name"),
+            read(core, "nickname"),
+            read(core, "nickName"),
+            read(conversation, "nickname"),
+            read(conversation, "nickName"),
+            read(user, "nickname"),
+            read(user, "nickName"),
+            read(user, "name"),
+            read(user, "displayName"),
+            read(user, "display_name"),
+            read(coreUser, "nickname"),
+            read(coreUser, "nickName"),
+            read(coreUser, "name"),
+            read(coreUser, "displayName"),
+            read(coreUser, "display_name"),
+          )
+        : firstText(
+            read(profile, "nickname"),
+            read(profile, "nickName"),
+            read(profile, "nick_name"),
+            read(participant, "alias"),
+            read(conversation, "nickname"),
+            read(conversation, "nickName"),
+            read(user, "nickname"),
+            read(user, "nickName"),
+            read(coreUser, "nickname"),
+            read(coreUser, "nickName"),
+            read(conversation, "name"),
+            read(conversation, "conversationName"),
+            read(conversation, "conversation_name"),
+            read(core, "name"),
+            read(core, "nickname"),
+            read(core, "nickName"),
+            read(user, "name"),
+            read(user, "displayName"),
+            read(user, "display_name"),
+            read(coreUser, "name"),
+            read(coreUser, "displayName"),
+            read(coreUser, "display_name"),
+      );
+      const avatarUrl = firstUrl(
+        read(profile, "avatarUrl"),
+        read(profile, "avatar_url"),
+        read(read(profile, "avatar_thumb"), "url_list"),
+        read(read(profile, "avatar_thumb"), "urlList"),
+        read(read(profile, "avatar_small"), "url_list"),
+        read(read(profile, "avatar_small"), "urlList"),
+        read(read(profile, "avatar_medium"), "url_list"),
+        read(read(profile, "avatar_medium"), "urlList"),
+        read(read(profile, "avatar_larger"), "url_list"),
+        read(read(profile, "avatar_larger"), "urlList"),
+        read(profile, "avatar_thumb"),
+        read(profile, "avatar_small"),
+        read(profile, "avatar_medium"),
+        read(profile, "avatar_larger"),
+        read(profile, "avatar300Url"),
+        read(profile, "avatar_300_url"),
+        read(profile, "avatarThumb"),
+        read(profile, "avatarLarger"),
+        read(conversation, "avatarUrl"),
+        read(conversation, "avatar_url"),
+        read(conversation, "avatar"),
+        read(conversation, "avatarThumb"),
+        read(conversation, "avatar_thumb"),
+        read(conversation, "avatarMedium"),
+        read(conversation, "avatar_medium"),
+        read(conversation, "avatarLarger"),
+        read(conversation, "avatar_larger"),
+        read(conversation, "iconUrl"),
+        read(conversation, "icon_url"),
+        read(conversation, "icon"),
+        read(core, "avatarUrl"),
+        read(core, "avatar_url"),
+        read(core, "avatar"),
+        read(core, "avatarThumb"),
+        read(core, "avatar_thumb"),
+        read(core, "avatarLarger"),
+        read(core, "avatar_larger"),
+        read(user, "avatarUrl"),
+        read(user, "avatar_url"),
+        read(user, "avatar"),
+        read(user, "avatarThumb"),
+        read(user, "avatar_thumb"),
+        read(user, "avatarLarger"),
+        read(user, "avatar_larger"),
+        read(coreUser, "avatarUrl"),
+        read(coreUser, "avatar_url"),
+        read(coreUser, "avatar"),
+        read(coreUser, "avatarThumb"),
+        read(coreUser, "avatar_thumb"),
+        read(coreUser, "avatarLarger"),
+        read(coreUser, "avatar_larger"),
+      );
+      result.push({
+        id,
+        kind: isGroup ? "group" : "friend",
+        name,
+        avatarUrl,
+      });
+    }
+    return result;
+  }).catch(() => []);
+  return normalizeChatConversationCatalog(rawCatalog);
+}
+
+export function normalizeChatConversationCatalog(values) {
+  const seen = new Set();
+  return (Array.isArray(values) ? values : []).flatMap((value) => {
+    const conversation = normalizeChatConversation(value);
+    if (!conversation || seen.has(conversation.id)) return [];
+    seen.add(conversation.id);
+    return [conversation];
+  });
+}
+
+function mergeChatConversationSnapshots(previous = [], current = []) {
+  const merged = new Map((current ?? []).map((conversation) => [conversation.id, conversation]));
+  for (const conversation of previous ?? []) {
+    const next = merged.get(conversation.id);
+    if (!next) {
+      merged.set(conversation.id, conversation);
+      continue;
+    }
+    merged.set(conversation.id, {
+      ...conversation,
+      ...next,
+      kind: conversation.kind === "group" || next.kind === "group"
+        ? "group"
+        : next.kind === "unknown" ? conversation.kind : next.kind,
+      name: conversation.kind === "group"
+        ? conversation.name ?? next.name ?? null
+        : next.name ?? conversation.name ?? null,
+      avatarUrl: normalizeChatAvatarUrl(next.avatarUrl) ?? normalizeChatAvatarUrl(conversation.avatarUrl) ?? null,
+      messageCount: Math.max(conversation.messageCount ?? 0, next.messageCount ?? 0),
+      ownMessageCount: Math.max(conversation.ownMessageCount ?? 0, next.ownMessageCount ?? 0),
+    });
+  }
+  return [...merged.values()];
 }
 
 function safeMessage(error, fallback) {
   if (error instanceof Error && error.message === "login_timeout") return "登录等待已超时，请重新同步。";
   if (error instanceof DirectHistoryError) return error.message;
   if (error instanceof CollectorAdapterError) return error.message;
+  if (error instanceof ChatAdapterError) return error.message;
   if (error instanceof Error && error.name === "TimeoutError") return "抖音网页加载超时，请检查网络后重试。";
   return fallback;
 }
@@ -101,7 +405,7 @@ async function closeContextWithin(context) {
   });
   try {
     await Promise.race([
-      closeTask.then(() => { completed = true; }, () => { completed = true; }),
+      closeTask.then(() => { completed = true; }, () => undefined),
       deadline,
     ]);
   } finally {
@@ -236,6 +540,19 @@ async function readJsonWithReplay(response, fallbackPage, replayUrls) {
       throw initialError;
     } finally {
       replayUrls.delete(requestUrl);
+    }
+  }
+}
+
+async function readChatResponse(response) {
+  try {
+    return await response.json();
+  } catch (jsonError) {
+    if (typeof response.body !== "function") throw jsonError;
+    try {
+      return await response.body();
+    } catch {
+      throw jsonError;
     }
   }
 }
@@ -607,6 +924,7 @@ export class DouyinCollector {
     this.profileDirectory = path.join(dataDirectory, "browser-profile");
     this.store = store;
     this.context = null;
+    this.contextHeadless = null;
     this.syncPromise = null;
     this.syncStopRequested = false;
     this.observation = null;
@@ -618,7 +936,8 @@ export class DouyinCollector {
       state: "idle",
       phase: null,
       message: "等待同步",
-      counts: recordCounts({ watch_history: [], liked_videos: [], favorite_videos: [] }),
+      counts: recordCounts({ watch_history: [], liked_videos: [], favorite_videos: [] }, [], []),
+      progress: null,
       updatedAt: null,
       browserOpen: false,
     };
@@ -626,8 +945,10 @@ export class DouyinCollector {
 
   async initialize() {
     this.snapshot = await this.store.load();
+    this.snapshot.chatMessages ??= [];
+    this.snapshot.chatConversations ??= [];
     this.updateStatus({
-      counts: recordCounts(this.snapshot.records),
+      counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
       updatedAt: this.snapshot.updatedAt,
     });
   }
@@ -650,8 +971,9 @@ export class DouyinCollector {
     this.updateStatus({
       state: "idle",
       phase: null,
+      progress: null,
       message: "本地记录已清除",
-      counts: recordCounts(this.snapshot.records),
+      counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
       updatedAt: this.snapshot.updatedAt,
     });
     return this.getSnapshot();
@@ -665,6 +987,7 @@ export class DouyinCollector {
     this.updateStatus({
       state: mode === "direct_records" ? "collecting" : "launching_browser",
       phase: mode === "direct_records" ? "watch_history" : null,
+      progress: null,
       message: mode === "direct_records" ? "正在直接读取观看、点赞和收藏记录" : "正在准备同步",
     });
     const promise = (mode === "direct_records" ? this.runDirectRecords(runId) : this.runSync(runId))
@@ -673,6 +996,7 @@ export class DouyinCollector {
         this.updateStatus({
           state: "error",
           phase: null,
+          progress: null,
           message: safeMessage(error, mode === "direct_records"
             ? "记录直接读取失败。"
             : "采集失败，请关闭浏览器后重试。"),
@@ -696,6 +1020,7 @@ export class DouyinCollector {
       this.updateStatus({
         state: "collecting",
         phase: null,
+        progress: null,
         message: "正在停止读取",
       });
     }
@@ -706,8 +1031,9 @@ export class DouyinCollector {
       this.updateStatus({
         state: "idle",
         phase: null,
+        progress: null,
         message: "已停止读取，已保留上次保存的记录",
-        counts: recordCounts(this.snapshot.records),
+        counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
         updatedAt: this.snapshot.updatedAt,
         browserOpen: Boolean(this.context),
       });
@@ -719,7 +1045,12 @@ export class DouyinCollector {
     return this.startSync({ mode: "direct_records" });
   }
 
-  startObservation({ allowAccountSwitch = false } = {}) {
+  startChatObservation({ allowAccountSwitch = false } = {}) {
+    // Keep the endpoint name for compatibility; chat runs are one-shot.
+    return this.startObservation({ allowAccountSwitch, mode: "chat" });
+  }
+
+  startObservation({ allowAccountSwitch = false, mode = "records" } = {}) {
     if (this.syncPromise || this.observationPromise || (this.accountSwitchPromise && !allowAccountSwitch)) return false;
     const runId = this.syncRunId + 1;
     this.syncRunId = runId;
@@ -735,17 +1066,29 @@ export class DouyinCollector {
     this.observation = observation;
     this.updateStatus({
       state: "launching_browser",
-      phase: null,
-      message: "正在打开独立抖音浏览器以监听手动浏览",
+      phase: mode === "chat" ? "chat_messages" : null,
+      progress: null,
+      message: mode === "chat"
+        ? "正在启动无头抖音会话以读取聊天记录"
+        : "正在打开独立抖音浏览器以监听手动浏览",
     });
-    const promise = this.runObservation(runId, observation)
-      .catch((error) => {
+    observation.mode = mode;
+    const promise = (mode === "chat" ? this.runChatObservation(runId, observation) : this.runObservation(runId, observation))
+      .catch(async (error) => {
         if (error instanceof CollectorCancelledError || !observation.active || runId !== this.syncRunId) return;
         this.updateStatus({
           state: "error",
           phase: null,
-          message: safeMessage(error, "手动监听启动失败，请关闭浏览器后重试。"),
+          progress: null,
+          message: safeMessage(error, mode === "chat" ? "聊天读取启动失败，请稍后重试。" : "手动监听启动失败，请关闭浏览器后重试。"),
         });
+        if (mode === "chat" && this.context && this.contextHeadless) {
+          const context = this.context;
+          this.context = null;
+          this.contextHeadless = null;
+          await closeContextWithin(context);
+          this.updateStatus({ browserOpen: false });
+        }
       })
       .finally(() => {
         if (this.observation === observation) this.observation = null;
@@ -762,13 +1105,22 @@ export class DouyinCollector {
     observation.active = false;
     this.syncRunId += 1;
     observation.stop();
+    if (observation.mode === "chat" && this.context && this.contextHeadless) {
+      const context = this.context;
+      this.context = null;
+      this.contextHeadless = null;
+      // Close first so a navigation or response body cannot hold cancellation
+      // open while the chat run is winding down.
+      await closeContextWithin(context);
+    }
     await promise.catch(() => undefined);
     if (!silent) {
       this.updateStatus({
         state: "idle",
         phase: null,
-        message: "已停止手动监听，已保存已捕获的记录",
-        counts: recordCounts(this.snapshot.records),
+        progress: null,
+        message: observation.mode === "chat" ? "已取消聊天读取，已保存已捕获的消息" : "已停止手动监听，已保存已捕获的记录",
+        counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
         updatedAt: this.snapshot.updatedAt,
         browserOpen: Boolean(this.context),
       });
@@ -803,10 +1155,12 @@ export class DouyinCollector {
         ])];
         this.snapshot = await this.store.save(accumulator.snapshot().records, warnings, {
           directSync: normalizeDirectSyncState(this.snapshot.directSync),
+          chatMessages: this.snapshot.chatMessages,
+          chatConversations: this.snapshot.chatConversations,
         });
         if (!observation.active || runId !== this.syncRunId) return;
         this.updateStatus({
-          counts: recordCounts(this.snapshot.records),
+          counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
           updatedAt: this.snapshot.updatedAt,
           message: `正在监听手动浏览，已捕获 ${capturedResponses} 个网页响应`,
         });
@@ -855,23 +1209,326 @@ export class DouyinCollector {
     await persistChain;
   }
 
+  async runChatObservation(runId, observation) {
+    const context = await this.ensureBrowser({ headless: true });
+    this.assertSyncActive(runId);
+    let page = await this.currentPage(context);
+    await this.waitForLogin(context, page, runId, { headless: true });
+    this.assertSyncActive(runId);
+    page = await this.currentPage(context);
+
+    const currentUserId = await readCurrentUserId(page);
+    const existingGroupIds = new Set((this.snapshot.chatConversations ?? [])
+      .filter((conversation) => conversation.kind === "group")
+      .map((conversation) => conversation.id));
+    const accumulator = new ChatMessageAccumulator((this.snapshot.chatMessages ?? []).filter((message) => (
+      message?.conversationType !== "group" && !existingGroupIds.has(message?.conversationId)
+    )));
+    const conversationAccumulator = new ChatConversationAccumulator([], currentUserId);
+    const pendingResponses = new Set();
+    const processingChains = new Map();
+    const paginationByConversation = new Map();
+    const responseCountByConversation = new Map();
+    let persistChain = Promise.resolve();
+    let capturedResponses = 0;
+    const responseErrors = [];
+    let acceptingResponses = true;
+    let conversationCurrent = 0;
+    let conversationTotal = 0;
+
+    const persistSnapshot = () => {
+      persistChain = persistChain.then(async () => {
+        if (!observation.active || runId !== this.syncRunId) return;
+        const warnings = [...new Set([
+          ...this.snapshot.warnings.filter((warning) => warning !== CHAT_OBSERVATION_WARNING && warning !== LEGACY_CHAT_OBSERVATION_WARNING),
+          CHAT_OBSERVATION_WARNING,
+          ...responseErrors,
+        ])];
+        this.snapshot = await this.store.save(this.snapshot.records, warnings, {
+          directSync: normalizeDirectSyncState(this.snapshot.directSync),
+          chatMessages: accumulator.snapshot(),
+          chatConversations: mergeChatConversationSnapshots(
+            this.snapshot.chatConversations ?? [],
+            conversationAccumulator.snapshot(),
+          ),
+        });
+        if (!observation.active || runId !== this.syncRunId) return;
+        const count = recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations).chat_messages;
+        this.updateStatus({
+          phase: "chat_messages",
+          progress: { current: conversationCurrent, total: conversationTotal },
+          counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
+          updatedAt: this.snapshot.updatedAt,
+          message: `聊天全量读取：会话 ${conversationCurrent}/${conversationTotal}，已捕获 ${capturedResponses} 个响应、${count} 条互动`,
+        });
+      });
+      return persistChain;
+    };
+
+    const handleResponse = (response) => {
+      if (!acceptingResponses || !observation.active || runId !== this.syncRunId) return;
+      const endpoint = matchChatEndpoint(response.url());
+      if (!endpoint) return;
+      const previous = processingChains.get(endpoint.pathname) ?? Promise.resolve();
+      let task;
+      task = previous.catch(() => undefined).then(async () => {
+        if (!observation.active || runId !== this.syncRunId) return;
+        if (!response.ok()) throw new ChatAdapterError("http_error", `聊天请求返回 HTTP ${response.status()}。`);
+        const headers = typeof response.headers === "function" ? response.headers() : {};
+        const declaredLength = Number(headers?.["content-length"] ?? 0);
+        if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+          throw new ChatAdapterError("response_too_large", "聊天响应过大，已停止读取该页。");
+        }
+        const body = await readChatResponse(response);
+        const bodyBytes = typeof body === "string"
+          ? Buffer.byteLength(body)
+          : body?.byteLength ?? body?.length ?? 0;
+        if (bodyBytes > MAX_RESPONSE_BYTES) {
+          throw new ChatAdapterError("response_too_large", "聊天响应过大，已停止读取该页。");
+        }
+        if (!observation.active || runId !== this.syncRunId) return;
+        const normalized = normalizeChatPayload(body, { endpoint });
+        if (!conversationAccumulator.currentUserId) {
+          const detectedUserId = await readCurrentUserId(page);
+          if (detectedUserId) conversationAccumulator.setCurrentUserId(detectedUserId);
+        }
+        const metadataById = new Map((normalized.conversations ?? []).map((conversation) => [conversation.id, conversation]));
+        const messages = normalized.messages.map((message) => {
+          const conversation = metadataById.get(message.conversationId);
+          const knownConversation = conversationAccumulator.conversations.get(message.conversationId);
+          return {
+            ...message,
+            conversationType: message.conversationType === "unknown"
+              ? conversation?.kind ?? knownConversation?.kind ?? "unknown"
+              : message.conversationType,
+            conversationName: message.conversationName ?? conversation?.name ?? knownConversation?.name ?? null,
+          };
+        });
+        const conversationIds = new Set([
+          ...(normalized.conversations ?? []).map((conversation) => conversation.id),
+          ...messages.map((message) => message.conversationId),
+        ]);
+        for (const conversationId of conversationIds) {
+          if (!conversationId) continue;
+          paginationByConversation.set(conversationId, {
+            hasMore: normalized.hasMore,
+            cursor: normalized.nextTimestamp,
+          });
+          responseCountByConversation.set(
+            conversationId,
+            (responseCountByConversation.get(conversationId) ?? 0) + 1,
+          );
+        }
+        conversationAccumulator.addConversations(normalized.conversations);
+        conversationAccumulator.addMessages(messages.map((message) => message.conversationType === "group"
+          ? {
+              id: message.id,
+              conversationId: message.conversationId,
+              conversationType: message.conversationType,
+              senderId: message.senderId,
+            }
+          : message));
+        // Group bodies are deliberately discarded at the collector boundary;
+        // only the summary accumulator sees them.
+        accumulator.addMessages(messages.filter((message) => message.conversationType !== "group"));
+        capturedResponses += 1;
+        if (messages.length > 0 || normalized.conversations?.length > 0) await persistSnapshot();
+      }).catch((error) => {
+        if (!observation.active || runId !== this.syncRunId) return;
+        const message = safeMessage(error, "聊天响应读取失败，已继续等待后续消息。");
+        if (!responseErrors.includes(message)) responseErrors.push(message);
+        this.updateStatus({ phase: "chat_messages", message });
+      }).finally(() => {
+        pendingResponses.delete(task);
+        if (processingChains.get(endpoint.pathname) === task) processingChains.delete(endpoint.pathname);
+      });
+      processingChains.set(endpoint.pathname, task);
+      pendingResponses.add(task);
+    };
+
+    context.on("response", handleResponse);
+    this.updateStatus({
+      state: "observing",
+      phase: "chat_messages",
+      progress: { current: 0, total: 0 },
+      message: "聊天全量读取：正在读取会话列表",
+      browserOpen: true,
+    });
+    const currentUrl = page.url() ?? "";
+    if (currentUrl.includes("/chat")) {
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 45_000 });
+      await delay(1_500);
+      this.assertSyncActive(runId);
+    } else {
+      await this.visit(page, CHAT_URL, runId);
+    }
+    const detectedUserId = await readCurrentUserId(page);
+    if (detectedUserId) conversationAccumulator.setCurrentUserId(detectedUserId);
+    this.updateStatus({
+      state: "observing",
+      phase: "chat_messages",
+      progress: { current: 0, total: 0 },
+      message: "聊天全量读取：正在整理会话列表",
+      browserOpen: true,
+    });
+
+    let sweepFinished = false;
+    const sweepPromise = (async () => {
+      let catalog = [];
+      for (let attempt = 0; attempt < 5 && catalog.length === 0; attempt += 1) {
+        this.assertSyncActive(runId);
+        catalog = await readChatConversationCatalog(page);
+        if (catalog.length === 0) await delay(500);
+      }
+      conversationTotal = catalog.length;
+      this.updateStatus({
+        phase: "chat_messages",
+        progress: { current: 0, total: conversationTotal },
+        message: conversationTotal > 0
+          ? `聊天全量读取：发现 ${conversationTotal} 个会话（0/${conversationTotal}）`
+          : "聊天全量读取：未发现可读取的会话",
+      });
+      conversationAccumulator.addConversations(catalog);
+      if (catalog.length > 0) await persistSnapshot();
+      for (const [index, conversation] of catalog.entries()) {
+        this.assertSyncActive(runId);
+        conversationCurrent = index + 1;
+        if (typeof page.evaluate !== "function") break;
+        const selected = await page.evaluate((conversationId) => {
+          const store = globalThis.conversationStore;
+          const item = store?.conversationMap?.get(conversationId)
+            ?? store?.strangerConversationMap?.get(conversationId);
+          if (!store || !item || typeof store.setCurConversation !== "function") return false;
+          try {
+            store.setCurConversation(item);
+            return true;
+          } catch {
+            return false;
+          }
+        }, conversation.id).catch(() => false);
+        if (!selected) continue;
+        this.updateStatus({
+          phase: "chat_messages",
+          progress: { current: conversationCurrent, total: conversationTotal },
+          message: `聊天全量读取：正在读取会话（${conversationCurrent}/${conversationTotal}）`,
+        });
+        await delay(850);
+        // ponytail: group history can be enormous, so summaries use the pages
+        // exposed during this run; a dedicated cursor export can be added if
+        // exact all-history group counts become a requirement.
+        // Friend conversations follow their cursor until completion or the
+        // endpoint stops producing a response; the page cap is a last-resort
+        // guard for a server that never advances its cursor.
+        if (conversation.kind !== "friend" || typeof page.evaluate !== "function") continue;
+        for (let pageCount = 0; pageCount < CHAT_FRIEND_HISTORY_PAGE_LIMIT; pageCount += 1) {
+          this.assertSyncActive(runId);
+          const pagination = paginationByConversation.get(conversation.id);
+          if (!pagination || pagination.hasMore !== true) break;
+          const beforeResponses = responseCountByConversation.get(conversation.id) ?? 0;
+          const moved = await page.evaluate(() => {
+            const list = document.querySelector(".messageMessageListlist");
+            if (!list) return false;
+            list.scrollTop = list.scrollHeight;
+            list.dispatchEvent(new Event("scroll", { bubbles: true }));
+            return true;
+          }).catch(() => false);
+          if (!moved) break;
+          this.updateStatus({
+            phase: "chat_messages",
+            progress: { current: conversationCurrent, total: conversationTotal },
+            message: `聊天全量读取：会话 ${conversationCurrent}/${conversationTotal}，正在读取第 ${pageCount + 1} 页`,
+          });
+          await delay(1_000);
+          if ((responseCountByConversation.get(conversation.id) ?? 0) === beforeResponses) break;
+        }
+      }
+      // Selecting each friend conversation can lazily hydrate the profile
+      // cache. Read the catalog once more after the sweep so nicknames and
+      // avatars that arrived during history paging are persisted as well.
+      const refreshedCatalog = await readChatConversationCatalog(page);
+      if (refreshedCatalog.length > 0) {
+        conversationAccumulator.addConversations(refreshedCatalog);
+      }
+      if (catalog.length > 0 || capturedResponses > 0) await persistSnapshot();
+    })().catch((error) => {
+      if (error instanceof CollectorCancelledError || runId !== this.syncRunId) return;
+      // A catalog/sweep failure must not discard responses already captured.
+      const message = safeMessage(error, "聊天会话扫描未完成，已保留已读取的消息。");
+      if (!responseErrors.includes(message)) responseErrors.push(message);
+      return persistSnapshot();
+    }).finally(() => {
+      sweepFinished = true;
+    });
+
+    // Chat is a finite full snapshot read. A manual stop still wins while the
+    // catalog/page sweep is running; otherwise the sweep itself ends collection.
+    await Promise.race([observation.stopPromise, sweepPromise]);
+    acceptingResponses = false;
+    context.off("response", handleResponse);
+    await Promise.allSettled([...pendingResponses]);
+    await sweepPromise;
+    await persistChain;
+
+    if (sweepFinished && observation.active && runId === this.syncRunId) {
+      observation.active = false;
+      observation.stop();
+      const complete = responseErrors.length === 0;
+      this.updateStatus({
+        state: complete ? "complete" : "partial",
+        phase: null,
+        progress: null,
+        message: complete
+          ? `聊天全量读取完成：${conversationTotal} 个会话，已保存 ${recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations).chat_messages} 条互动，已自动停止`
+          : `聊天全量读取部分完成：${conversationCurrent}/${conversationTotal} 个会话，已自动停止`,
+        counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
+        updatedAt: this.snapshot.updatedAt,
+        browserOpen: false,
+      });
+      if (this.context === context) {
+        this.context = null;
+        this.contextHeadless = null;
+      }
+      await closeContextWithin(context);
+    }
+  }
+
   assertSyncActive(runId) {
     if (runId !== this.syncRunId) throw new CollectorCancelledError();
   }
 
-  async ensureBrowser() {
-    if (this.context) return this.context;
+  async ensureBrowser({ headless = false } = {}) {
+    if (this.context && (this.contextHeadless === headless || (this.contextHeadless === null && !headless))) {
+      this.contextHeadless ??= false;
+      return this.context;
+    }
+    if (this.context) {
+      const staleContext = this.context;
+      this.context = null;
+      this.contextHeadless = null;
+      await closeContextWithin(staleContext);
+    }
 
-    this.updateStatus({ state: "launching_browser", message: "正在打开独立抖音浏览器", browserOpen: false });
-    this.context = await chromium.launchPersistentContext(this.profileDirectory, {
+    this.updateStatus({
+      state: "launching_browser",
+      message: headless ? "正在启动无头抖音会话" : "正在打开独立抖音浏览器",
+      browserOpen: false,
+    });
+    const launchOptions = {
       executablePath: this.executablePath,
-      headless: false,
+      headless,
       locale: "zh-CN",
       viewport: { width: 1280, height: 900 },
       acceptDownloads: false,
-    });
-    this.context.on("close", () => {
+    };
+    if (headless) launchOptions.args = ["--headless=new", "--window-size=1280,900"];
+    const context = await chromium.launchPersistentContext(this.profileDirectory, launchOptions);
+    this.context = context;
+    this.contextHeadless = headless;
+    context.on("close", () => {
+      if (this.context !== context) return;
       this.context = null;
+      this.contextHeadless = null;
+      const chatObservation = this.observation?.mode === "chat";
       if (this.observation?.active) {
         this.observation.active = false;
         this.observation.stop();
@@ -879,12 +1536,15 @@ export class DouyinCollector {
       this.updateStatus({
         state: this.status.state === "observing" ? "idle" : this.status.state,
         phase: this.status.state === "observing" ? null : this.status.phase,
-        message: this.status.state === "observing" ? "独立浏览器已关闭，手动监听已停止" : this.status.message,
+        progress: this.status.state === "observing" ? null : this.status.progress,
+        message: this.status.state === "observing"
+          ? (chatObservation ? "独立浏览器已关闭，聊天读取已停止" : "独立浏览器已关闭，手动监听已停止")
+          : this.status.message,
         browserOpen: false,
       });
     });
     this.updateStatus({ browserOpen: true });
-    return this.context;
+    return context;
   }
 
   async currentPage(context) {
@@ -898,9 +1558,13 @@ export class DouyinCollector {
     return hasCookie && !await hasVisibleLoginControl(page);
   }
 
-  async waitForLogin(context, page, runId) {
+  async waitForLogin(context, page, runId, { headless = false } = {}) {
     this.assertSyncActive(runId);
     if (await this.hasLoginSession(context, page)) return;
+
+    if (headless) {
+      throw new ChatAdapterError("login_required", "聊天无头采集需要先在手动监听中完成一次登录。");
+    }
 
     this.updateStatus({
       state: "awaiting_login",
@@ -1234,7 +1898,7 @@ export class DouyinCollector {
           }
         }
         recordEndpointResult(progress, normalized.pagination, normalized);
-        this.updateStatus({ counts: recordCounts(accumulator.snapshot().records) });
+        this.updateStatus({ counts: recordCounts(accumulator.snapshot().records, this.snapshot.chatMessages, this.snapshot.chatConversations) });
       }).catch((error) => {
         if (error instanceof CollectorCancelledError || runId !== this.syncRunId) return;
         responseErrors.push(safeMessage(error, "抖音响应读取失败。"));
@@ -1326,13 +1990,16 @@ export class DouyinCollector {
       this.assertSyncActive(runId);
       this.snapshot = await this.store.save(normalized, warnings, {
         directSync: normalizeDirectSyncState(this.snapshot.directSync),
+        chatMessages: this.snapshot.chatMessages,
+        chatConversations: this.snapshot.chatConversations,
       });
       const complete = completeTypes.size === REQUIRED_TYPES.length && responseErrors.length === 0;
       this.updateStatus({
         state: complete ? "complete" : "partial",
         phase: null,
+        progress: null,
         message: complete ? "全部可见记录已读取" : "部分列表未完整读取，已保留现有数据",
-        counts: recordCounts(this.snapshot.records),
+        counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
         updatedAt: this.snapshot.updatedAt,
       });
     } finally {
@@ -1370,6 +2037,7 @@ export class DouyinCollector {
     const visibleContext = this.context;
     if (visibleContext) {
       this.context = null;
+      this.contextHeadless = null;
       await closeContextWithin(visibleContext);
       this.updateStatus({ browserOpen: false });
     }
@@ -1440,9 +2108,13 @@ export class DouyinCollector {
             ? [`其中 ${missingViewTimes} 条缺少观看日期，已保持为空，未使用发布时间或采集时间替代。`]
             : []),
         ])];
-        this.snapshot = await this.store.save(stagedRecords, warnings, { directSync });
+        this.snapshot = await this.store.save(stagedRecords, warnings, {
+          directSync,
+          chatMessages: this.snapshot.chatMessages,
+          chatConversations: this.snapshot.chatConversations,
+        });
         this.updateStatus({
-          counts: recordCounts(this.snapshot.records),
+          counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
           updatedAt: this.snapshot.updatedAt,
         });
       };
@@ -1457,7 +2129,7 @@ export class DouyinCollector {
             this.updateStatus({
               phase: type,
               message: progressMessage(type, pageCount),
-              counts: recordCounts(previewRecords(type)),
+              counts: recordCounts(previewRecords(type), this.snapshot.chatMessages, this.snapshot.chatConversations),
             });
             return !result.recordIds.some((id) => knownIds.get(type).has(id));
           });
@@ -1490,7 +2162,7 @@ export class DouyinCollector {
           this.updateStatus({
             phase: type,
             message: progressMessage(type, pageCounts[type]),
-            counts: recordCounts(previewRecords(type)),
+              counts: recordCounts(previewRecords(type), this.snapshot.chatMessages, this.snapshot.chatConversations),
           });
           if (result.recordIds.some((id) => knownIds.get(type).has(id))) break;
           if (result.pagination.hasMore === false) break;
@@ -1506,10 +2178,11 @@ export class DouyinCollector {
       this.updateStatus({
         state: "complete",
         phase: null,
+        progress: null,
         message: allIncremental
           ? `已读取新增记录（观看 ${newCounts.watch_history}、点赞 ${newCounts.liked_videos}、收藏 ${newCounts.favorite_videos}）`
           : `已读取并合并全部可见记录（观看 ${stagedRecords.watch_history.length}、点赞 ${stagedRecords.liked_videos.length}、收藏 ${stagedRecords.favorite_videos.length}）`,
-        counts: recordCounts(this.snapshot.records),
+        counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
         updatedAt: this.snapshot.updatedAt,
       });
     } finally {
@@ -1535,7 +2208,7 @@ export class DouyinCollector {
         state: "idle",
         phase: null,
         message: "旧账号会话已清除",
-        counts: recordCounts(this.snapshot.records),
+        counts: recordCounts(this.snapshot.records, this.snapshot.chatMessages, this.snapshot.chatConversations),
         updatedAt: this.snapshot.updatedAt,
         browserOpen: false,
       });
@@ -1571,9 +2244,9 @@ export class DouyinCollector {
   async close() {
     this.stopSync({ silent: true });
     await this.stopObservation({ silent: true });
-    if (!this.context) return;
     const context = this.context;
     this.context = null;
-    await closeContextWithin(context);
+    this.contextHeadless = null;
+    if (context) await closeContextWithin(context);
   }
 }

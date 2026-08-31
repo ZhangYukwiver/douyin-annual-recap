@@ -1,3 +1,8 @@
-export { ContentWorkspace, type ContentWorkspaceProps, type WorkspaceViewKey } from "./ContentWorkspace";
-export { SetupWorkspace, type SetupArchiveInfo, type SetupWorkspaceProps } from "./SetupWorkspace";
+export { ContentWorkspace, type ContentWorkspaceProps, type WorkspaceViewKey } from "./ReportWorkspace";
+export { ChatWorkspace, buildChatConversationRows, type ChatConversationRow, type ChatWorkspaceProps } from "./ChatWorkspace";
+export {
+  ContentWorkspace as LegacyContentWorkspace,
+  type WorkspaceViewKey as LegacyWorkspaceViewKey,
+} from "./LegacyContentWorkspace";
+export { SetupWorkspace, type SetupArchiveInfo, type SetupWorkspaceProps } from "./SourceWorkspace";
 export { workspaceColors } from "./workspaceTheme";
