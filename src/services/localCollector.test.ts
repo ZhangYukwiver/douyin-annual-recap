@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearCollectorRecords,
+  fetchCollectorVideoFile,
   getCollectorPairingCode,
   getCollectorRecords,
   LocalCollectorError,
   getCollectorStatus,
+  getCollectorVideoDownload,
   normalizeCollectorBaseUrl,
   parseLaunchPairingCode,
   pairCollector,
@@ -13,6 +15,7 @@ import {
   startDirectRecordsSync,
   startCollectorObservation,
   startCollectorChatObservation,
+  startCollectorVideoDownload,
   stopCollectorSync,
   stopCollectorObservation,
   stopCollectorChatObservation,
@@ -369,6 +372,33 @@ describe("local collector client", () => {
     });
   });
 
+  it("normalizes title-only legacy shares to ordinary text on the client boundary", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      schemaVersion: 2,
+      updatedAt: "2026-08-20T00:00:00.000Z",
+      records: { watch_history: [], liked_videos: [], favorite_videos: [] },
+      chatMessages: [{
+        id: "plain-share-1",
+        conversationId: "conv-1",
+        conversationType: "friend",
+        conversationName: "会话",
+        senderId: "user-1",
+        senderName: "联系人",
+        sentAt: "2026-08-20T00:00:00.000Z",
+        type: "share",
+        text: "普通消息",
+        mediaUrl: null,
+        share: { title: "普通消息", author: null, coverUrl: null, url: null },
+        callDurationSeconds: null,
+      }],
+      chatConversations: [{ id: "conv-1", kind: "friend", name: "会话", messageCount: 1, ownMessageCount: 0 }],
+      warnings: [],
+    }), { status: 200 })));
+
+    const snapshot = await getCollectorRecords("http://127.0.0.1:4765", "session-secret");
+    expect(snapshot.chatMessages[0]).toMatchObject({ type: "text", text: "普通消息", share: null });
+  });
+
   it("drops lookalike and non-HTTPS video links", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       schemaVersion: 1,
@@ -386,5 +416,57 @@ describe("local collector client", () => {
 
     const snapshot = await getCollectorRecords("http://127.0.0.1:4765", "session-secret");
     expect(snapshot.records.watch_history.map((record) => record.url)).toEqual([null, null]);
+  });
+
+  it("starts, polls, and fetches an authenticated video download", async () => {
+    const jobId = "12345678-1234-1234-1234-123456789abc";
+    const queuedJob = {
+      id: jobId,
+      sourceUrl: "https://v.douyin.com/example/",
+      status: "queued",
+      fileName: null,
+      bytes: null,
+      errorCode: null,
+      error: null,
+      createdAt: "2026-08-31T00:00:00.000Z",
+      updatedAt: "2026-08-31T00:00:00.000Z",
+      startedAt: null,
+      completedAt: null,
+    };
+    const completeJob = {
+      ...queuedJob,
+      status: "complete",
+      fileName: "测试视频-123.mp4",
+      bytes: 4,
+      updatedAt: "2026-08-31T00:00:02.000Z",
+      startedAt: "2026-08-31T00:00:00.100Z",
+      completedAt: "2026-08-31T00:00:02.000Z",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ job: queuedJob }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ job: completeJob }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([0, 1, 2, 3]), {
+        status: 200,
+        headers: {
+          "Content-Type": "video/mp4",
+          "Content-Disposition": "attachment; filename*=UTF-8''%E6%B5%8B%E8%AF%95%E8%A7%86%E9%A2%91-123.mp4",
+        },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(startCollectorVideoDownload("http://127.0.0.1:4765", "session-secret", queuedJob.sourceUrl))
+      .resolves.toMatchObject({ id: jobId, status: "queued" });
+    await expect(getCollectorVideoDownload("http://127.0.0.1:4765", "session-secret", jobId))
+      .resolves.toMatchObject({ id: jobId, status: "complete", fileName: "测试视频-123.mp4" });
+    await expect(fetchCollectorVideoFile("http://127.0.0.1:4765", "session-secret", jobId))
+      .resolves.toMatchObject({ fileName: "测试视频-123.mp4" });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:4765/v1/downloads",
+      `http://127.0.0.1:4765/v1/downloads/${jobId}`,
+      `http://127.0.0.1:4765/v1/downloads/${jobId}/file`,
+    ]);
+    expect(fetchMock.mock.calls.every(([, init]) => init?.headers?.Authorization === "Bearer session-secret")).toBe(true);
+    expect(fetchMock.mock.calls.every(([url]) => !url.includes("session-secret"))).toBe(true);
   });
 });

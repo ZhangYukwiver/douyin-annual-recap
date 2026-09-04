@@ -53,5 +53,29 @@ describe("collector server runtime", () => {
       stopped: false,
       status: { state: "idle" },
     });
+
+    const unauthenticatedDownload = await fetch(`${runtime.baseUrl}/v1/downloads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://v.douyin.com/example/" }),
+    });
+    expect(unauthenticatedDownload.status).toBe(401);
+
+    const invalidDownload = await fetch(`${runtime.baseUrl}/v1/downloads`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${payload.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url: "https://example.com/video/1" }),
+    });
+    expect(invalidDownload.status).toBe(400);
+    await expect(invalidDownload.json()).resolves.toMatchObject({ error: "invalid_url" });
+
+    const unknownDownload = await fetch(`${runtime.baseUrl}/v1/downloads/not-a-valid-job`, {
+      headers: { Authorization: `Bearer ${payload.token}` },
+    });
+    expect(unknownDownload.status).toBe(404);
+    await expect(unknownDownload.json()).resolves.toMatchObject({ error: "download_job_not_found" });
   });
 });

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { access, chmod, mkdir } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { access, chmod, mkdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import { CollectorStore } from "./store.mjs";
 const DEFAULT_PORT = 4765;
 const MAX_BODY_BYTES = 4 * 1024;
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const DOWNLOAD_JOB_ID_PATTERN = /^[0-9a-f-]{20,}$/iu;
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectDirectory = path.resolve(moduleDirectory, "..");
 
@@ -169,6 +171,32 @@ function sendJson(response, statusCode, payload) {
   response.end(body);
 }
 
+async function sendVideoFile(response, filePath, fileName) {
+  let file;
+  try {
+    file = await stat(filePath);
+  } catch {
+    sendJson(response, 404, { error: "download_file_not_found" });
+    return;
+  }
+  if (!file.isFile()) {
+    sendJson(response, 404, { error: "download_file_not_found" });
+    return;
+  }
+  const safeName = String(fileName || "douyin-video.mp4")
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/gu, "_")
+    .slice(0, 180) || "douyin-video.mp4";
+  response.writeHead(200, {
+    "Content-Type": "video/mp4",
+    "Content-Length": file.size,
+    "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}`,
+    "Cache-Control": "no-store",
+  });
+  const stream = createReadStream(filePath);
+  stream.once("error", () => response.destroy());
+  stream.pipe(response);
+}
+
 async function readJsonBody(request) {
   const chunks = [];
   let size = 0;
@@ -264,7 +292,49 @@ export async function startCollectorServer({
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/v1/status") {
+    if (request.method === "POST" && url.pathname === "/v1/downloads") {
+      try {
+        const body = await readJsonBody(request);
+        const job = collector.startVideoDownload(body?.url);
+        sendJson(response, 202, { job });
+      } catch (error) {
+        const code = error?.code === "invalid_url" ? "invalid_url" : "download_start_failed";
+        sendJson(response, code === "invalid_url" ? 400 : 409, {
+          error: code,
+          message: error instanceof Error ? error.message : "无法开始视频下载。",
+        });
+      }
+    } else if (request.method === "GET" && /^\/v1\/downloads\/[^/]+(?:\/file)?$/u.test(url.pathname)) {
+      const match = url.pathname.match(/^\/v1\/downloads\/([^/]+)(\/file)?$/u);
+      let jobId = "";
+      try {
+        jobId = match ? decodeURIComponent(match[1]) : "";
+      } catch {
+        sendJson(response, 404, { error: "download_job_not_found" });
+        return;
+      }
+      if (!DOWNLOAD_JOB_ID_PATTERN.test(jobId)) {
+        sendJson(response, 404, { error: "download_job_not_found" });
+        return;
+      }
+      const job = collector.getVideoDownloadJob(jobId);
+      if (!job) {
+        sendJson(response, 404, { error: "download_job_not_found" });
+      } else if (match?.[2] === "/file") {
+        if (job.status !== "complete") {
+          sendJson(response, 409, { error: "download_not_complete", job });
+          return;
+        }
+        const filePath = collector.getVideoDownloadFilePath(jobId);
+        if (!filePath) {
+          sendJson(response, 404, { error: "download_file_not_found" });
+          return;
+        }
+        await sendVideoFile(response, filePath, job.fileName);
+      } else {
+        sendJson(response, 200, { job });
+      }
+    } else if (request.method === "GET" && url.pathname === "/v1/status") {
       sendJson(response, 200, collector.getStatus());
     } else if (request.method === "GET" && url.pathname === "/v1/records") {
       sendJson(response, 200, collector.getSnapshot());

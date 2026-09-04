@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -16,6 +16,7 @@ import {
 import {
   ArrowUpRight,
   Bookmark,
+  Download,
   Eye,
   EyeOff,
   Heart,
@@ -25,6 +26,8 @@ import {
   List,
   MessageCircle,
   Music2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   RefreshCw,
   Settings2,
@@ -64,12 +67,16 @@ export interface ContentWorkspaceProps {
   status: CollectorStatus | null;
   onChangeView: (view: WorkspaceViewKey) => void;
   onOpenRecord: (url: string) => Promise<void>;
+  onDownloadRecord?: (record: PersonalVideoRecord) => Promise<void>;
+  downloadStates?: Record<string, RecordDownloadState>;
   onOpenSettings: () => void;
   onReplayStory: () => void;
   onSync: () => void;
   onTogglePrivacy: () => void;
   privacy: boolean;
 }
+
+export type RecordDownloadState = "idle" | "queued" | "running" | "complete" | "failed";
 
 type IconComponent = React.ComponentType<{
   color?: string;
@@ -110,6 +117,8 @@ export function ContentWorkspace({
   status,
   onChangeView,
   onOpenRecord,
+  onDownloadRecord,
+  downloadStates = {},
   onOpenSettings,
   onReplayStory,
   onSync,
@@ -118,7 +127,16 @@ export function ContentWorkspace({
 }: ContentWorkspaceProps) {
   const { width } = useWindowDimensions();
   const mobile = width < 720;
-  const compactSidebar = width >= 720 && width < 1080;
+  const reportView = isReportView(activeView);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // 持续报告首次打开时自动收起；用户仍可用左上角按钮临时展开。
+  const [reportAutoCollapsed, setReportAutoCollapsed] = useState(reportView);
+  const previousReportViewRef = useRef(reportView);
+  const responsiveSidebar = width >= 720 && width < 1080;
+  const compactSidebar = width >= 720 && (responsiveSidebar || (reportView ? reportAutoCollapsed : sidebarCollapsed));
+  const sidebarWidth = mobile ? 0 : compactSidebar ? 82 : 224;
+  // root 的桌面内边距与 stage 边框会占掉 36px，使用同一个主区宽度供各内容页计算。
+  const mainWidth = Math.max(0, width - (mobile ? 0 : 36) - sidebarWidth);
   const currentNav = navItems.find((item) => item.id === activeView) ?? navItems[0]!;
   const [reportUpdateNotice, setReportUpdateNotice] = useState(false);
   const seenUpdatedAtRef = useRef<string | null>(updatedAt);
@@ -140,18 +158,36 @@ export function ContentWorkspace({
         ? Object.values(report.highlights.data as AnnualHighlightsData).filter(Boolean).length
         : 0,
   };
-  const reportView = activeView === "summary" || activeView === "highlights";
-
   useEffect(() => {
     if (updatedAt && seenUpdatedAtRef.current && updatedAt !== seenUpdatedAtRef.current) setReportUpdateNotice(true);
     seenUpdatedAtRef.current = updatedAt;
   }, [updatedAt]);
 
+  // 外部切换（例如从故事页进入大屏）也要在首帧前进入自动收起状态，避免先闪出展开侧栏。
+  useLayoutEffect(() => {
+    if (reportView && !previousReportViewRef.current) setReportAutoCollapsed(true);
+    previousReportViewRef.current = reportView;
+  }, [reportView]);
+
+  const changeView = (nextView: WorkspaceViewKey) => {
+    if (isReportView(nextView) && !reportView) setReportAutoCollapsed(true);
+    onChangeView(nextView);
+  };
+
+  const toggleSidebar = () => {
+    if (reportView) {
+      setReportAutoCollapsed((collapsed) => !collapsed);
+      return;
+    }
+    setSidebarCollapsed((collapsed) => !collapsed);
+  };
+
   return (
     <View testID="content-workspace" style={[styles.root, mobile && styles.rootMobile]}>
       <View style={[styles.stage, mobile && styles.stageMobile]}>
+      {!mobile ? <SidebarToggle collapsed={compactSidebar} onPress={toggleSidebar} /> : null}
       {!mobile ? (
-        <View style={[styles.sidebar, compactSidebar && styles.sidebarCompact]}>
+        <View testID="workspace-sidebar" style={[styles.sidebar, compactSidebar && styles.sidebarCompact]}>
           <Brand compact={compactSidebar} />
           <View accessibilityRole="tablist" style={styles.sidebarNav}>
             {!compactSidebar ? <Text style={styles.sidebarSectionLabel}>内容记录</Text> : null}
@@ -161,7 +197,7 @@ export function ContentWorkspace({
                 compact={compactSidebar}
                 count={counts[item.id]}
                 item={item}
-                onPress={() => onChangeView(item.id)}
+                onPress={() => changeView(item.id)}
                 selected={item.id === activeView}
               />
             ))}
@@ -172,7 +208,7 @@ export function ContentWorkspace({
                 compact={compactSidebar}
                 count={counts[item.id]}
                 item={item}
-                onPress={() => onChangeView(item.id)}
+                onPress={() => changeView(item.id)}
                 selected={item.id === activeView}
               />
             ))}
@@ -217,7 +253,7 @@ export function ContentWorkspace({
       ) : null}
 
       <View style={[styles.main, mobile && styles.mainMobile]}>
-        <View style={[styles.topbar, mobile && styles.topbarMobile]}>
+        <View testID="workspace-topbar" style={[styles.topbar, mobile && styles.topbarMobile]}>
           <View style={styles.topbarHeading}>
             <Text style={styles.topbarEyebrow}>{reportView ? "LIVING REPORT" : "CONTENT ARCHIVE"}</Text>
             <View style={styles.topbarTitleRow}>
@@ -292,7 +328,7 @@ export function ContentWorkspace({
         ) : activeView === "summary" ? (
           model.status === "empty"
             ? <SummaryEmpty />
-            : <ReportDashboard mobile={mobile} model={model} onOpenRecord={onOpenRecord} privacy={privacy} />
+            : <ReportDashboard mobile={mobile} model={model} onOpenRecord={onOpenRecord} privacy={privacy} width={mainWidth} />
         ) : activeView === "highlights" ? (
           livingReport
             ? <LivingHighlightsView mobile={mobile} onOpenRecord={onOpenRecord} privacy={privacy} report={livingReport} />
@@ -302,14 +338,16 @@ export function ContentWorkspace({
         ) : (
           <RecordsGallery
             activeType={activeView}
+            downloadStates={downloadStates}
             mobile={mobile}
+            onDownloadRecord={onDownloadRecord}
             onOpenRecord={onOpenRecord}
             onOpenSettings={onOpenSettings}
             privacy={privacy}
             records={records[activeView]}
             sourceLabel={sourceLabel}
             status={status}
-            width={width - (mobile ? 0 : compactSidebar ? 82 : 224)}
+            width={mainWidth}
           />
         )}
       </View>
@@ -341,7 +379,7 @@ export function ContentWorkspace({
                 accessibilityLabel={`${item.label}，${counts[item.id]} 条`}
                 accessibilityRole="tab"
                 accessibilityState={{ selected }}
-                onPress={() => onChangeView(item.id)}
+                onPress={() => changeView(item.id)}
                 style={({ pressed }) => [styles.bottomNavItem, pressed && styles.buttonPressed, webPointer]}
               >
                 <Icon color={selected ? item.accent : color.textMuted} size={20} strokeWidth={selected ? 2.5 : 2} />
@@ -354,6 +392,23 @@ export function ContentWorkspace({
       ) : null}
       </View>
     </View>
+  );
+}
+
+function SidebarToggle({ collapsed, onPress }: { collapsed: boolean; onPress: () => void }) {
+  const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
+  return (
+    <Pressable
+      testID="sidebar-collapse-toggle"
+      accessibilityLabel={collapsed ? "展开侧栏" : "收起侧栏"}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: !collapsed }}
+      hitSlop={8}
+      onPress={onPress}
+      style={({ pressed }) => [styles.sidebarToggle, pressed && styles.buttonPressed, webPointer]}
+    >
+      <ToggleIcon color={color.textSecondary} size={17} strokeWidth={1.9} />
+    </Pressable>
   );
 }
 
@@ -413,14 +468,16 @@ function NavButton({
           <Text style={[styles.navCount, selected && { color: item.accent }]}>{formatCompactNumber(count)}</Text>
         </>
       ) : null}
-      {selected ? <View style={[styles.navIndicator, { backgroundColor: item.accent }]} /> : null}
+      {selected ? <View style={[styles.navIndicator, compact && styles.navIndicatorCompact, { backgroundColor: item.accent }]} /> : null}
     </Pressable>
   );
 }
 
 function RecordsGallery({
   activeType,
+  downloadStates,
   mobile,
+  onDownloadRecord,
   onOpenRecord,
   onOpenSettings,
   privacy,
@@ -430,7 +487,9 @@ function RecordsGallery({
   width,
 }: {
   activeType: PersonalRecordType;
+  downloadStates: Record<string, RecordDownloadState>;
   mobile: boolean;
+  onDownloadRecord?: (record: PersonalVideoRecord) => Promise<void>;
   onOpenRecord: (url: string) => Promise<void>;
   onOpenSettings: () => void;
   privacy: boolean;
@@ -497,61 +556,164 @@ function RecordsGallery({
       )}
       numColumns={layout === "grid" ? columns : 1}
       renderItem={({ item }) => layout === "grid"
-        ? <RecordTile onOpenRecord={onOpenRecord} privacy={privacy} record={item} type={activeType} />
+        ? <RecordTile
+            downloadState={downloadStates[item.id] ?? "idle"}
+            onDownloadRecord={onDownloadRecord}
+            onOpenRecord={onOpenRecord}
+            privacy={privacy}
+            record={item}
+            type={activeType}
+          />
         : <RecordRow onOpenRecord={onOpenRecord} privacy={privacy} record={item} type={activeType} />}
       showsVerticalScrollIndicator={false}
     />
   );
 }
 
-function RecordTile({ record, type, privacy, onOpenRecord }: { record: PersonalVideoRecord; type: PersonalRecordType; privacy: boolean; onOpenRecord: (url: string) => Promise<void> }) {
+function RecordTile({
+  downloadState,
+  onDownloadRecord,
+  record,
+  type,
+  privacy,
+  onOpenRecord,
+}: {
+  downloadState: RecordDownloadState;
+  onDownloadRecord?: (record: PersonalVideoRecord) => Promise<void>;
+  record: PersonalVideoRecord;
+  type: PersonalRecordType;
+  privacy: boolean;
+  onOpenRecord: (url: string) => Promise<void>;
+}) {
   const [imageFailed, setImageFailed] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const tileRef = useRef<View | null>(null);
+  const focusCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accent = type === "liked_videos" ? color.accent : type === "favorite_videos" ? color.amber : color.cyan;
   const imageAvailable = Boolean(record.coverUrl && !privacy && !imageFailed);
+  const downloading = downloadState === "queued" || downloadState === "running";
+  const showActions = Platform.OS === "web" && Boolean(record.url) && !privacy && (hovered || focused);
+  const downloadLabel = downloading
+    ? "下载中"
+    : downloadState === "complete"
+      ? "已下载"
+      : downloadState === "failed" ? "重试" : "下载";
+  const markFocused = () => setFocused(true);
+  const checkFocusBoundary = (event?: unknown) => {
+    if (Platform.OS !== "web") {
+      setFocused(false);
+      return;
+    }
+    const eventLike = event as {
+      nativeEvent?: { relatedTarget?: unknown };
+      relatedTarget?: unknown;
+    } | undefined;
+    const relatedTarget = eventLike?.nativeEvent?.relatedTarget ?? eventLike?.relatedTarget;
+    const relatedElement = relatedTarget as { closest?: (selector: string) => unknown } | null;
+    if (relatedElement?.closest?.('[data-testid="record-tile-action"]')) return;
+    if (focusCheckTimer.current) clearTimeout(focusCheckTimer.current);
+    focusCheckTimer.current = setTimeout(() => {
+      focusCheckTimer.current = null;
+      const node = tileRef.current as unknown as { contains?: (value: unknown) => boolean } | null;
+      const activeElement = typeof document !== "undefined" ? document.activeElement : null;
+      if (!node?.contains?.(activeElement)) setFocused(false);
+    }, 0);
+  };
+  useEffect(() => () => {
+    if (focusCheckTimer.current) clearTimeout(focusCheckTimer.current);
+  }, []);
   return (
-    <Pressable
-      accessibilityLabel={`${privacy ? "已隐藏内容" : record.title}${record.url ? "，打开抖音视频" : ""}`}
-      accessibilityRole={record.url ? "link" : undefined}
-      disabled={!record.url}
-      onPress={() => record.url && void onOpenRecord(record.url)}
-      style={({ pressed }) => [styles.tile, pressed && styles.tilePressed, record.url && webPointer]}
+    <View
+      ref={tileRef}
+      testID={`record-tile-${record.id}`}
+      onFocus={markFocused}
+      onBlur={checkFocusBoundary}
+      {...(Platform.OS === "web"
+        ? ({
+            onMouseEnter: () => setHovered(true),
+            onMouseLeave: () => setHovered(false),
+          } as Record<string, unknown>)
+        : {})}
+      style={styles.tile}
     >
-      <View style={[styles.tileVisual, { backgroundColor: fallbackColor(record.id) }]}>
-        {imageAvailable ? (
-          <ImageBackground
-            accessibilityLabel={privacy ? "已隐藏的视频封面" : `${record.title}的视频封面`}
-            imageStyle={styles.tileImage}
-            onError={() => setImageFailed(true)}
-            resizeMode="cover"
-            source={{ uri: record.coverUrl! }}
-            style={styles.tileImage}
-          />
-        ) : (
-          <View style={styles.fallbackVisual}>
-            <View style={[styles.fallbackDisc, { borderColor: accent }]}><Music2 color={accent} size={26} strokeWidth={1.8} /></View>
-            <Text style={styles.fallbackIndex}>{String(hashString(record.id) % 99 + 1).padStart(2, "0")}</Text>
+      <Pressable
+        accessibilityLabel={`${privacy ? "已隐藏内容" : record.title}${record.url ? "，打开抖音视频" : ""}`}
+        accessibilityRole={record.url ? "link" : undefined}
+        disabled={!record.url}
+        onFocus={markFocused}
+        onPress={() => record.url && void onOpenRecord(record.url)}
+        style={({ pressed }) => [styles.tileMain, pressed && styles.tilePressed, record.url && webPointer]}
+      >
+        <View style={[styles.tileVisual, { backgroundColor: fallbackColor(record.id) }]}>
+          {imageAvailable ? (
+            <ImageBackground
+              accessibilityLabel={privacy ? "已隐藏的视频封面" : `${record.title}的视频封面`}
+              imageStyle={styles.tileImage}
+              onError={() => setImageFailed(true)}
+              resizeMode="cover"
+              source={{ uri: record.coverUrl! }}
+              style={styles.tileImage}
+            />
+          ) : (
+            <View style={styles.fallbackVisual}>
+              <View style={[styles.fallbackDisc, { borderColor: accent }]}><Music2 color={accent} size={26} strokeWidth={1.8} /></View>
+              <Text style={styles.fallbackIndex}>{String(hashString(record.id) % 99 + 1).padStart(2, "0")}</Text>
+            </View>
+          )}
+          <View style={styles.tileTopMeta}>
+            <View style={[styles.typeBadge, { backgroundColor: accent }]} />
+            {record.durationSeconds ? <Text style={styles.durationBadge}>{formatDuration(record.durationSeconds)}</Text> : null}
           </View>
-        )}
-        <View style={styles.tileTopMeta}>
-          <View style={[styles.typeBadge, { backgroundColor: accent }]} />
-          {record.durationSeconds ? <Text style={styles.durationBadge}>{formatDuration(record.durationSeconds)}</Text> : null}
-        </View>
-        <View style={styles.tileBottomMeta}>
-          {record.watchProgress?.percent !== undefined && record.watchProgress.percent !== null ? (
-            <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.max(2, Math.min(100, record.watchProgress.percent))}%`, backgroundColor: accent }]} /></View>
-          ) : null}
-          <View style={styles.tilePlayMeta}>
-            <Play color={color.white} fill={color.white} size={12} />
-            <Text style={styles.tilePlayText}>{record.stats?.playCount ? formatCompactNumber(record.stats.playCount) : "记录"}</Text>
+          <View style={styles.tileBottomMeta}>
+            {record.watchProgress?.percent !== undefined && record.watchProgress.percent !== null ? (
+              <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.max(2, Math.min(100, record.watchProgress.percent))}%`, backgroundColor: accent }]} /></View>
+            ) : null}
+            <View style={styles.tilePlayMeta}>
+              <Play color={color.white} fill={color.white} size={12} />
+              <Text style={styles.tilePlayText}>{record.stats?.playCount ? formatCompactNumber(record.stats.playCount) : "记录"}</Text>
+            </View>
           </View>
         </View>
-      </View>
-      <Text numberOfLines={2} style={styles.tileTitle}>{privacy ? "内容标题已隐藏" : record.title}</Text>
-      <View style={styles.tileMetaRow}>
-        <Text numberOfLines={1} style={styles.tileAuthor}>{privacy ? "创作者已隐藏" : record.author ?? "未知创作者"}</Text>
-        <Text style={styles.tileDate}>{formatShortDate(record.occurredAt)}</Text>
-      </View>
-    </Pressable>
+        <Text numberOfLines={2} style={styles.tileTitle}>{privacy ? "内容标题已隐藏" : record.title}</Text>
+        <View style={styles.tileMetaRow}>
+          <Text numberOfLines={1} style={styles.tileAuthor}>{privacy ? "创作者已隐藏" : record.author ?? "未知创作者"}</Text>
+          <Text style={styles.tileDate}>{formatShortDate(record.occurredAt)}</Text>
+        </View>
+      </Pressable>
+      {showActions ? (
+        <View pointerEvents="auto" style={styles.tileActionsOverlay}>
+          <View style={styles.tileActionsRow}>
+            <Pressable
+              testID="record-tile-action"
+              accessibilityLabel="跳转到抖音视频"
+              accessibilityRole="link"
+              onFocus={markFocused}
+              onBlur={checkFocusBoundary}
+              onPress={() => record.url && void onOpenRecord(record.url)}
+              style={({ pressed }) => [styles.tileAction, pressed && styles.tileActionPressed, webPointer]}
+            >
+              <ArrowUpRight color={color.white} size={14} strokeWidth={2.2} />
+              <Text style={styles.tileActionText}>跳转</Text>
+            </Pressable>
+            <Pressable
+              testID="record-tile-action"
+              accessibilityLabel={downloading ? "视频正在下载" : `${downloadLabel}视频`}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: downloading }}
+              disabled={downloading || !onDownloadRecord}
+              onFocus={markFocused}
+              onBlur={checkFocusBoundary}
+              onPress={() => onDownloadRecord && void onDownloadRecord(record)}
+              style={({ pressed }) => [styles.tileAction, (downloading || !onDownloadRecord) && styles.tileActionDisabled, pressed && styles.tileActionPressed, webPointer]}
+            >
+              {downloading ? <ActivityIndicator color={color.white} size="small" /> : <Download color={color.white} size={14} strokeWidth={2.2} />}
+              <Text style={styles.tileActionText}>{downloadLabel}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -584,6 +746,10 @@ function RecordRow({ record, type, privacy, onOpenRecord }: { record: PersonalVi
       {record.url ? <ArrowUpRight color={color.textMuted} size={19} /> : null}
     </Pressable>
   );
+}
+
+function isReportView(view: WorkspaceViewKey): boolean {
+  return view === "summary" || view === "highlights";
 }
 
 function isLivingReport(report: AnnualReport | LivingReport): report is LivingReport {
@@ -908,7 +1074,7 @@ function fallbackColor(value: string): string {
 const styles = StyleSheet.create({
   root: { flex: 1, minHeight: "100%", padding: 18, backgroundColor: color.canvas },
   rootMobile: { padding: 0 },
-  stage: { flex: 1, minHeight: 0, flexDirection: "row", borderWidth: 1, borderColor: color.frame, backgroundColor: color.surface },
+  stage: { position: "relative", flex: 1, minHeight: 0, flexDirection: "row", borderWidth: 1, borderColor: color.frame, backgroundColor: color.surface },
   stageMobile: { borderWidth: 0 },
   paperGrain: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, opacity: 0.3, zIndex: 40 },
   paperGrainImg: { width: "100%", height: "100%" },
@@ -920,8 +1086,9 @@ const styles = StyleSheet.create({
   cornerBR: { right: 8, bottom: 8, borderRightWidth: 1, borderBottomWidth: 1 },
   sidebar: { width: 224, flexShrink: 0, paddingHorizontal: 14, paddingBottom: 16, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: color.border, backgroundColor: color.sidebar },
   sidebarCompact: { width: 82, paddingHorizontal: 9 },
-  brand: { height: 72, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 10 },
-  brandCompact: { justifyContent: "center", paddingHorizontal: 0 },
+  sidebarToggle: { position: "absolute", left: 14, top: 2, width: 32, height: 32, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: color.borderSoft, borderRadius: radius.medium, backgroundColor: color.surface, zIndex: 5 },
+  brand: { height: 72, flexDirection: "row", alignItems: "center", gap: 11, paddingRight: 10, paddingLeft: 52 },
+  brandCompact: { justifyContent: "center", paddingLeft: 0, paddingRight: 0, paddingTop: 34 },
   brandMarkWrap: { width: 38, height: 38, position: "relative", alignItems: "center", justifyContent: "center" },
   brandMarkCyan: { position: "absolute", width: 26, height: 26, left: 3, top: 4, borderRadius: 2, backgroundColor: color.cyan },
   brandMarkRed: { position: "absolute", width: 26, height: 26, right: 3, bottom: 4, borderRadius: 2, backgroundColor: color.accent },
@@ -940,6 +1107,7 @@ const styles = StyleSheet.create({
   navLabelSelected: { color: color.text, fontWeight: "700" },
   navCount: { color: color.textMuted, fontSize: 11, fontFamily: font.didot, letterSpacing: 0.5, marginRight: 6 },
   navIndicator: { position: "absolute", left: -14, top: 14, bottom: 14, width: 3, borderTopRightRadius: 2, borderBottomRightRadius: 2 },
+  navIndicatorCompact: { left: -9 },
   sidebarFooter: { gap: 8 },
   localBadge: { minHeight: 56, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
   localBadgeDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.green },
@@ -975,7 +1143,8 @@ const styles = StyleSheet.create({
   layoutButton: { width: 40, height: 34, alignItems: "center", justifyContent: "center", borderRadius: radius.small },
   layoutButtonSelected: { backgroundColor: color.surfaceMuted },
   gridRow: { gap: 12 },
-  tile: { flex: 1, minWidth: 0, marginBottom: 22 },
+  tile: { position: "relative", flex: 1, minWidth: 0, marginBottom: 22 },
+  tileMain: { width: "100%" },
   tilePressed: { opacity: 0.74 },
   tileVisual: { position: "relative", width: "100%", aspectRatio: 0.76, overflow: "hidden", borderRadius: radius.small, backgroundColor: color.surface },
   tileImage: { width: "100%", height: "100%" },
@@ -994,6 +1163,36 @@ const styles = StyleSheet.create({
   tileMetaRow: { minHeight: 20, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 3 },
   tileAuthor: { flex: 1, color: color.textMuted, fontSize: 10 },
   tileDate: { color: color.textMuted, fontSize: 9 },
+  tileActionsOverlay: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    left: 0,
+    aspectRatio: 0.76,
+    overflow: "hidden",
+    justifyContent: "flex-end",
+    padding: 10,
+    borderRadius: radius.small,
+    backgroundColor: "rgba(12,15,15,0.62)",
+    zIndex: 2,
+  },
+  tileActionsRow: { flexDirection: "row", gap: 8 },
+  tileAction: {
+    minHeight: 34,
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: "rgba(239,223,204,0.42)",
+    borderRadius: radius.small,
+    backgroundColor: "rgba(20,24,23,0.84)",
+  },
+  tileActionText: { color: color.white, fontSize: 11, fontWeight: "800", letterSpacing: 0.5 },
+  tileActionPressed: { backgroundColor: "rgba(239,223,204,0.18)" },
+  tileActionDisabled: { opacity: 0.72 },
   recordRow: { minHeight: 112, flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border },
   recordRowPressed: { backgroundColor: color.surface },
   rowThumb: { width: 72, height: 92, flexShrink: 0, alignItems: "center", justifyContent: "center", overflow: "hidden", borderRadius: radius.small },

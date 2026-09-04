@@ -2,6 +2,7 @@ export { ContentWorkspace, type ContentWorkspaceProps, type WorkspaceViewKey } f
 export { ChatWorkspace, buildChatConversationRows, type ChatConversationRow, type ChatWorkspaceProps } from "./ChatWorkspace";
 export {
   ContentWorkspace as LegacyContentWorkspace,
+  type RecordDownloadState,
   type WorkspaceViewKey as LegacyWorkspaceViewKey,
 } from "./LegacyContentWorkspace";
 export { SetupWorkspace, type SetupArchiveInfo, type SetupWorkspaceProps } from "./SourceWorkspace";

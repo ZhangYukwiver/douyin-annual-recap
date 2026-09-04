@@ -1,5 +1,7 @@
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 
 import { chromium } from "playwright-core";
 
@@ -32,6 +34,11 @@ import {
   recordEndpointResult,
 } from "./progress.mjs";
 import { normalizeDirectSyncState } from "./store.mjs";
+import {
+  downloadDouyinVideo,
+  normalizeDouyinVideoUrl,
+  VideoDownloadError,
+} from "./videoDownloader.mjs";
 
 const HOME_URL = "https://www.douyin.com/";
 const CHAT_URL = "https://www.douyin.com/chat?isPopup=1";
@@ -63,6 +70,8 @@ const MANUAL_OBSERVATION_WARNING = "手动监听模式：仅保存你在独立�
 const LEGACY_CHAT_OBSERVATION_WARNING = "聊天监听模式：使用无头浏览器自动读取；群聊只保存群名和消息统计，好友对话保存已加载的完整消息内容。";
 const CHAT_OBSERVATION_WARNING = "聊天读取（单次）：使用无头浏览器自动读取，完成后自动停止；群聊只保存群名和消息统计，好友对话保存已加载的完整消息内容。";
 const DIRECT_COMPLETE_WARNING_PREFIX = "无界面读取完成：";
+const DOWNLOAD_JOB_RETENTION_MS = 30 * 60 * 1_000;
+const DOWNLOAD_JOB_LIMIT = 64;
 
 export function directContextLaunchOptions({ executablePath, userAgent, platform = process.platform }) {
   return {
@@ -932,6 +941,11 @@ export class DouyinCollector {
     this.accountSwitchPromise = null;
     this.syncRunId = 0;
     this.snapshot = null;
+    this.videoDownloadJobs = new Map();
+    this.videoDownloadQueue = Promise.resolve();
+    this.videoDownloadControllers = new Set();
+    this.videoDownloadActive = null;
+    this.statusRevision = 0;
     this.status = {
       state: "idle",
       phase: null,
@@ -944,6 +958,10 @@ export class DouyinCollector {
   }
 
   async initialize() {
+    // Download jobs are intentionally in-memory only. Remove orphaned files
+    // from a previous collector process because there is no job metadata left
+    // that could authorize serving them after a restart.
+    await rm(path.join(this.dataDirectory, "downloads"), { recursive: true, force: true }).catch(() => undefined);
     this.snapshot = await this.store.load();
     this.snapshot.chatMessages ??= [];
     this.snapshot.chatConversations ??= [];
@@ -955,6 +973,7 @@ export class DouyinCollector {
 
   updateStatus(patch) {
     this.status = { ...this.status, ...patch };
+    this.statusRevision += 1;
   }
 
   getStatus() {
@@ -963,6 +982,219 @@ export class DouyinCollector {
 
   getSnapshot() {
     return structuredClone(this.snapshot);
+  }
+
+  hasActiveVideoDownload() {
+    return this.videoDownloadActive !== null
+      || [...this.videoDownloadJobs.values()].some((job) => job.status === "queued" || job.status === "running");
+  }
+
+  oldestTerminalVideoDownloadJob() {
+    return [...this.videoDownloadJobs.values()]
+      .filter((job) => job.status !== "queued" && job.status !== "running")
+      .sort((left, right) => {
+        const leftTime = Date.parse(left.updatedAt ?? left.createdAt ?? "");
+        const rightTime = Date.parse(right.updatedAt ?? right.createdAt ?? "");
+        return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
+      })[0] ?? null;
+  }
+
+  scheduleVideoDownloadFileCleanup(job) {
+    if (typeof job?.filePath !== "string" || !job.filePath) return;
+    const downloadsDirectory = path.resolve(this.dataDirectory, "downloads");
+    const resolved = path.resolve(job.filePath);
+    if (resolved === downloadsDirectory || !resolved.startsWith(`${downloadsDirectory}${path.sep}`)) return;
+    void rm(resolved, { force: true }).catch(() => undefined);
+  }
+
+  retireVideoDownloadJob(job) {
+    if (!job || this.videoDownloadJobs.get(job.id) !== job) return false;
+    this.videoDownloadJobs.delete(job.id);
+    this.scheduleVideoDownloadFileCleanup(job);
+    return true;
+  }
+
+  pruneVideoDownloadJobs() {
+    const cutoff = Date.now() - DOWNLOAD_JOB_RETENTION_MS;
+    for (const job of this.videoDownloadJobs.values()) {
+      const updatedAt = Date.parse(job.updatedAt ?? job.createdAt ?? "");
+      if (job.status === "queued" || job.status === "running") continue;
+      if (Number.isFinite(updatedAt) && updatedAt >= cutoff) continue;
+      this.retireVideoDownloadJob(job);
+    }
+    while (this.videoDownloadJobs.size > DOWNLOAD_JOB_LIMIT) {
+      const oldest = this.oldestTerminalVideoDownloadJob();
+      if (!oldest) break;
+      this.retireVideoDownloadJob(oldest);
+    }
+  }
+
+  reserveVideoDownloadJobSlot() {
+    this.pruneVideoDownloadJobs();
+    while (this.videoDownloadJobs.size >= DOWNLOAD_JOB_LIMIT) {
+      const oldest = this.oldestTerminalVideoDownloadJob();
+      if (!oldest) {
+        throw new VideoDownloadError("download_job_limit", "视频下载任务队列已满，请稍后重试。", { retryable: true });
+      }
+      this.retireVideoDownloadJob(oldest);
+    }
+  }
+
+  publicVideoDownloadJob(job) {
+    if (!job) return null;
+    return {
+      id: job.id,
+      sourceUrl: job.sourceUrl,
+      status: job.status,
+      fileName: job.fileName,
+      bytes: job.bytes,
+      errorCode: job.errorCode,
+      error: job.error,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+    };
+  }
+
+  touchVideoDownloadJob(job, patch = {}) {
+    Object.assign(job, patch, { updatedAt: new Date().toISOString() });
+    return this.publicVideoDownloadJob(job);
+  }
+
+  startVideoDownload(sourceUrl) {
+    const normalizedSourceUrl = normalizeDouyinVideoUrl(sourceUrl);
+    if (this.syncPromise || this.observationPromise || this.accountSwitchPromise) {
+      throw new VideoDownloadError("collector_busy", "采集器正在执行其他任务，请稍后再试。", { retryable: true });
+    }
+    this.reserveVideoDownloadJobSlot();
+    const now = new Date().toISOString();
+    const job = {
+      id: randomUUID(),
+      sourceUrl: normalizedSourceUrl,
+      status: "queued",
+      fileName: null,
+      filePath: null,
+      bytes: null,
+      errorCode: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: null,
+      completedAt: null,
+    };
+    this.videoDownloadJobs.set(job.id, job);
+    const run = this.videoDownloadQueue
+      .catch(() => undefined)
+      .then(() => this.runVideoDownloadJob(job));
+    this.videoDownloadQueue = run.catch(() => undefined);
+    return this.publicVideoDownloadJob(job);
+  }
+
+  getVideoDownloadJob(jobId) {
+    this.pruneVideoDownloadJobs();
+    return this.publicVideoDownloadJob(this.videoDownloadJobs.get(jobId));
+  }
+
+  getVideoDownloadFilePath(jobId) {
+    const job = this.videoDownloadJobs.get(jobId);
+    if (!job || job.status !== "complete" || !job.filePath) return null;
+    const downloadsDirectory = path.resolve(this.dataDirectory, "downloads");
+    const resolved = path.resolve(job.filePath);
+    if (resolved !== downloadsDirectory && !resolved.startsWith(`${downloadsDirectory}${path.sep}`)) return null;
+    return resolved;
+  }
+
+  async runVideoDownloadJob(job) {
+    if (!job || job.status !== "queued") return;
+    if (this.videoDownloadActive) {
+      this.touchVideoDownloadJob(job, {
+        status: "failed",
+        errorCode: "collector_busy",
+        error: "采集器正在执行其他下载任务，请稍后再试。",
+        completedAt: new Date().toISOString(),
+      });
+      return;
+    }
+    const operation = {
+      job,
+      previousStatus: structuredClone(this.status),
+      statusRevisionAfterLaunch: null,
+    };
+    this.videoDownloadActive = operation;
+    const controller = new AbortController();
+    let context = null;
+    let ownsContext = false;
+    this.videoDownloadControllers.add(controller);
+    this.touchVideoDownloadJob(job, {
+      status: "running",
+      startedAt: new Date().toISOString(),
+      errorCode: null,
+      error: null,
+    });
+    try {
+      if (this.syncPromise || this.observationPromise || this.accountSwitchPromise) {
+        throw new VideoDownloadError("collector_busy", "采集器正在执行其他任务，请稍后再试。", { retryable: true });
+      }
+      if (this.context && !this.contextHeadless) {
+        throw new VideoDownloadError("collector_busy", "请先停止手动监听，再下载视频。", { retryable: true });
+      }
+      const existingContext = this.context;
+      try {
+        context = await this.ensureBrowser({ headless: true });
+      } catch (error) {
+        operation.statusRevisionAfterLaunch = this.statusRevision;
+        throw error;
+      }
+      ownsContext = context !== existingContext;
+      operation.statusRevisionAfterLaunch = this.statusRevision;
+      const result = await downloadDouyinVideo({
+        context,
+        sourceUrl: job.sourceUrl,
+        outputDirectory: path.join(this.dataDirectory, "downloads"),
+        signal: controller.signal,
+        onProgress: (bytes) => this.touchVideoDownloadJob(job, { bytes }),
+      });
+      this.touchVideoDownloadJob(job, {
+        status: "complete",
+        fileName: result.fileName,
+        filePath: result.filePath,
+        bytes: result.bytes,
+        completedAt: new Date().toISOString(),
+        errorCode: null,
+        error: null,
+      });
+    } catch (error) {
+      const message = error instanceof VideoDownloadError
+        ? error.message
+        : error instanceof Error && error.message
+          ? error.message
+          : "视频下载失败，请稍后重试。";
+      this.touchVideoDownloadJob(job, {
+        status: "failed",
+        errorCode: error?.code ?? "download_failed",
+        error: message,
+        completedAt: new Date().toISOString(),
+      });
+    } finally {
+      this.videoDownloadControllers.delete(controller);
+      if (ownsContext && context) {
+        if (this.context === context) {
+          this.context = null;
+          this.contextHeadless = null;
+        }
+        await closeContextWithin(context);
+      }
+      if (this.videoDownloadActive === operation) {
+        const canRestoreStatus = operation.statusRevisionAfterLaunch !== null
+          && operation.statusRevisionAfterLaunch === this.statusRevision
+          && !this.syncPromise
+          && !this.observationPromise
+          && !this.accountSwitchPromise;
+        if (canRestoreStatus) this.updateStatus(operation.previousStatus);
+        this.videoDownloadActive = null;
+      }
+    }
   }
 
   async clearRecords() {
@@ -980,7 +1212,7 @@ export class DouyinCollector {
   }
 
   startSync({ allowAccountSwitch = false, mode = "page" } = {}) {
-    if (this.syncPromise || this.observationPromise || (this.accountSwitchPromise && !allowAccountSwitch)) return false;
+    if (this.syncPromise || this.observationPromise || this.hasActiveVideoDownload() || (this.accountSwitchPromise && !allowAccountSwitch)) return false;
     this.syncStopRequested = false;
     const runId = this.syncRunId + 1;
     this.syncRunId = runId;
@@ -1051,7 +1283,7 @@ export class DouyinCollector {
   }
 
   startObservation({ allowAccountSwitch = false, mode = "records" } = {}) {
-    if (this.syncPromise || this.observationPromise || (this.accountSwitchPromise && !allowAccountSwitch)) return false;
+    if (this.syncPromise || this.observationPromise || this.hasActiveVideoDownload() || (this.accountSwitchPromise && !allowAccountSwitch)) return false;
     const runId = this.syncRunId + 1;
     this.syncRunId = runId;
     let releaseStop;
@@ -2192,6 +2424,9 @@ export class DouyinCollector {
 
   async switchAccount() {
     if (this.accountSwitchPromise) return false;
+    if (this.hasActiveVideoDownload()) {
+      throw new VideoDownloadError("collector_busy", "采集器正在下载视频，请稍后再试。", { retryable: true });
+    }
     const promise = (async () => {
       this.syncRunId += 1;
       const runningSync = this.syncPromise;
@@ -2242,6 +2477,17 @@ export class DouyinCollector {
   }
 
   async close() {
+    for (const job of this.videoDownloadJobs.values()) {
+      if (job.status === "queued") {
+        this.touchVideoDownloadJob(job, {
+          status: "failed",
+          errorCode: "collector_closed",
+          error: "采集器已关闭，下载任务未执行。",
+          completedAt: new Date().toISOString(),
+        });
+      }
+    }
+    for (const controller of this.videoDownloadControllers) controller.abort(new Error("collector_closed"));
     this.stopSync({ silent: true });
     await this.stopObservation({ silent: true });
     const context = this.context;

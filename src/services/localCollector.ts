@@ -9,7 +9,7 @@ import {
   type PersonalVideoProgress,
   type PersonalVideoStats,
 } from "../domain/personalRecords";
-import type { ChatConversationKind, ChatConversationSummary, ChatMessage, ChatMessageType, ChatShare } from "../domain/chatRecords";
+import { hasChatShareEvidence, type ChatConversationKind, type ChatConversationSummary, type ChatMessage, type ChatMessageType, type ChatShare } from "../domain/chatRecords";
 
 export type CollectorState =
   | "idle"
@@ -43,6 +43,27 @@ export interface CollectorSnapshot {
   chatMessages: ChatMessage[];
   chatConversations: ChatConversationSummary[];
   warnings: string[];
+}
+
+export type VideoDownloadJobStatus = "queued" | "running" | "complete" | "failed";
+
+export interface VideoDownloadJob {
+  id: string;
+  sourceUrl: string;
+  status: VideoDownloadJobStatus;
+  fileName: string | null;
+  bytes: number | null;
+  errorCode: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface VideoDownloadFile {
+  blob: Blob;
+  fileName: string | null;
 }
 
 export class LocalCollectorError extends Error {
@@ -379,6 +400,17 @@ function parseChatMessage(value: unknown): ChatMessage | null {
     value.senderInfo,
     value.sender_info,
   ]);
+  const rawType = parseChatType(value.type);
+  const share = parseChatShare(value.share);
+  const shareHasEvidence = hasChatShareEvidence(share);
+  const shareIsRenderable = rawType === "share" && shareHasEvidence;
+  const rawText = cleanRecordString(value.text);
+  const fallbackText = rawText && !/^\[分享\]$/u.test(rawText)
+    ? rawText
+    : (!shareIsRenderable && rawType === "share" && share?.title ? share.title : rawText);
+  const type: ChatMessageType = rawType === "share" && !shareIsRenderable
+    ? (fallbackText ? "text" : "unknown")
+    : rawType;
   const message: ChatMessage = {
     id,
     conversationId: cleanRecordString(value.conversationId, 300),
@@ -387,10 +419,10 @@ function parseChatMessage(value: unknown): ChatMessage | null {
     senderId: cleanRecordString(value.senderId, 300),
     senderName: cleanRecordString(value.senderName),
     sentAt: parseDate(value.sentAt),
-    type: parseChatType(value.type),
-    text: cleanRecordString(value.text),
+    type,
+    text: fallbackText,
     mediaUrl: parseImageUrl(value.mediaUrl),
-    share: parseChatShare(value.share),
+    share: shareHasEvidence ? share : null,
     callDurationSeconds: duration,
   };
   if (senderAvatarUrl) message.senderAvatarUrl = senderAvatarUrl;
@@ -550,6 +582,37 @@ function countForChat(value: unknown): number {
   return value;
 }
 
+function parseVideoDownloadJob(value: unknown): VideoDownloadJob {
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务下载任务无效。");
+  const statuses: VideoDownloadJobStatus[] = ["queued", "running", "complete", "failed"];
+  const status = statuses.find((item) => item === value.status);
+  if (!status || typeof value.id !== "string" || typeof value.sourceUrl !== "string") {
+    throw new LocalCollectorError("invalid_response", "采集服务下载任务字段不完整。");
+  }
+  const optionalString = (candidate: unknown): string | null => candidate === null || candidate === undefined
+    ? null
+    : typeof candidate === "string" ? candidate : null;
+  const optionalBytes = (candidate: unknown): number | null => candidate === null || candidate === undefined
+    ? null
+    : typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : null;
+  const createdAt = typeof value.createdAt === "string" ? value.createdAt : "";
+  const updatedAt = typeof value.updatedAt === "string" ? value.updatedAt : createdAt;
+  if (!createdAt || !updatedAt) throw new LocalCollectorError("invalid_response", "采集服务下载任务时间字段无效。");
+  return {
+    id: value.id,
+    sourceUrl: value.sourceUrl,
+    status,
+    fileName: optionalString(value.fileName),
+    bytes: optionalBytes(value.bytes),
+    errorCode: optionalString(value.errorCode),
+    error: optionalString(value.error),
+    createdAt,
+    updatedAt,
+    startedAt: optionalString(value.startedAt),
+    completedAt: optionalString(value.completedAt),
+  };
+}
+
 async function requestJson(
   baseUrl: string,
   path: string,
@@ -626,6 +689,87 @@ export async function getCollectorStatus(baseUrl: string, token: string): Promis
 
 export async function getCollectorRecords(baseUrl: string, token: string): Promise<CollectorSnapshot> {
   return parseSnapshot(await requestJson(baseUrl, "/v1/records", {}, token));
+}
+
+export async function startCollectorVideoDownload(
+  baseUrl: string,
+  token: string,
+  url: string,
+): Promise<VideoDownloadJob> {
+  if (!url.trim()) throw new LocalCollectorError("invalid_url", "该记录没有可下载的抖音链接。");
+  const value = await requestJson(baseUrl, "/v1/downloads", {
+    method: "POST",
+    body: JSON.stringify({ url: url.trim() }),
+  }, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回下载任务。");
+  return parseVideoDownloadJob(value.job);
+}
+
+export async function getCollectorVideoDownload(
+  baseUrl: string,
+  token: string,
+  jobId: string,
+): Promise<VideoDownloadJob> {
+  if (!/^[0-9a-f-]{20,}$/iu.test(jobId)) {
+    throw new LocalCollectorError("invalid_job", "下载任务编号无效。");
+  }
+  const value = await requestJson(baseUrl, `/v1/downloads/${encodeURIComponent(jobId)}`, {}, token);
+  if (!isObject(value)) throw new LocalCollectorError("invalid_response", "采集服务未返回下载状态。");
+  return parseVideoDownloadJob(value.job);
+}
+
+function fileNameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null;
+  const encoded = value.match(/filename\*=(?:UTF-8'')?([^;]+)/iu)?.[1];
+  if (encoded) {
+    try {
+      const decoded = decodeURIComponent(encoded.replace(/^"|"$/gu, ""));
+      return decoded || null;
+    } catch {
+      // Fall through to the plain filename form.
+    }
+  }
+  const plain = value.match(/filename="?([^";]+)"?/iu)?.[1]?.trim();
+  return plain || null;
+}
+
+export async function fetchCollectorVideoFile(
+  baseUrl: string,
+  token: string,
+  jobId: string,
+  timeoutMs = 15 * 60 * 1_000,
+): Promise<VideoDownloadFile> {
+  if (!/^[0-9a-f-]{20,}$/iu.test(jobId)) {
+    throw new LocalCollectorError("invalid_job", "下载任务编号无效。");
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${normalizeCollectorBaseUrl(baseUrl)}/v1/downloads/${encodeURIComponent(jobId)}/file`, {
+      signal: controller.signal,
+      headers: {
+        Accept: "video/mp4,video/*;q=0.9,*/*;q=0.8",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as unknown;
+      const code = isObject(payload) && typeof payload.error === "string" ? payload.error : `http_${response.status}`;
+      throw new LocalCollectorError(code, code === "download_not_complete" ? "视频仍在准备中，请稍后再试。" : "无法获取已下载的视频文件。");
+    }
+    return {
+      blob: await response.blob(),
+      fileName: fileNameFromContentDisposition(response.headers.get("content-disposition")),
+    };
+  } catch (error) {
+    if (error instanceof LocalCollectorError) throw error;
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new LocalCollectorError("timeout", "获取视频文件超时，请稍后重试。");
+    }
+    throw new LocalCollectorError("unreachable", "无法获取视频文件，请确认采集服务仍在运行。");
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function startCollectorSync(baseUrl: string, token: string): Promise<CollectorStatus> {

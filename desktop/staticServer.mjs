@@ -16,6 +16,9 @@ const CONTENT_TYPES = new Map([
   [".webp", "image/webp"],
 ]);
 
+// The story pages under /story are self-contained prototype HTML: inline scripts, inline styles and Google Fonts.
+const STORY_CSP = "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com; frame-ancestors 'none'; img-src 'self' data: https:; media-src 'self'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com";
+
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self' http://127.0.0.1:* http://localhost:*; font-src 'self' data:; frame-ancestors 'none'; img-src 'self' data: https:; media-src 'self' https:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'",
   "Referrer-Policy": "no-referrer",
@@ -78,10 +81,11 @@ export async function startStaticServer({ rootDirectory, host = "127.0.0.1", por
       if (!details.isFile()) throw Object.assign(new Error("not_file"), { code: "ENOENT" });
       const body = await readFile(assetPath);
       const contentType = CONTENT_TYPES.get(path.extname(assetPath).toLowerCase()) ?? "application/octet-stream";
-      const cacheControl = path.basename(assetPath) === "index.html"
+      const story = pathname.startsWith("/story/");
+      const cacheControl = story || path.basename(assetPath) === "index.html"
         ? "no-cache"
         : "public, max-age=31536000, immutable";
-      send(response, 200, { "Cache-Control": cacheControl, "Content-Type": contentType }, body, headOnly);
+      send(response, 200, { "Cache-Control": cacheControl, "Content-Type": contentType, ...(story && { "Content-Security-Policy": STORY_CSP }) }, body, headOnly);
     } catch (error) {
       if (error?.code !== "ENOENT") {
         send(response, 500, { "Content-Type": "text/plain; charset=utf-8" }, Buffer.from("Internal Server Error"), headOnly);

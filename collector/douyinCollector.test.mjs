@@ -1,3 +1,7 @@
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -11,6 +15,7 @@ import {
 import { createEmptyRecords } from "./normalizer.mjs";
 import { createEndpointProgress } from "./progress.mjs";
 import { normalizeDirectSyncState } from "./store.mjs";
+import { VideoDownloadError } from "./videoDownloader.mjs";
 
 function emptySnapshot() {
   return {
@@ -220,6 +225,239 @@ describe("direct browser launch options", () => {
       headless: true,
       args: ["--headless=new", "--window-size=1280,900"],
     });
+  });
+});
+
+describe("video download jobs", () => {
+  it("validates the source before creating a queued job", () => {
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    expect(() => collector.startVideoDownload("https://example.com/video/1")).toThrowError(/抖音视频链接/u);
+    expect(collector.videoDownloadJobs.size).toBe(0);
+  });
+
+  it("keeps queued jobs private and blocks paths outside the download directory", async () => {
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.runVideoDownloadJob = vi.fn().mockResolvedValue(undefined);
+    const job = collector.startVideoDownload("https://www.douyin.com/video/1234567890");
+    expect(job).toMatchObject({ status: "queued", sourceUrl: "https://www.douyin.com/video/1234567890" });
+    expect(job).not.toHaveProperty("filePath");
+    await collector.videoDownloadQueue;
+    expect(collector.runVideoDownloadJob).toHaveBeenCalledTimes(1);
+
+    const internal = collector.videoDownloadJobs.get(job.id);
+    internal.status = "complete";
+    internal.filePath = "/tmp/not-a-download.mp4";
+    expect(collector.getVideoDownloadFilePath(job.id)).toBeNull();
+  });
+
+  it("marks queued jobs as failed when the collector closes", async () => {
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.runVideoDownloadJob = vi.fn().mockResolvedValue(undefined);
+    const job = collector.startVideoDownload("https://www.douyin.com/video/1234567890");
+    await collector.close();
+    expect(collector.getVideoDownloadJob(job.id)).toMatchObject({ status: "failed", errorCode: "collector_closed" });
+  });
+
+  it("restores the terminal collector status after its headless context closes on failure", async () => {
+    const context = {
+      close: vi.fn(async () => undefined),
+    };
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.status = {
+      ...collector.status,
+      state: "partial",
+      phase: "liked_videos",
+      message: "已保留上次保存的记录",
+      progress: { current: 2, total: 3 },
+      browserOpen: false,
+    };
+    const previousStatus = collector.getStatus();
+    collector.ensureBrowser = vi.fn(async () => {
+      collector.updateStatus({
+        state: "launching_browser",
+        phase: null,
+        message: "正在启动无头抖音会话",
+        browserOpen: true,
+      });
+      collector.context = context;
+      collector.contextHeadless = true;
+      return context;
+    });
+    collector.videoDownloadJobs.set("download-status-reset", {
+      id: "download-status-reset",
+      sourceUrl: "https://www.douyin.com/video/1234567890",
+      status: "queued",
+      fileName: null,
+      filePath: null,
+      bytes: null,
+      errorCode: null,
+      error: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      startedAt: null,
+      completedAt: null,
+    });
+
+    await collector.runVideoDownloadJob(collector.videoDownloadJobs.get("download-status-reset"));
+
+    expect(context.close).toHaveBeenCalledTimes(1);
+    expect(collector.getStatus()).toEqual(previousStatus);
+  });
+
+  it("restores the terminal collector status when headless launch fails", async () => {
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.status = {
+      ...collector.status,
+      state: "complete",
+      message: "上一轮读取已完成",
+      browserOpen: false,
+    };
+    const previousStatus = collector.getStatus();
+    collector.ensureBrowser = vi.fn(async () => {
+      collector.updateStatus({
+        state: "launching_browser",
+        message: "正在启动无头抖音会话",
+        browserOpen: false,
+      });
+      throw new Error("headless_launch_failed");
+    });
+    const job = {
+      id: "download-launch-failed",
+      sourceUrl: "https://www.douyin.com/video/1234567890",
+      status: "queued",
+      fileName: null,
+      filePath: null,
+      bytes: null,
+      errorCode: null,
+      error: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      startedAt: null,
+      completedAt: null,
+    };
+    collector.videoDownloadJobs.set(job.id, job);
+
+    await collector.runVideoDownloadJob(job);
+
+    expect(collector.getVideoDownloadJob(job.id)).toMatchObject({ status: "failed" });
+    expect(collector.getStatus()).toEqual(previousStatus);
+  });
+
+  it("blocks sync and observation while a download is running", async () => {
+    let releaseBrowser;
+    const browserGate = new Promise((resolve) => { releaseBrowser = resolve; });
+    const context = { close: vi.fn(async () => undefined) };
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.ensureBrowser = vi.fn(async () => {
+      collector.context = context;
+      collector.contextHeadless = true;
+      await browserGate;
+      return context;
+    });
+    const job = {
+      id: "download-concurrency",
+      sourceUrl: "https://www.douyin.com/video/1234567890",
+      status: "queued",
+      fileName: null,
+      filePath: null,
+      bytes: null,
+      errorCode: null,
+      error: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      startedAt: null,
+      completedAt: null,
+    };
+    collector.videoDownloadJobs.set(job.id, job);
+    const running = collector.runVideoDownloadJob(job);
+    await vi.waitFor(() => expect(job.status).toBe("running"));
+
+    expect(collector.startSync()).toBe(false);
+    expect(collector.startObservation()).toBe(false);
+
+    releaseBrowser();
+    await running;
+  });
+
+  it("rejects a new job when all retained slots are queued or running", () => {
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    for (let index = 0; index < 64; index += 1) {
+      collector.videoDownloadJobs.set(`download-active-${index}`, {
+        id: `download-active-${index}`,
+        status: index % 2 === 0 ? "queued" : "running",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    expect(() => collector.startVideoDownload("https://www.douyin.com/video/1234567890"))
+      .toThrowError(VideoDownloadError);
+    try {
+      collector.startVideoDownload("https://www.douyin.com/video/1234567890");
+    } catch (error) {
+      expect(error).toMatchObject({ name: "VideoDownloadError", code: "download_job_limit" });
+    }
+    expect(collector.videoDownloadJobs.size).toBe(64);
+  });
+
+  it("rejects account switching while a download is queued or running", async () => {
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory: ".test", store: {} });
+    collector.videoDownloadJobs.set("download-switch-blocked", {
+      id: "download-switch-blocked",
+      status: "running",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    await expect(collector.switchAccount()).rejects.toMatchObject({
+      name: "VideoDownloadError",
+      code: "collector_busy",
+    });
+  });
+
+  it("removes an expired terminal job file asynchronously when pruning", async () => {
+    const dataDirectory = await mkdtemp(path.join(tmpdir(), "douyin-collector-download-jobs-"));
+    const downloadsDirectory = path.join(dataDirectory, "downloads");
+    const filePath = path.join(downloadsDirectory, "expired.mp4");
+    await mkdir(downloadsDirectory, { recursive: true });
+    await writeFile(filePath, "video");
+    const collector = new DouyinCollector({ executablePath: "chrome", dataDirectory, store: {} });
+    collector.videoDownloadJobs.set("download-expired", {
+      id: "download-expired",
+      status: "complete",
+      filePath,
+      updatedAt: new Date(Date.now() - 31 * 60 * 1_000).toISOString(),
+      createdAt: new Date(Date.now() - 31 * 60 * 1_000).toISOString(),
+    });
+
+    try {
+      collector.pruneVideoDownloadJobs();
+      await vi.waitFor(async () => {
+        await expect(access(filePath)).rejects.toThrow();
+      });
+      expect(collector.videoDownloadJobs.has("download-expired")).toBe(false);
+    } finally {
+      await rm(dataDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("clears orphaned download files when the collector initializes", async () => {
+    const dataDirectory = await mkdtemp(path.join(tmpdir(), "douyin-collector-download-cache-"));
+    const filePath = path.join(dataDirectory, "downloads", "orphan.mp4");
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, "orphaned video");
+    const collector = new DouyinCollector({
+      executablePath: "chrome",
+      dataDirectory,
+      store: { load: vi.fn().mockResolvedValue(emptySnapshot()) },
+    });
+
+    try {
+      await collector.initialize();
+      await expect(access(filePath)).rejects.toThrow();
+    } finally {
+      await rm(dataDirectory, { recursive: true, force: true });
+    }
   });
 });
 
