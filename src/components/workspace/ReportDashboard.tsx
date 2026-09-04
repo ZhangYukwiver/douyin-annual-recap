@@ -27,6 +27,8 @@ export interface ReportDashboardProps {
   model: ReportModel;
   onOpenRecord: (url: string) => Promise<void>;
   privacy: boolean;
+  /** 可用内容宽度，决定瀑布列数。 */
+  width: number;
 }
 
 const weekLetters = ["M", "T", "W", "T", "F", "S", "S"];
@@ -38,14 +40,153 @@ const sliceColors = ["#6E8C8F", "#C59861", "#4E787C", "#A8804F", "#8FA9AB", "#8A
 
 /**
  * 持续报告：与故事页（ReportWorkspace 十二章）同源的一屏读数。
- * 版式是错位便当盒——每格只做一件事、只用一种图形，格子高度不齐才排得出层次。
+ * 版式是错位便当盒：瀑布流分列，格子按估高塞进最矮的一列，首尾相接不留空行。
+ * 每格只做一件事、只用一种图形，高度不齐正是层次来源。
  */
-export function ReportDashboard({ mobile, model, onOpenRecord, privacy }: ReportDashboardProps) {
+export function ReportDashboard({ mobile, model, onOpenRecord, privacy, width }: ReportDashboardProps) {
   const observed = model.total + model.chat;
   const partial = model.status === "partial" || model.reliableRatio < 1;
   const pcts = model.progressPercents;
   const share = (test: (value: number) => boolean) => (pcts.length ? pcts.filter(test).length / pcts.length * 100 : null);
   const recent = [...new Map(model.recent.map((item) => [`${item.title}:${item.time}`, item])).values()].slice(0, 6);
+
+  const [measured, setMeasured] = React.useState<Record<string, number>>({});
+  const board = width - (mobile ? 24 : 40);
+  const units = mobile || board < 620 ? 1 : board < 860 ? 12 : board < 1140 ? 16 : 24;
+  const unit = (board - GAP * (units - 1)) / units;
+  const tiles: Tile[] = [
+    { key: "days", w: 6, h: 108, node: (
+      <Cardlet en="ACTIVE DAYS" key="days" title="活跃天数">
+        <Figure sub="/ 365" value={model.activeDays ? String(model.activeDays) : "—"} />
+      </Cardlet>
+    ) },
+    { key: "events", w: 7, h: 108, node: (
+      <Cardlet en="EVENTS" key="events" title="观测事件">
+        <Figure sub="observed" value={observed ? observed.toLocaleString("en-US") : "—"} />
+      </Cardlet>
+    ) },
+    { key: "unique", w: 5, h: 108, node: (
+      <Cardlet en="UNIQUE" key="unique" title="去重内容">
+        <Figure sub="unique" value={model.unique ? model.unique.toLocaleString("en-US") : "—"} />
+      </Cardlet>
+    ) },
+    { key: "attention", w: 6, h: 108, node: (
+      <Cardlet en="ATTENTION" key="attention" title="总注意力">
+        <Figure sub={model.watch ? `${model.watch.toLocaleString("zh-CN")} 条观看` : "observed"} value={attentionLabel(model.attentionSeconds)} />
+      </Cardlet>
+    ) },
+    { key: "heat", w: 11, h: 268, node: (
+      <Cardlet
+        en="WEEK × HOUR"
+        foot={rhythmPattern(model)}
+        key="heat"
+        meta={model.peakDay === null ? "时间证据不足" : `${weekdayNames[model.peakDay]} 最密`}
+        title="一周热力"
+      >
+        <HeatGrid heatmap={model.heatmap} />
+      </Cardlet>
+    ) },
+    { key: "hours", w: 8, h: 186, node: (
+      <Cardlet en="HOURS" key="hours" meta={model.peakHour === null ? "—" : `${pad(model.peakHour)}:00 峰值`} title="一天的曲线">
+        <HourCurve peak={model.peakHour} values={model.hours} />
+      </Cardlet>
+    ) },
+    { key: "completion", w: 5, h: 228, node: (
+      <Cardlet en="COMPLETION" key="completion" meta={`${pcts.length.toLocaleString("zh-CN")} 条进度`} title="平均完成度">
+        <Ring caption={model.watch ? `重播 ${Math.round(model.replays / model.watch * 100)}%` : "等待进度"} label={pctLabel(model.completion)} value={model.completion} />
+      </Cardlet>
+    ) },
+    { key: "funnel", w: 9, h: 252, node: (
+      <Cardlet en="FUNNEL" foot={attentionPattern(model.completion)} key="funnel" meta="观看进度分档" title="停留漏斗">
+        <Funnel steps={[
+          { label: "开始浏览", value: pcts.length ? 100 : null },
+          { label: "继续观看", value: share((value) => value >= 25) },
+          { label: "深度观看", value: share((value) => value >= 60) },
+          { label: "完成观看", value: share((value) => value >= 90) },
+        ]} />
+      </Cardlet>
+    ) },
+    { key: "topics", w: 10, h: 262, node: (
+      <Cardlet en="TOPICS" foot={contentPattern(model.topics)} key="topics" meta={`${model.topics.length} 个主题信号`} title="主题色块">
+        <Mosaic items={model.topics.slice(0, 8).map((topic, index) => ({ label: privacy ? `话题${index + 1}` : topic.name, value: topic.count }))} />
+      </Cardlet>
+    ) },
+    { key: "length", w: 6, h: 244, node: (
+      <Cardlet en="LENGTH" key="length" meta="按内容时长" title="时长构成">
+        <Pie slices={model.durationBands.map((band) => ({ label: band.label, sub: band.en, value: band.share ?? 0 }))} />
+      </Cardlet>
+    ) },
+    { key: "format", w: 4, h: 212, node: (
+      <Cardlet en="FORMAT" key="format" meta={`${model.formats.length} 种形态`} title="内容形态">
+        <Pie donut slices={model.formats.slice(0, 4).map((format) => ({ label: format.name, sub: String(format.count), value: format.share }))} />
+      </Cardlet>
+    ) },
+    { key: "tail", w: 11, h: 258, node: (
+      <Cardlet en="LONG TAIL" foot={creatorsPattern(model)} key="tail" meta={`${model.creatorsCount.toLocaleString("zh-CN")} 位可识别`} title="创作者长尾">
+        <TailCurve head={model.creators.slice(0, 3).map((creator, index) => ({ label: privacy ? `创作者 ${index + 1}` : creator.name, value: creator.count }))} tail={model.creatorFocus.tail} />
+      </Cardlet>
+    ) },
+    { key: "concentration", w: 6, h: 228, node: (
+      <Cardlet en="CONCENTRATION" key="concentration" meta="前三位占比" title="创作者集中度">
+        <Ring caption={`新面孔 ${pctLabel(model.creatorFocus.discovery)}`} label={pctLabel(model.creatorFocus.concentration)} tone={GOLD} value={model.creatorFocus.concentration} />
+      </Cardlet>
+    ) },
+    { key: "daynight", w: 10, h: 216, node: (
+      <Cardlet en="DAY & NIGHT" key="daynight" meta={`昼夜重合 ${pctLabel(model.overlap)}`} title="内容与对话">
+        <DualCurve chat={model.chatHours} watch={model.hours} />
+      </Cardlet>
+    ) },
+    { key: "chatmix", w: 7, h: 254, node: (
+      <Cardlet en="CHAT MIX" key="chatmix" meta={`${model.chat.toLocaleString("zh-CN")} 条消息`} title="消息类型">
+        <Pie donut slices={model.chatKinds.slice(0, 5).map((kind) => ({ label: kind.name, sub: String(kind.count), value: kind.share }))} />
+      </Cardlet>
+    ) },
+    { key: "months", w: 8, h: 172, node: (
+      <Cardlet en="MONTHS" key="months" meta={model.peakMonth === null ? "月份趋势不可用" : `峰值 ${monthNames[model.peakMonth]}`} title="全年起伏">
+        <MonthCurve months={model.months} peak={model.peakMonth} />
+      </Cardlet>
+    ) },
+    { key: "venn", w: 8, h: 288, node: (
+      <Cardlet en="OVERLAP" key="venn" meta="三类列表交集" title="留下的内容">
+        <Venn intersection={model.intersection} totals={{ favorite: model.favorite, liked: model.liked, watch: model.watch }} />
+      </Cardlet>
+    ) },
+    { key: "matrix", w: 9, h: 276, node: (
+      <Cardlet en="CORRELATION" key="matrix" meta={`${model.cross.days} 个观测日`} title="交叉矩阵">
+        <Matrix labels={model.cross.labels} matrix={model.cross.matrix} />
+      </Cardlet>
+    ) },
+    { key: "radar", w: 6, h: 282, node: (
+      <Cardlet en="HABIT PROFILE" key="radar" meta={model.profile} title="习惯雷达">
+        <Radar axes={model.axes} />
+      </Cardlet>
+    ) },
+    { key: "cross", w: 8, h: 214, node: (
+      <Cardlet en="CROSS PATTERNS" key="cross" meta="按相关性排序" title="交叉洞察">
+        <InsightList items={model.cross.patterns.map((pattern) => ({ text: pattern.text, title: pattern.title }))} />
+      </Cardlet>
+    ) },
+    { key: "surprises", w: 10, h: 252, node: (
+      <Cardlet
+        en="SURPRISES"
+        key="surprises"
+        meta={`${model.surprises.filter((insight) => insight.status === "observed").length} / ${model.surprises.length} 已点亮`}
+        title="意外发现"
+      >
+        <InsightList items={model.surprises.map((insight) => ({ badge: insight.status, text: insight.text, title: insight.title }))} />
+      </Cardlet>
+    ) },
+    { key: "recent", w: 8, h: 226, node: (
+      <Cardlet en="RECENT" key="recent" meta={`${model.events.length.toLocaleString("zh-CN")} 条事件`} title="近期事件">
+        <EventList items={recent} onOpenRecord={onOpenRecord} privacy={privacy} />
+      </Cardlet>
+    ) },
+    { key: "boundary", w: 8, h: 178, node: (
+      <Cardlet en="BOUNDARY" key="boundary" meta={`${Math.round(model.reliableRatio * 100)}% 可靠时间`} title="数据边界">
+        <Boundary model={model} />
+      </Cardlet>
+    ) },
+  ];
 
   return (
     <ScrollView
@@ -53,19 +194,6 @@ export function ReportDashboard({ mobile, model, onOpenRecord, privacy }: Report
       contentContainerStyle={[styles.content, mobile && styles.contentMobile]}
       showsVerticalScrollIndicator={false}
     >
-      <View style={[styles.masthead, mobile && styles.mastheadMobile]}>
-        <View style={styles.mastheadCopy}>
-          <Text style={styles.eyebrow}>LIVING REPORT · {model.period}</Text>
-          <Text style={[styles.title, mobile && styles.titleMobile]}>十二章报告，一格一图。</Text>
-          <Text style={styles.lead}>节拍、停留、内容、创作者、聊天、交叉与习惯，全部来自当前本地样本，与内容故事同源同口径。</Text>
-        </View>
-        <View style={[styles.mastheadSide, mobile && styles.mastheadSideMobile]}>
-          <Text numberOfLines={1} style={styles.mastheadValue}>{model.period}</Text>
-          <Text style={styles.mastheadMeta}>{model.activeDays} 个活跃日 · {model.year}</Text>
-          <Text style={styles.mastheadMeta}>{model.status === "empty" ? "样本为空" : partial ? "部分样本" : "完整样本"}</Text>
-        </View>
-      </View>
-
       {partial ? (
         <View style={styles.coverage}>
           <Text style={styles.coverageLabel}>样本覆盖</Text>
@@ -76,143 +204,156 @@ export function ReportDashboard({ mobile, model, onOpenRecord, privacy }: Report
         </View>
       ) : null}
 
-      <Row mobile={mobile}>
-        <Tile en="ACTIVE DAYS" flex={1} minHeight={124} mobile={mobile} title="活跃天数">
-          <Figure sub="/ 365" value={model.activeDays ? String(model.activeDays) : "—"} />
-        </Tile>
-        <Tile en="EVENTS" flex={1} minHeight={124} mobile={mobile} title="观测事件">
-          <Figure sub="observed" value={observed ? observed.toLocaleString("en-US") : "—"} />
-        </Tile>
-        <Tile en="UNIQUE" flex={1} minHeight={124} mobile={mobile} title="去重内容">
-          <Figure sub="unique" value={model.unique ? model.unique.toLocaleString("en-US") : "—"} />
-        </Tile>
-        <Tile en="ATTENTION" flex={1} minHeight={124} mobile={mobile} title="总注意力">
-          <Figure sub={model.watch ? `${model.watch.toLocaleString("zh-CN")} 条观看` : "observed"} value={attentionLabel(model.attentionSeconds)} />
-        </Tile>
-      </Row>
-
-      <Row mobile={mobile}>
-        <Tile
-          en="WEEK × HOUR"
-          flex={2.3}
-          foot={rhythmPattern(model)}
-          meta={model.peakDay === null ? "时间证据不足" : `${weekdayNames[model.peakDay]} 最密`}
-          minHeight={278}
-          mobile={mobile}
-          title="一周热力"
-        >
-          <HeatGrid heatmap={model.heatmap} />
-        </Tile>
-        <Tile en="HOURS" flex={1.5} meta={model.peakHour === null ? "—" : `${pad(model.peakHour)}:00 峰值`} minHeight={228} mobile={mobile} title="一天的曲线">
-          <HourCurve peak={model.peakHour} values={model.hours} />
-        </Tile>
-        <Tile en="COMPLETION" flex={1} meta={`${pcts.length.toLocaleString("zh-CN")} 条进度`} minHeight={278} mobile={mobile} title="平均完成度">
-          <Ring caption={model.watch ? `重播 ${Math.round(model.replays / model.watch * 100)}%` : "等待进度"} label={pctLabel(model.completion)} value={model.completion} />
-        </Tile>
-      </Row>
-
-      <Row mobile={mobile}>
-        <Tile en="TOPICS" flex={2} foot={contentPattern(model.topics)} meta={`${model.topics.length} 个主题信号`} minHeight={252} mobile={mobile} title="主题色块">
-          <Mosaic items={model.topics.slice(0, 8).map((topic, index) => ({ label: privacy ? `话题${index + 1}` : topic.name, value: topic.count }))} />
-        </Tile>
-        <Tile en="LENGTH" flex={1.2} meta="按内容时长" minHeight={248} mobile={mobile} title="时长构成">
-          <Pie slices={model.durationBands.map((band) => ({ label: band.label, sub: band.en, value: band.share ?? 0 }))} />
-        </Tile>
-        <Tile en="FORMAT" flex={1} meta={`${model.formats.length} 种形态`} minHeight={226} mobile={mobile} title="内容形态">
-          <Pie donut slices={model.formats.slice(0, 4).map((format) => ({ label: format.name, sub: String(format.count), value: format.share }))} />
-        </Tile>
-      </Row>
-
-      <Row mobile={mobile}>
-        <Tile en="FUNNEL" flex={1.3} foot={attentionPattern(model.completion)} meta="观看进度分档" minHeight={262} mobile={mobile} title="停留漏斗">
-          <Funnel steps={[
-            { label: "开始浏览", value: pcts.length ? 100 : null },
-            { label: "继续观看", value: share((value) => value >= 25) },
-            { label: "深度观看", value: share((value) => value >= 60) },
-            { label: "完成观看", value: share((value) => value >= 90) },
-          ]} />
-        </Tile>
-        <Tile en="LONG TAIL" flex={2} foot={creatorsPattern(model)} meta={`${model.creatorsCount.toLocaleString("zh-CN")} 位可识别`} minHeight={228} mobile={mobile} title="创作者长尾">
-          <TailCurve head={model.creators.slice(0, 3).map((creator, index) => ({ label: privacy ? `创作者 ${index + 1}` : creator.name, value: creator.count }))} tail={model.creatorFocus.tail} />
-        </Tile>
-        <Tile en="CONCENTRATION" flex={1} meta="前三位占比" minHeight={262} mobile={mobile} title="创作者集中度">
-          <Ring caption={`新面孔 ${pctLabel(model.creatorFocus.discovery)}`} label={pctLabel(model.creatorFocus.concentration)} tone={GOLD} value={model.creatorFocus.concentration} />
-        </Tile>
-      </Row>
-
-      <Row mobile={mobile}>
-        <Tile en="DAY & NIGHT" flex={2} meta={`昼夜重合 ${pctLabel(model.overlap)}`} minHeight={236} mobile={mobile} title="内容与对话">
-          <DualCurve chat={model.chatHours} watch={model.hours} />
-        </Tile>
-        <Tile en="CHAT MIX" flex={1} meta={`${model.chat.toLocaleString("zh-CN")} 条消息`} minHeight={268} mobile={mobile} title="消息类型">
-          <Pie donut slices={model.chatKinds.slice(0, 5).map((kind) => ({ label: kind.name, sub: String(kind.count), value: kind.share }))} />
-        </Tile>
-        <Tile en="MONTHS" flex={1.8} meta={model.peakMonth === null ? "月份趋势不可用" : `峰值 ${monthNames[model.peakMonth]}`} minHeight={210} mobile={mobile} title="全年起伏">
-          <MonthCurve months={model.months} peak={model.peakMonth} />
-        </Tile>
-      </Row>
-
-      <Row mobile={mobile}>
-        <Tile en="OVERLAP" flex={1.1} meta="三类列表交集" minHeight={272} mobile={mobile} title="留下的内容">
-          <Venn intersection={model.intersection} totals={{ favorite: model.favorite, liked: model.liked, watch: model.watch }} />
-        </Tile>
-        <Tile en="CORRELATION" flex={1.2} meta={`${model.cross.days} 个观测日`} minHeight={302} mobile={mobile} title="交叉矩阵">
-          <Matrix labels={model.cross.labels} matrix={model.cross.matrix} />
-        </Tile>
-        <Tile en="HABIT PROFILE" flex={1.3} meta={model.profile} minHeight={272} mobile={mobile} title="习惯雷达">
-          <Radar axes={model.axes} />
-        </Tile>
-      </Row>
-
-      <Row mobile={mobile}>
-        <Tile en="CROSS PATTERNS" flex={1.4} meta="按相关性排序" minHeight={212} mobile={mobile} title="交叉洞察">
-          <InsightList items={model.cross.patterns.map((pattern) => ({ text: pattern.text, title: pattern.title }))} />
-        </Tile>
-        <Tile
-          en="SURPRISES"
-          flex={1.4}
-          meta={`${model.surprises.filter((insight) => insight.status === "observed").length} / ${model.surprises.length} 已点亮`}
-          minHeight={252}
-          mobile={mobile}
-          title="意外发现"
-        >
-          <InsightList items={model.surprises.map((insight) => ({ badge: insight.status, text: insight.text, title: insight.title }))} />
-        </Tile>
-        <Tile en="RECENT" flex={1.5} meta={`${model.events.length.toLocaleString("zh-CN")} 条事件`} minHeight={212} mobile={mobile} title="近期事件">
-          <EventList items={recent} onOpenRecord={onOpenRecord} privacy={privacy} />
-        </Tile>
-      </Row>
-
-      <View style={styles.boundary}>
-        <Text style={styles.boundaryTitle}>数据边界 / BOUNDARY</Text>
-        <Text style={styles.boundaryText}>
-          {model.total.toLocaleString("zh-CN")} 条内容记录中 {model.dated.toLocaleString("zh-CN")} 条带可靠行为时间（{Math.round(model.reliableRatio * 100)}%）；
-          无时间记录仍计入总量，但不参与时段、月份与交叉结论。聊天只统计时间与类型，群聊只计总量。
-        </Text>
-        {model.warnings.slice(0, 3).map((warning) => <Text key={warning} style={styles.boundaryNotice}>{warning}</Text>)}
-      </View>
+      <Board
+        onMeasure={(key, height) => setMeasured((current) => (height <= (current[key] ?? 0) + 0.5 ? current : { ...current, [key]: height }))}
+        measured={measured}
+        tiles={tiles}
+        unit={unit}
+        units={units}
+      />
     </ScrollView>
   );
 }
 
-/* ---------- 便当格外壳 ---------- */
+/* ---------- 自由排布：没有行也没有列，格子沿天际线找最高最左的空位嵌进去 ---------- */
 
-function Row({ children, mobile }: { children: React.ReactNode; mobile: boolean }) {
-  return <View style={[styles.row, mobile && styles.rowMobile]}>{children}</View>;
+const GAP = 10;
+// 纵向量化步长：格子高度取整到它的倍数，接缝才对得上、洞才补得平
+const PITCH = 28;
+// 卡片自身的上下内边距 + 边框，量到的是内容高度，要补上这一截
+const TILE_CHROME = 28;
+
+interface Tile { key: string; w: number; h: number; node: React.ReactNode }
+
+/**
+ * 掉落排布 + 补洞 + 重试：格子先掉进最靠上的空位，剩下的洞交给邻居长过来吃掉；
+ * 还有洞就换一组宽度重排，直到一个洞都不剩。宽高都跟着内容走，所以不会切到内容。
+ */
+function Board({ measured, onMeasure, tiles, unit, units }: {
+  measured: Record<string, number>;
+  onMeasure: (key: string, height: number) => void;
+  tiles: Tile[];
+  unit: number;
+  units: number;
+}) {
+  let best = pack(tiles, units, measured, 0);
+  for (let variant = 1; variant < 60 && best.holes > 0; variant += 1) {
+    const next = pack(tiles, units, measured, variant);
+    if (next.holes < best.holes) best = next;
+  }
+  return (
+    <View style={[styles.board, { height: best.rows * PITCH - GAP }]}>
+      {best.placed.map(({ col, h, row, tile, w }) => (
+        <View
+          key={tile.key}
+          style={[styles.tile, {
+            height: h * PITCH - GAP,
+            left: col * (unit + GAP),
+            position: "absolute",
+            top: row * PITCH,
+            width: w * unit + (w - 1) * GAP,
+          }]}
+        >
+          {/* 键带上格宽：宽 A 的实测高不覆盖宽 B 的，打断"量高→变宽→高又变"的振荡环 */}
+          <View onLayout={(event) => onMeasure(`${tile.key}@${units}:${w}`, event.nativeEvent.layout.height)}>{tile.node}</View>
+        </View>
+      ))}
+    </View>
+  );
 }
 
-function Tile({ children, en, flex, foot, meta, minHeight, mobile, title }: {
+interface Placed { col: number; h: number; row: number; tile: Tile; w: number }
+
+function pack(tiles: Tile[], units: number, measured: Record<string, number>, variant: number) {
+  const cells: number[][] = [];
+  const rowAt = (row: number) => {
+    while (cells.length <= row) cells.push(Array.from({ length: units }, () => -1));
+    return cells[row]!;
+  };
+  // variant 0 用原始宽度；之后按确定性伪随机把每格宽度 ±1 格，换一种咬合方式重排
+  const jitter = (index: number) => (variant === 0 ? 0 : ((Math.abs(Math.sin(variant * 37.13 + index * 11.7)) * 1000) | 0) % 3 - 1);
+  const floor = units >= 16 ? 4 : units >= 12 ? 3 : 1;
+  const placed: Placed[] = tiles.map((tile, index) => {
+    const w = Math.max(floor, Math.min(units, Math.round(tile.w * units / 24) + jitter(index)));
+    const h = Math.max(2, Math.ceil(((measured[`${tile.key}@${units}:${w}`] ?? tile.h) + TILE_CHROME + GAP) / PITCH));
+    for (let row = 0; row <= 400; row += 1) {
+      for (let col = 0; col + w <= units; col += 1) {
+        let free = true;
+        for (let r = row; r < row + h && free; r += 1) for (let c = col; c < col + w; c += 1) if (rowAt(r)[c]! >= 0) { free = false; break; }
+        if (!free) continue;
+        for (let r = row; r < row + h; r += 1) for (let c = col; c < col + w; c += 1) rowAt(r)[c] = index;
+        return { col, h, row, tile, w };
+      }
+    }
+    return { col: 0, h, row: cells.length, tile, w };
+  });
+
+  const rows = cells.length;
+  const spanFree = (row: number, col: number, count: number) => {
+    for (let c = col; c < col + count; c += 1) if (c >= units || rowAt(row)[c]! >= 0) return false;
+    return true;
+  };
+  const stripFree = (col: number, row: number, count: number) => {
+    for (let r = row; r < row + count; r += 1) if (r >= rows || rowAt(r)[col]! >= 0) return false;
+    return true;
+  };
+  for (let pass = 0; pass < 40; pass += 1) {
+    let changed = false;
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < units; col += 1) {
+        if (rowAt(row)[col]! >= 0) continue;
+        const up = row > 0 ? rowAt(row - 1)[col]! : -1;
+        const upTile = up >= 0 ? placed[up]! : null;
+        if (upTile && upTile.row + upTile.h === row && spanFree(row, upTile.col, upTile.w)) {
+          for (let c = upTile.col; c < upTile.col + upTile.w; c += 1) rowAt(row)[c] = up;
+          upTile.h += 1;
+          changed = true;
+          continue;
+        }
+        const leftIndex = col > 0 ? rowAt(row)[col - 1]! : -1;
+        const leftTile = leftIndex >= 0 ? placed[leftIndex]! : null;
+        if (leftTile && leftTile.col + leftTile.w === col && stripFree(col, leftTile.row, leftTile.h)) {
+          for (let r = leftTile.row; r < leftTile.row + leftTile.h; r += 1) rowAt(r)[col] = leftIndex;
+          leftTile.w += 1;
+          changed = true;
+          continue;
+        }
+        const rightIndex = col + 1 < units ? rowAt(row)[col + 1]! : -1;
+        const rightTile = rightIndex >= 0 ? placed[rightIndex]! : null;
+        if (rightTile && rightTile.col === col + 1 && stripFree(col, rightTile.row, rightTile.h)) {
+          for (let r = rightTile.row; r < rightTile.row + rightTile.h; r += 1) rowAt(r)[col] = rightIndex;
+          rightTile.col -= 1;
+          rightTile.w += 1;
+          changed = true;
+          continue;
+        }
+        const downIndex = row + 1 < rows ? rowAt(row + 1)[col]! : -1;
+        const downTile = downIndex >= 0 ? placed[downIndex]! : null;
+        if (downTile && downTile.row === row + 1 && spanFree(row, downTile.col, downTile.w)) {
+          for (let c = downTile.col; c < downTile.col + downTile.w; c += 1) rowAt(row)[c] = downIndex;
+          downTile.row -= 1;
+          downTile.h += 1;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+
+  let holes = 0;
+  for (let row = 0; row < rows; row += 1) for (let col = 0; col < units; col += 1) if (rowAt(row)[col]! < 0) holes += 1;
+  return { holes, placed, rows: cells.length };
+}
+
+function Cardlet({ children, en, foot, meta, title }: {
   children: React.ReactNode;
   en: string;
-  flex: number;
   foot?: string;
   meta?: string;
-  minHeight: number;
-  mobile: boolean;
   title: string;
 }) {
   return (
-    <View style={[styles.tile, { flexGrow: flex, minHeight }, mobile && styles.tileMobile]}>
+    <>
       <View style={styles.tileHead}>
         <Text style={styles.tileTitle}>{title}</Text>
         <Text style={styles.tileEn}>/ {en}</Text>
@@ -225,6 +366,18 @@ function Tile({ children, en, flex, foot, meta, minHeight, mobile, title }: {
           <Text style={styles.tileFootText}>{foot}</Text>
         </View>
       ) : null}
+    </>
+  );
+}
+
+function Boundary({ model }: { model: ReportModel }) {
+  return (
+    <View>
+      <Text style={styles.boundaryText}>
+        {model.total.toLocaleString("zh-CN")} 条内容记录中 {model.dated.toLocaleString("zh-CN")} 条带可靠行为时间；
+        无时间记录仍计入总量，但不参与时段、月份与交叉结论。聊天只统计时间与类型，群聊只计总量。
+      </Text>
+      {model.warnings.slice(0, 2).map((warning) => <Text key={warning} style={styles.boundaryNotice}>{warning}</Text>)}
     </View>
   );
 }
@@ -235,7 +388,7 @@ function Figure({ sub, value }: { sub: string; value: string }) {
   return (
     <View style={styles.figure}>
       <Text style={styles.figureValue}>{value}</Text>
-      <Text style={styles.figureSub}>{sub}</Text>
+      <Text numberOfLines={1} style={styles.figureSub}>{sub}</Text>
     </View>
   );
 }
@@ -294,28 +447,31 @@ function HourCurve({ peak, values }: { peak: number | null; values: number[] }) 
 
 /** 单值圆环。 */
 function Ring({ caption, label, tone = TEAL, value }: { caption: string; label: string; tone?: string; value: number | null }) {
-  const radius = 46;
+  const radius = 39;
   const circumference = 2 * Math.PI * radius;
   const pct = value === null ? 0 : Math.max(0, Math.min(100, value));
   return (
     <View style={styles.ringWrap}>
-      <Svg height={124} viewBox="0 0 124 124" width={124}>
-        <Circle cx={62} cy={62} fill="none" r={radius} stroke={color.surfaceMuted} strokeWidth={9} />
+      <Svg height={104} viewBox="0 0 104 104" width={104}>
+        <Circle cx={52} cy={52} fill="none" r={radius} stroke={color.surfaceMuted} strokeWidth={8} />
         {value !== null ? (
           <Circle
-            cx={62}
-            cy={62}
+            cx={52}
+            cy={52}
             fill="none"
             r={radius}
             stroke={tone}
             strokeDasharray={`${circumference * pct / 100} ${circumference}`}
-            strokeWidth={9}
-            transform="rotate(-90 62 62)"
+            strokeWidth={8}
+            transform="rotate(-90 52 52)"
           />
         ) : null}
       </Svg>
       <View pointerEvents="none" style={styles.ringCenter}><Text style={styles.ringValue}>{label}</Text></View>
-      <Text style={styles.ringCaption}>{caption}</Text>
+      <View style={styles.ringSide}>
+        <View style={[styles.ringSideMark, { backgroundColor: tone }]} />
+        <Text style={styles.ringCaption}>{caption}</Text>
+      </View>
     </View>
   );
 }
@@ -332,13 +488,22 @@ function Pie({ donut = false, slices }: { donut?: boolean; slices: Array<{ label
     angle += sweep;
     return { path, slice, tone: sliceColors[index % sliceColors.length]! };
   });
-  const single = drawn.length === 1;
+  if (drawn.length === 1) {
+    const only = drawn[0]!;
+    return (
+      <View style={styles.soloWrap}>
+        <View style={[styles.soloBar, { backgroundColor: only.tone }]} />
+        <View style={styles.soloCopy}>
+          <Text numberOfLines={1} style={styles.legendLabel}>{only.slice.label}</Text>
+          <Text style={styles.soloValue}>{only.slice.sub}</Text>
+        </View>
+      </View>
+    );
+  }
   return (
     <View style={styles.pieWrap}>
-      <Svg height={112} viewBox="0 0 112 112" width={112}>
-        {single ? (
-          <Circle cx={56} cy={56} fill={drawn[0]!.tone} r={52} />
-        ) : drawn.map(({ path, tone }, index) => <Path d={path} fill={tone} key={index} />)}
+      <Svg height={96} viewBox="0 0 112 112" width={96}>
+        {drawn.map(({ path, tone }, index) => <Path d={path} fill={tone} key={index} />)}
         {donut ? <Circle cx={56} cy={56} fill={color.surface} r={inner} /> : null}
       </Svg>
       <View style={styles.legend}>
@@ -553,34 +718,29 @@ function Matrix({ labels, matrix }: { labels: string[]; matrix: Array<Array<numb
 /** 五轴习惯雷达。 */
 function Radar({ axes }: { axes: ReportModel["axes"] }) {
   const cx = 100;
-  const cy = 96;
-  const radius = 66;
+  const cy = 84;
+  const radius = 62;
   const angle = (index: number) => (-90 + index * 72) * Math.PI / 180;
   const point = (index: number, r: number): [number, number] => [cx + Math.cos(angle(index)) * r, cy + Math.sin(angle(index)) * r];
   const ring = (r: number) => `M ${axes.map((_, index) => point(index, r).join(" ")).join(" L ")} Z`;
   const shape = `M ${axes.map((axis, index) => point(index, radius * Math.max(0.1, Math.min(1, (axis.value ?? 10) / 100))).join(" ")).join(" L ")} Z`;
   return (
     <View>
-      <Svg height={186} viewBox="0 0 200 186" width="100%">
+      <Svg height={168} viewBox="0 0 200 168" width="100%">
         {[0.35, 0.7, 1].map((scale) => <Path d={ring(radius * scale)} fill="none" key={scale} stroke={color.border} strokeWidth={0.8} />)}
         {axes.map((axis, index) => (
           <Path d={`M ${cx} ${cy} L ${point(index, radius).join(" ")}`} key={axis.label} stroke={color.border} strokeWidth={0.6} />
         ))}
         <Path d={shape} fill={GOLD} fillOpacity={0.2} stroke={GOLD} strokeWidth={1.3} />
         {axes.map((axis, index) => {
-          const [x, y] = point(index, radius + 16);
+          const [x, y] = point(index, radius + 17);
           return (
-            <SvgText fill={color.textMuted} fontSize={9} key={`${axis.label}-tag`} textAnchor="middle" x={x} y={y + 3}>
-              {axis.label}
+            <SvgText fill={color.textMuted} fontSize={9.5} key={`${axis.label}-tag`} textAnchor="middle" x={x} y={y + 3}>
+              {axis.label} {pctLabel(axis.value)}
             </SvgText>
           );
         })}
       </Svg>
-      <View style={styles.radarLegend}>
-        {axes.map((axis) => (
-          <Text key={axis.label} style={styles.radarValue}>{axis.label} {pctLabel(axis.value)}</Text>
-        ))}
-      </View>
     </View>
   );
 }
@@ -672,41 +832,27 @@ function Text({ style, ...rest }: TextProps) {
 }
 
 const styles = StyleSheet.create({
-  content: { padding: 28, paddingBottom: 48 },
-  contentMobile: { padding: 14, paddingBottom: 88 },
-
-  masthead: { minHeight: 128, flexDirection: "row", alignItems: "center", gap: 28, paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: color.border },
-  mastheadMobile: { minHeight: 0, flexDirection: "column", alignItems: "stretch", gap: 16 },
-  mastheadCopy: { flex: 1, minWidth: 0 },
-  eyebrow: { color: color.accent, fontSize: 10, fontWeight: "600", letterSpacing: 3.5 },
-  title: { maxWidth: 760, color: color.text, fontSize: 30, lineHeight: 40, fontWeight: "600", letterSpacing: 3, marginTop: 10 },
-  titleMobile: { fontSize: 24, lineHeight: 34 },
-  lead: { maxWidth: 760, color: color.textSecondary, fontSize: 12.5, lineHeight: 21, letterSpacing: 0.8, marginTop: 12 },
-  mastheadSide: { width: 240, alignItems: "flex-end", paddingLeft: 20, borderLeftWidth: 1, borderLeftColor: color.border },
-  mastheadSideMobile: { width: "100%", alignItems: "flex-start", paddingLeft: 0, paddingTop: 14, borderLeftWidth: 0, borderTopWidth: 1, borderTopColor: color.border },
-  mastheadValue: { maxWidth: "100%", color: color.text, fontSize: 22, lineHeight: 30, fontWeight: "600", letterSpacing: 3 },
-  mastheadMeta: { color: color.textMuted, fontSize: 10, lineHeight: 16, letterSpacing: 0.8, marginTop: 6 },
+  content: { padding: 20, paddingBottom: 40 },
+  contentMobile: { padding: 12, paddingBottom: 88 },
 
   coverage: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: 12, marginTop: 14, paddingHorizontal: 14, paddingVertical: 10, borderLeftWidth: 3, borderLeftColor: color.amber, backgroundColor: color.amberSoft },
   coverageLabel: { color: color.amber, fontSize: 10, fontWeight: "600", letterSpacing: 2 },
   coverageText: { flex: 1, color: color.textSecondary, fontSize: 10.5, lineHeight: 17 },
 
-  row: { flexDirection: "row", alignItems: "flex-start", gap: 14, marginTop: 14 },
-  rowMobile: { flexDirection: "column", alignItems: "stretch" },
-  tile: { flexBasis: 0, flexShrink: 1, minWidth: 0, padding: 18, borderWidth: 1, borderColor: color.border, backgroundColor: color.surface },
-  tileMobile: { flexBasis: "auto", width: "100%", padding: 15 },
+  board: { position: "relative", marginTop: 12 },
+  tile: { minWidth: 0, overflow: "hidden", paddingHorizontal: 13, paddingVertical: 13, borderWidth: 1, borderColor: color.border, backgroundColor: color.surface },
   tileHead: { flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", gap: 8 },
   tileTitle: { flexShrink: 0, color: color.text, fontSize: 15, fontWeight: "600", letterSpacing: 2.5 },
   tileEn: { flexGrow: 1, flexShrink: 1, color: color.textMuted, fontSize: 10, letterSpacing: 1.5 },
   tileMeta: { flexShrink: 0, maxWidth: "100%", color: color.textMuted, fontSize: 9.5, letterSpacing: 1 },
-  tileBody: { marginTop: 14 },
-  tileFoot: { flexDirection: "row", gap: 8, marginTop: "auto", paddingTop: 14 },
+  tileBody: { marginTop: 10 },
+  tileFoot: { flexDirection: "row", gap: 8, paddingTop: 10 },
   tileFootMark: { color: color.accent, fontSize: 10, paddingTop: 3 },
   tileFootText: { flex: 1, color: color.textMuted, fontSize: 10.5, lineHeight: 17, letterSpacing: 0.4 },
 
-  figure: { alignItems: "flex-start", gap: 3 },
+  figure: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 10 },
   figureValue: { color: color.figure, fontSize: 38, lineHeight: 46, fontFamily: font.didot, letterSpacing: 1 },
-  figureSub: { color: color.textMuted, fontSize: 10.5, letterSpacing: 1.5 },
+  figureSub: { flexShrink: 1, color: color.textMuted, fontSize: 10.5, letterSpacing: 1.5 },
 
   heatWrap: { gap: 3 },
   heatRow: { flexDirection: "row", alignItems: "center", gap: 8 },
@@ -718,13 +864,19 @@ const styles = StyleSheet.create({
   axisRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 5 },
   axisText: { color: color.textMuted, fontSize: 9, fontFamily: font.didot, letterSpacing: 0.5 },
 
-  ringWrap: { alignItems: "center", justifyContent: "center", paddingTop: 4 },
-  ringCenter: { position: "absolute", top: 46, alignItems: "center" },
-  ringValue: { color: color.figure, fontSize: 24, fontFamily: font.didot },
-  ringCaption: { color: color.textMuted, fontSize: 10, letterSpacing: 1.4, marginTop: 12 },
+  ringWrap: { flexDirection: "row", alignItems: "center", gap: 16 },
+  ringCenter: { position: "absolute", left: 0, top: 41, width: 104, alignItems: "center" },
+  ringValue: { color: color.figure, fontSize: 21, fontFamily: font.didot },
+  ringCaption: { flex: 1, color: color.textMuted, fontSize: 10.5, lineHeight: 17, letterSpacing: 1.2 },
+  ringSide: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 8 },
+  ringSideMark: { width: 10, height: 10 },
 
-  pieWrap: { alignItems: "center", gap: 12 },
-  legend: { alignSelf: "stretch", gap: 6 },
+  pieWrap: { flexDirection: "row", alignItems: "center", gap: 14 },
+  soloWrap: { flexDirection: "row", alignItems: "center", gap: 12 },
+  soloBar: { width: 46, height: 46 },
+  soloCopy: { flex: 1, minWidth: 0 },
+  soloValue: { color: color.figure, fontSize: 17, fontFamily: font.didot, marginTop: 3 },
+  legend: { flex: 1, minWidth: 0, gap: 7 },
   legendRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   legendSwatch: { width: 10, height: 10 },
   legendLabel: { flex: 1, color: color.textSecondary, fontSize: 10.5, letterSpacing: 0.5 },
@@ -764,8 +916,6 @@ const styles = StyleSheet.create({
   matrixLabelSpacer: { width: 52 },
   matrixTick: { flex: 1, color: color.textMuted, fontSize: 8.5, textAlign: "center" },
 
-  radarLegend: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 },
-  radarValue: { color: color.textMuted, fontSize: 10, letterSpacing: 0.6 },
 
   insightList: { gap: 13 },
   insight: { flexDirection: "row", gap: 9 },
@@ -784,9 +934,7 @@ const styles = StyleSheet.create({
   eventTitle: { flex: 1, color: color.textSecondary, fontSize: 11.5, letterSpacing: 0.5 },
   eventTime: { color: color.textMuted, fontSize: 10.5, fontFamily: font.didot },
 
-  boundary: { marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: color.border },
-  boundaryTitle: { color: color.textSecondary, fontSize: 11, letterSpacing: 3 },
-  boundaryText: { maxWidth: 900, color: color.textMuted, fontSize: 10.5, lineHeight: 18, marginTop: 8 },
+  boundaryText: { color: color.textMuted, fontSize: 10.5, lineHeight: 18 },
   boundaryNotice: { color: color.amber, fontSize: 10, lineHeight: 16, marginTop: 6 },
 
   empty: { color: color.textMuted, fontSize: 11, lineHeight: 18, paddingVertical: 16 },
