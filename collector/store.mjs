@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { isSyntheticChatPlaceholder } from "./chatNormalizer.mjs";
+import { hasChatShareEvidence, isSyntheticChatPlaceholder } from "./chatNormalizer.mjs";
 import { createEmptyRecords, normalizeRecord } from "./normalizer.mjs";
 
 export const SCHEMA_VERSION = 2;
@@ -139,7 +139,7 @@ function normalizeChatMessage(value) {
   if (!id) return null;
   const conversationType = chatConversationKind(value.conversationType);
   if (conversationType === "group") return null;
-  const type = CHAT_TYPES.has(value.type) ? value.type : "unknown";
+  const rawType = CHAT_TYPES.has(value.type) ? value.type : "unknown";
   const rawDuration = typeof value.callDurationSeconds === "number" && Number.isFinite(value.callDurationSeconds)
     && value.callDurationSeconds >= 0 && value.callDurationSeconds <= 86_400
     ? Math.round(value.callDurationSeconds)
@@ -154,6 +154,15 @@ function normalizeChatMessage(value) {
     };
     if (Object.values(candidate).some(Boolean)) share = candidate;
   }
+  const shareHasEvidence = hasChatShareEvidence(share);
+  const shareIsRenderable = rawType === "share" && shareHasEvidence;
+  const rawText = chatString(value.text);
+  const fallbackText = rawText && !/^\[分享\]$/u.test(rawText)
+    ? rawText
+    : (!shareIsRenderable && rawType === "share" ? chatString(value.share?.title) : rawText);
+  const type = rawType === "share" && !shareIsRenderable
+    ? (fallbackText ? "text" : "unknown")
+    : rawType;
   const senderAvatarUrl = chatAvatarUrl([
     value.senderAvatarUrl,
     value.sender_avatar_url,
@@ -171,9 +180,9 @@ function normalizeChatMessage(value) {
     senderName: chatString(value.senderName),
     sentAt: chatDate(value.sentAt),
     type,
-    text: chatString(value.text),
+    text: fallbackText,
     mediaUrl: chatImageUrl(value.mediaUrl),
-    share,
+    share: shareHasEvidence ? share : null,
     callDurationSeconds: rawDuration,
   };
   if (senderAvatarUrl) result.senderAvatarUrl = senderAvatarUrl;
@@ -307,7 +316,9 @@ export class CollectorStore {
       // rewrite must not make an otherwise valid legacy snapshot disappear.
       const removedLegacyChatPlaceholders = Array.isArray(parsed.chatMessages)
         && normalizedChatMessages.length < parsed.chatMessages.length;
-      if (parsed.schemaVersion === LEGACY_SCHEMA_VERSION || removedLegacyChatPlaceholders) {
+      const normalizedAmbiguousShares = Array.isArray(parsed.chatMessages)
+        && parsed.chatMessages.some((item) => item?.type === "share" && !hasChatShareEvidence(item?.share));
+      if (parsed.schemaVersion === LEGACY_SCHEMA_VERSION || removedLegacyChatPlaceholders || normalizedAmbiguousShares) {
         try {
           await this.writeSnapshot(snapshot);
         } catch {

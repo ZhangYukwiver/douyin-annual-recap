@@ -78,6 +78,40 @@ describe("buildChatConversationRows", () => {
 });
 
 describe("MessageContent", () => {
+  it("renders a title-only legacy share as a normal text message", () => {
+    const element = MessageContent({
+      message: {
+        ...message("plain-share-1", "conversation-1", "2026-08-03T10:00:00Z", "把手伸模型佬的钱包里就算了", "share"),
+        share: { title: "把手伸模型佬的钱包里就算了", author: null, coverUrl: null, url: null },
+      },
+      onOpenRecord: vi.fn(),
+    });
+
+    expect(element).toMatchObject({ props: { children: "把手伸模型佬的钱包里就算了" } });
+  });
+
+  it("keeps a share card when share metadata contains a real link", () => {
+    const element = MessageContent({
+      message: {
+        ...message("real-share-1", "conversation-1", "2026-08-03T10:00:00Z", "真正的分享", "share"),
+        share: {
+          title: "真正的分享",
+          author: "作者",
+          coverUrl: "https://p3.douyinpic.com/cover.jpg",
+          url: "https://www.douyin.com/video/123",
+        },
+      },
+      onOpenRecord: vi.fn(),
+    });
+
+    expect(element).toMatchObject({
+      props: {
+        accessibilityLabel: "打开分享的视频",
+        accessibilityRole: "link",
+      },
+    });
+  });
+
   it("renders a sticker media URL instead of replacing it with the label", () => {
     const sticker = {
       ...message("sticker-1", "conversation-1", "2026-08-03T10:00:00Z", "[表情包]", "sticker"),

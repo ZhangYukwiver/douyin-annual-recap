@@ -228,4 +228,46 @@ describe("CollectorStore", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("migrates title-only share messages to text when loading a snapshot", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "douyin-collector-store-share-migration-"));
+    try {
+      const filePath = path.join(directory, "records.json");
+      await writeFile(filePath, JSON.stringify({
+        schemaVersion: 2,
+        updatedAt: "2026-08-30T00:00:00.000Z",
+        records: createEmptyRecords(),
+        chatConversations: [{
+          id: "conv-1",
+          kind: "friend",
+          name: "联系人",
+          messageCount: 1,
+          ownMessageCount: 0,
+        }],
+        chatMessages: [{
+          id: "plain-share-1",
+          conversationId: "conv-1",
+          conversationType: "friend",
+          conversationName: "联系人",
+          senderId: "friend",
+          senderName: "联系人",
+          sentAt: "2026-08-27T04:15:21.000Z",
+          type: "share",
+          text: "普通消息",
+          mediaUrl: null,
+          share: { title: "普通消息", author: null, coverUrl: null, url: null },
+          callDurationSeconds: null,
+        }],
+        warnings: [],
+      }), "utf8");
+
+      const loaded = await new CollectorStore(directory).load();
+      const persisted = JSON.parse(await readFile(filePath, "utf8"));
+
+      expect(loaded.chatMessages[0]).toMatchObject({ type: "text", text: "普通消息", share: null });
+      expect(persisted.chatMessages[0]).toMatchObject({ type: "text", text: "普通消息", share: null });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

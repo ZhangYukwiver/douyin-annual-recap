@@ -47,6 +47,16 @@ export interface ChatConversationSummary {
   ownMessageCount: number;
 }
 
+/**
+ * A share card is useful only when the collector found at least one piece of
+ * share-specific metadata.  Some IM payloads carry a generic `title` next to
+ * an `aweType`; treating that title alone as a share creates a misleading
+ * video card for an ordinary text message.
+ */
+export function hasChatShareEvidence(share: ChatShare | null | undefined): boolean {
+  return Boolean(share?.author || share?.coverUrl || share?.url);
+}
+
 export function countChatMessages(messages: readonly ChatMessage[], conversations: readonly ChatConversationSummary[] = []): number {
   const groupIds = new Set(conversations.filter((conversation) => conversation.kind === "group").map((conversation) => conversation.id));
   const groupCount = conversations
