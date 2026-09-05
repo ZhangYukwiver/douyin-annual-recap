@@ -49,8 +49,8 @@ const records: PersonalRecordCollection = {
     rec("w6", { url: null, author: null }),
   ],
   liked_videos: [
-    rec("l1", { videoId: "v1", occurredAt: "2026-03-02T10:00:00+08:00", coverUrl: "https://c/l1.jpg", title: "喜欢一", stats: { diggCount: 999999 } }),
-    rec("l2", { videoId: "v2", author: "创作者乙", occurredAt: "2026-01-20T10:00:00+08:00" }),
+    rec("l1", { videoId: "v1", occurredAt: "2026-03-02T10:00:00+08:00", coverUrl: "https://c/l1.jpg", title: "喜欢一", topics: ["城市散步", "AI"], stats: { diggCount: 999999 } }),
+    rec("l2", { videoId: "v2", author: "创作者乙", occurredAt: "2026-01-20T10:00:00+08:00", topics: ["ai", "手作", "ai"] }),
   ],
   favorite_videos: [
     rec("f1", { videoId: "v1", occurredAt: "2026-03-05T11:00:00+08:00", coverUrl: "https://c/f1.jpg", title: "收藏一" }),
@@ -71,6 +71,14 @@ const messages: ChatMessage[] = [
   msg("m6", "share", { share: { title: "分享视频", author: "某人", coverUrl: "https://c/s.jpg", url: "https://v/1" } }),
   msg("m7", "call", { callDurationSeconds: 120 }),
   msg("m8", "text", { conversationId: "g1", conversationType: "group", conversationName: "读书群" }),
+  // the same platform sentence in three conversations: boilerplate, not something the person said
+  msg("t1", "text", { conversationId: "cA", text: "我们已互相关注，可以开始聊天了 1" }),
+  msg("t2", "text", { conversationId: "cB", text: "我们已互相关注，可以开始聊天了 2" }),
+  msg("t3", "text", { conversationId: "cC", text: "我们已互相关注，可以开始聊天了 3" }),
+  msg("t4", "text", { text: "看看 https://v.douyin.com/abc [捂脸] 城市散步 真好看 #手作" }),
+  msg("s1", "share", { share: { title: "游戏实况 #怪物猎人 #steam游戏", author: "玩家甲", coverUrl: null, url: null } }),
+  msg("s2", "share", { share: { title: "#怪物猎人 精彩片段", author: null, coverUrl: null, url: "https://v/2" } }),
+  msg("s3", "share", { share: { title: "#怪物猎人 没有证据", author: null, coverUrl: null, url: null } }),
 ];
 
 describe("story data", () => {
@@ -78,7 +86,7 @@ describe("story data", () => {
   const data = buildStoryData(model, { records, chatMessages: messages, chatConversations: conversations, source: "collector", updatedAt: "2026-09-03T10:00:00+08:00", warnings: ["a", "b"] });
 
   it("summarises the sample, time and kept chapters from the records", () => {
-    expect(data.counts).toEqual({ watch: 6, liked: 2, favorite: 2, chat: 47, events: 10 });
+    expect(data.counts).toEqual({ watch: 6, liked: 2, favorite: 2, chat: 54, events: 10 });
     expect(data.unique).toBe(5);
     expect(data.activeDays).toBe(8);
     expect(data.range).toEqual(["2026-01-05", "2026-03-05"]);
@@ -96,14 +104,14 @@ describe("story data", () => {
   });
 
   it("summarises the mix and echo chapters", () => {
-    expect(data.topTopic).toMatchObject({ name: "城市散步", count: 3 });
+    expect(data.topTopic).toMatchObject({ name: "城市散步", count: 4 });
     expect(data.topCreator).toEqual({ name: "创作者甲", unique: 2, avatarUrl: "https://a/1.png" });
     expect(data.media).toEqual([{ label: "视频", share: 0.6 }, { label: "图文", share: 0.2 }, { label: "直播", share: 0.2 }]);
     expect(data.durations).toEqual([{ label: "< 1 分钟", share: 0.5 }, { label: "1–10 分钟", share: 0.25 }, { label: "10 分钟以上", share: 0.25 }]);
     expect(data.music).toEqual({ title: "旋律一", author: "音乐人", count: 3 });
     expect(data.musics).toEqual([{ title: "旋律一", author: "音乐人", count: 3 }]);
     expect(data.musicsCount).toBe(2);
-    expect(data.topicsCount).toBe(3);
+    expect(data.topicsCount).toBe(5);
     expect(data.creators.map((item) => [item.name, item.count])).toEqual([["创作者甲", 5], ["创作者乙", 3], ["创作者丙", 1]]);
     expect(data.creatorsCount).toBe(3);
     // like counts: one entry per content (l1 repeats v1, so w1's count wins), lower-middle median
@@ -111,16 +119,81 @@ describe("story data", () => {
     expect(data.age).toEqual({ sampled: 2, medianDays: 4, bands: [{ label: "一周内", share: 0.5 }, { label: "三个月内", share: 0 }, { label: "更早", share: 0.5 }] });
     expect(data.length).toEqual({ seconds: model.attentionSeconds, medianDuration: 30, longest: { title: "内容 w3", seconds: 700 } });
     expect(model.attentionSeconds).toBeCloseTo(188.5, 1);
-    expect(data.chat).toMatchObject({ friendMessages: 7, callSeconds: 120, conversations: 2, share: { title: "分享视频", coverUrl: "https://c/s.jpg" } });
-    expect(data.chat?.forms.map((form) => form.count)).toEqual([4, 1, 1, 0, 1]);
+    expect(data.chat).toMatchObject({ friendMessages: 14, callSeconds: 120, conversations: 2, share: { title: "分享视频", coverUrl: "https://c/s.jpg" } });
+    expect(data.chat?.forms.map((form) => form.count)).toEqual([8, 1, 4, 0, 1]);
     expect(data.chat?.top[0]).toMatchObject({ name: "读书群", kind: "group", messageCount: 40 });
     expect(data.profile.title).toBeTruthy();
+  });
+
+  it("ranks the terms behind each stream", () => {
+    // "AI" and "ai" are one term, shown with the spelling met first; a term counts once per record
+    expect(data.lexicon.liked.top).toEqual([
+      { name: "AI", count: 2, share: 1 },
+      { name: "城市散步", count: 1, share: .5 },
+      { name: "手作", count: 1, share: .5 },
+    ]);
+    expect(data.lexicon.liked).toMatchObject({ total: 2, sampled: 2, distinct: 3, coverage: 1, halfAt: 1, excluded: 0 });
+    expect(data.lexicon.watch).toMatchObject({ total: 6, sampled: 4, distinct: 3, halfAt: 1 });
+    expect(data.lexicon.favorite).toMatchObject({ total: 2, sampled: 0, distinct: 0, coverage: 0, halfAt: null });
+  });
+
+  it("reads chat words without the platform boilerplate or the group thread", () => {
+    const chat = data.lexicon.chat!;
+    // three copies of the same platform sentence (digits aside) across three conversations
+    expect(chat.excluded).toBe(3);
+    expect(chat).toMatchObject({ total: 8, sampled: 5, distinct: 4, halfAt: 1 });
+    // the group message repeats "你好"; counting it would push this to 5
+    expect(chat.top[0]).toEqual({ name: "你好", count: 4, share: .8 });
+    expect(chat.top.map((term) => term.name)).toEqual(["你好", "城市", "散步", "真好"]);
+  });
+
+  it("reads the topic tags off the video cards friends shared", () => {
+    const shared = data.lexicon.shared!;
+    // three cards carry share evidence; the fourth has only a title, so it never becomes a card
+    expect(shared).toMatchObject({ total: 3, sampled: 2, distinct: 2, halfAt: 1 });
+    expect(shared.top).toEqual([{ name: "怪物猎人", count: 2, share: 1 }, { name: "steam游戏", count: 1, share: .5 }]);
+    // both sides are too small here to be worth comparing
+    expect(data.lexicon.contrast).toBeNull();
+  });
+
+  it("contrasts what gets shared with what gets liked", () => {
+    const liked = Array.from({ length: 12 }, (_, i) => rec(`x${i}`, { videoId: `x${i}`, topics: i < 10 ? ["共同话题", "拼装模型"] : ["只在点赞里"] }));
+    const shares = Array.from({ length: 12 }, (_, i) => msg(`sx${i}`, "share", { share: { title: i < 10 ? "#共同话题 #怪物猎人" : "#只在分享里", author: "玩家", coverUrl: null, url: null } }));
+    const only = { watch_history: [], liked_videos: liked, favorite_videos: [] };
+    const wide = buildStoryData(buildReportModel(only, shares, null, []), { records: only, chatMessages: shares, chatConversations: [], source: "collector", updatedAt: null, warnings: [] });
+    expect(wide.lexicon.contrast).toEqual({ both: ["共同话题"], sharedOnly: ["怪物猎人", "只在分享里"], likedOnly: ["拼装模型", "只在点赞里"] });
+  });
+
+  it("counts how many records actually carry each field", () => {
+    expect(data.fields.map((field) => [field.label, field.count, field.base])).toEqual([
+      ["行为时间", 9, 10],
+      ["作品 ID", 9, 10],
+      ["话题标签", 6, 10],
+      ["时长", 4, 10],
+      ["发布时间", 2, 10],
+      ["点赞数", 3, 10],
+      ["已看进度", 4, 6],
+    ]);
+    expect(data.fields[0]!.share).toBeCloseTo(data.reliableRatio, 10);
+  });
+
+  it("drops the chat words where the browser cannot segment", () => {
+    vi.stubGlobal("Intl", { Collator: Intl.Collator, DateTimeFormat: Intl.DateTimeFormat, NumberFormat: Intl.NumberFormat });
+    try {
+      const plain = buildStoryData(model, { records, chatMessages: messages, chatConversations: conversations, source: "collector", updatedAt: null, warnings: [] });
+      expect(plain.lexicon.chat).toBeNull();
+      expect(plain.lexicon.shared).not.toBeNull();
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("leaves chat out of archive imports and round-trips through storage", () => {
     const archive = buildStoryData(model, { records, chatMessages: [], chatConversations: [], source: "archive", updatedAt: null, warnings: [], archive: { parsedFileCount: 3, ignoredFileCount: 1 } });
     expect(archive.chat).toBeNull();
     expect(archive.counts.chat).toBeNull();
+    expect(archive.lexicon.chat).toBeNull();
+    expect(archive.lexicon.shared).toBeNull();
+    expect(archive.lexicon.contrast).toBeNull();
+    expect(archive.lexicon.liked.top[0]).toEqual({ name: "AI", count: 2, share: 1 });
     expect(archive.source).toMatchObject({ kind: "archive", parsedFileCount: 3, ignoredFileCount: 1 });
     const store = new Map<string, string>();
     const storage = { setItem: (key: string, value: string) => void store.set(key, value), removeItem: (key: string) => void store.delete(key) } as unknown as Storage;

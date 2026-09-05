@@ -212,6 +212,16 @@
     .in .fill { width: var(--w); }
     .stream-count { color: var(--ink); text-align: right; font: 400 15px var(--mono); }
 
+    /* 01 · terms under each stream + how concentrated each stream is */
+    #sample .chapter-inner { max-width: 1400px; }
+    .stream-row { grid-template-rows: auto auto; row-gap: 7px; padding: 11px 0; }
+    .stream-terms { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .stream-terms i { padding: 2px 6px; border-radius: 4px; color: var(--charcoal); background: var(--linen); font: 10px var(--mono); font-style: normal; }
+    .stream-terms small { color: var(--fog); font: 10px var(--mono); }
+    .conc { margin-top: 12px; }
+    .conc .ml { grid-template-columns: 72px 1fr 48px; }
+    .conc-note { margin-top: 14px; }
+
     /* 02 time */
     .month-bars { height: 170px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 9px; align-items: end; padding-bottom: 16px; border-bottom: 1px solid var(--mist); }
     .month { display: grid; grid-template-rows: 1fr auto; gap: 9px; height: 100%; align-items: end; text-align: center; }
@@ -437,6 +447,22 @@
     .share-sample .st span { display: block; margin-top: 5px; color: var(--fog); font: 9px var(--mono); }
     .share-sample .st p { margin: 8px 0 0; color: var(--ash); font-size: 10px; line-height: 1.6; }
 
+    /* 05 · third column: the words themselves */
+    #echo .chapter-inner { max-width: 1400px; --beat: 36px; }
+    #echo .cols { grid-template-columns: .95fr 1.05fr 1fr; gap: 40px; align-items: start; }
+    #echo .words { margin-top: var(--beat); }
+    .words .sub { margin-top: 22px; color: var(--ash); font: 400 9px var(--mono); letter-spacing: .18em; }
+    .words .sub:first-of-type { margin-top: 0; }
+    .words .mini-lines { margin-top: 12px; gap: 8px; }
+    .words .ml { grid-template-columns: 96px 1fr 38px; }
+    .words .ml > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .words .cell-foot { margin-top: 12px; white-space: normal; }
+    .chips-block { display: grid; gap: 8px; margin-top: 24px; }
+    .chips-head { margin: 0; color: var(--ash); font: 400 9px var(--mono); letter-spacing: .18em; }
+    .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--fog); font: 400 10px var(--mono); }
+    .chips i { padding: 2px 6px; border-radius: 4px; color: var(--charcoal); background: var(--linen); font-style: normal; }
+    body.privacy-on [data-slot="terms-chat"], body.privacy-on [data-slot="chat-words"] { filter: blur(6px); }
+
     /* 06 evidence */
     .ratio { display: grid; grid-template-columns: 1fr 100px; gap: 22px; align-items: center; padding-bottom: 22px; border-bottom: 1px solid var(--mist); }
     .ratio-track { height: 6px; border-radius: 3px; overflow: hidden; background: var(--linen); }
@@ -451,6 +477,12 @@
     .caveat { display: none; margin-top: 18px; padding: 15px 16px; border: 1px solid var(--mist); border-left: 2px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--linen); color: var(--ash); font-size: 12px; line-height: 1.8; }
     .caveat.open { display: block; }
     .caveat b { color: var(--charcoal); font-weight: 500; }
+
+    /* 06 · field ledger */
+    #evidence .chapter-inner { max-width: 1400px; }
+    .fields { margin-top: 12px; }
+    .fields .ml { grid-template-columns: 96px 1fr 78px 42px; }
+    .fields .ml small { color: var(--ash); font: 10px var(--mono); text-align: right; }
 
     /* 07 signature */
     .chapter.colophon { background: var(--parchment); }
@@ -526,6 +558,10 @@
       .stair { grid-template-columns: repeat(3, 1fr); }
       .stair .pm:nth-child(2) { margin: 14px 0 0; }
       .stair .pm:nth-child(3) { margin: 28px 0 0; }
+    }
+    @media (max-width: 1100px) {
+      #echo .cols { grid-template-columns: 1fr 1fr; }
+      #echo .words { grid-column: 1 / -1; margin-top: 0; }
     }
     @media (max-width: 880px) {
       .nav { top: 12px; height: 50px; }
@@ -630,14 +666,24 @@
               <div class="metric"><strong data-slot="days" data-count="28">0</strong><span>活跃日</span></div>
               <div class="metric"><strong data-slot="chat-n">—</strong><span data-slot="chat-label">聊天消息 · 待采集</span></div>
             </div>
+            <div data-slot="conc-block">
+              <p class="chips-head" style="margin-top:26px">CONCENTRATION · 覆盖一半需要多少词条</p>
+              <div class="mini-lines conc" data-slot="concentration">
+                <div class="ml"><span>看过</span><span class="track"><i class="fill blue" style="--w:38%"></i></span><b>34 个</b></div>
+                <div class="ml"><span>喜欢</span><span class="track"><i class="fill" style="--w:100%"></i></span><b>90 个</b></div>
+                <div class="ml"><span>收藏</span><span class="track"><i class="fill" style="--w:27%"></i></span><b>24 个</b></div>
+                <div class="ml"><span>聊天</span><span class="track"><i class="fill" style="--w:0%"></i></span><b>—</b></div>
+              </div>
+              <p class="note conc-note" data-slot="concentration-note">条越短，越集中：覆盖一半的记录只要更少的词条。</p>
+            </div>
             <p class="note">观测范围 <b data-slot="range">2025-01-03 → 2025-12-20</b> · <span data-slot="source">演示快照 · 本地浏览器采集</span></p>
           </div>
           <div class="board" data-reveal style="--i:2">
             <div class="board-head"><span>FOUR STREAMS</span><small data-slot="events">34 video events</small></div>
-            <div class="stream-row" data-slot="stream-watch"><span class="stream-name">观看历史<small>WATCH</small></span><span class="track"><i class="fill blue" style="--w:100%"></i></span><b class="stream-count" data-count="20">0</b></div>
-            <div class="stream-row" data-slot="stream-liked"><span class="stream-name">喜欢<small>LIKED</small></span><span class="track"><i class="fill" style="--w:40%"></i></span><b class="stream-count" data-count="8">0</b></div>
-            <div class="stream-row" data-slot="stream-favorite"><span class="stream-name">收藏<small>FAVORITE</small></span><span class="track"><i class="fill" style="--w:30%"></i></span><b class="stream-count" data-count="6">0</b></div>
-            <div class="stream-row" data-slot="stream-chat"><span class="stream-name">聊天<small>CHAT</small></span><span class="track"><i class="fill" style="--w:3%"></i></span><b class="stream-count">—</b></div>
+            <div class="stream-row" data-slot="stream-watch"><span class="stream-name">观看历史<small>WATCH</small></span><span class="track"><i class="fill blue" style="--w:100%"></i></span><b class="stream-count" data-count="20">0</b><div class="stream-terms" data-slot="terms-watch"><i>#示例话题一</i><i>#示例话题二</i><i>#示例话题三</i><small>2,756 个不同话题 · 前 12 个覆盖 31% · 覆盖一半要 34 个</small></div></div>
+            <div class="stream-row" data-slot="stream-liked"><span class="stream-name">喜欢<small>LIKED</small></span><span class="track"><i class="fill" style="--w:40%"></i></span><b class="stream-count" data-count="8">0</b><div class="stream-terms" data-slot="terms-liked"><i>#示例话题一</i><i>#示例话题四</i><i>#示例话题五</i><small>2,361 个不同话题 · 前 12 个覆盖 18% · 覆盖一半要 90 个</small></div></div>
+            <div class="stream-row" data-slot="stream-favorite"><span class="stream-name">收藏<small>FAVORITE</small></span><span class="track"><i class="fill" style="--w:30%"></i></span><b class="stream-count" data-count="6">0</b><div class="stream-terms" data-slot="terms-favorite"><i>#示例话题六</i><i>#示例话题二</i><i>#示例话题七</i><small>318 个不同话题 · 前 12 个覆盖 33% · 覆盖一半要 24 个</small></div></div>
+            <div class="stream-row" data-slot="stream-chat"><span class="stream-name">聊天<small>CHAT</small></span><span class="track"><i class="fill" style="--w:3%"></i></span><b class="stream-count">—</b><div class="stream-terms" data-slot="terms-chat"><small>等待聊天读取</small></div></div>
             <div class="board-foot">▤ <span>一次性读取 · 不持续监听 · 不上传云端</span></div>
           </div>
         </div>
@@ -886,6 +932,11 @@
               <div class="sc" aria-hidden="true"></div>
               <div class="st"><b>分享卡示例：《示例视频 · 夜色片段》</b><span>分享自好友</span><p>好友转发的视频会以分享卡的形式进入回声——前提是带得出证据。</p></div>
             </div>
+            <div class="chips-block" data-slot="contrast">
+              <p class="chips-head">SHARED VS LIKED · 两边不重合的话题</p>
+              <span class="chips" data-slot="contrast-shared">只在分享里 <i>#示例话题八</i><i>#示例话题九</i></span>
+              <span class="chips" data-slot="contrast-liked">只在喜欢里 <i>#示例话题一</i><i>#示例话题四</i></span>
+            </div>
           </div>
           <div class="board" data-reveal style="--i:2">
             <div class="board-head"><span>MESSAGE FORMS</span><small data-slot="chat-head">WAITING FOR CHAT</small></div>
@@ -900,6 +951,23 @@
               <div class="conv"><span class="ava" aria-hidden="true"></span><span class="who"><b>好友 · 示例会话</b><small>好友 · 逐条形态可见</small></span><span class="n">— 条</span></div>
               <div class="conv"><span class="ava g" aria-hidden="true"></span><span class="who"><b>群聊 · 仅汇总</b><small>群名 + 总量 + 本人条数</small></span><span class="n">— 条</span></div>
             </div>
+          </div>
+          <div class="board words" data-reveal data-slot="words" style="--i:3">
+            <div class="board-head"><span>WORDS</span><small>说出口的，转发出去的</small></div>
+            <p class="sub">CHAT · 聊天里最常出现的词</p>
+            <div class="mini-lines" data-slot="chat-words">
+              <div class="ml"><span>示例词一</span><span class="track"><i class="fill blue" style="--w:100%"></i></span><b>8</b></div>
+              <div class="ml"><span>示例词二</span><span class="track"><i class="fill" style="--w:75%"></i></span><b>6</b></div>
+              <div class="ml"><span>示例词三</span><span class="track"><i class="fill" style="--w:50%"></i></span><b>4</b></div>
+            </div>
+            <div class="cell-foot" data-slot="chat-words-foot">等待聊天读取 · 平台模板不计入</div>
+            <p class="sub">SHARED · 好友分享的视频带着什么话题</p>
+            <div class="mini-lines" data-slot="share-terms">
+              <div class="ml"><span>#示例话题八</span><span class="track"><i class="fill" style="--w:100%"></i></span><b>31</b></div>
+              <div class="ml"><span>#示例话题九</span><span class="track"><i class="fill" style="--w:45%"></i></span><b>14</b></div>
+              <div class="ml"><span>#示例话题十</span><span class="track"><i class="fill" style="--w:39%"></i></span><b>12</b></div>
+            </div>
+            <div class="cell-foot" data-slot="share-terms-foot">等待聊天读取 · 只统计带证据的分享卡</div>
           </div>
         </div>
       </div>
@@ -936,6 +1004,18 @@
           <div data-reveal style="--i:2">
             <p class="lead">这一页只对可采集、可解释的字段负责。没有时间、没有稳定 ID、没有明确来源的内容，会被诚实地标记为边界——而不是被编成漂亮的数字。</p>
             <p class="note"><b>数据来源：</b>观看、喜欢、收藏三份清单，加上聊天消息、会话目录与归档警告。</p>
+            <div data-slot="fields-block">
+              <p class="sub" style="margin-top:24px;color:var(--ash);font:400 9px var(--mono);letter-spacing:.18em">FIELD COVERAGE · 每个字段有多少条记录填了</p>
+              <div class="mini-lines fields" data-slot="fields">
+                <div class="ml"><span>行为时间</span><span class="track"><i class="fill blue" style="--w:54%"></i></span><small>1,632 / 3,003</small><b>54%</b></div>
+                <div class="ml"><span>作品 ID</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>3,003 / 3,003</small><b>100%</b></div>
+                <div class="ml"><span>话题标签</span><span class="track"><i class="fill" style="--w:88%"></i></span><small>2,647 / 3,003</small><b>88%</b></div>
+                <div class="ml"><span>时长</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>3,002 / 3,003</small><b>100%</b></div>
+                <div class="ml"><span>发布时间</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>3,003 / 3,003</small><b>100%</b></div>
+                <div class="ml"><span>点赞数</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>3,003 / 3,003</small><b>100%</b></div>
+                <div class="ml"><span>已看进度</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>1,593 / 1,593</small><b>100%</b></div>
+              </div>
+            </div>
             <button class="btn btn-blue" style="margin-top:22px" onclick="document.querySelector('#caveat').classList.toggle('open')">查看数据口径 <span class="cir">›</span></button>
           </div>
         </div>
@@ -1227,6 +1307,7 @@
       const cnt = (name, v) => { const el = S(name); if (!el) return; if (v === null || v === undefined) { delete el.dataset.count; el.childNodes[0].textContent = "—"; return; } el.dataset.count = v; el.childNodes[0].textContent = "0"; };
       const bar = (row, share, label) => { const fill = row.querySelector(".fill"); if (fill) fill.style.setProperty("--w", `${Math.round(Math.max(0, Math.min(1, share || 0)) * 100)}%`); const b = row.querySelector("b"); if (b && label !== undefined) b.textContent = label; };
       const clock = (secs) => secs >= 3600 ? `${Math.floor(secs / 3600)} 时 ${Math.round(secs % 3600 / 60)} 分` : secs >= 60 ? `${Math.round(secs / 60)} 分钟` : `${Math.round(secs)} 秒`;
+      const noChatFoot = (counts) => (counts.chat === null ? "备用文件不含聊天" : "当前环境不支持分词");
       const cn = (year) => String(year).replace(/\d/g, (c) => "〇一二三四五六七八九"[+c]);
       const c = d.counts;
       const streams = c.chat === null ? 3 : 4;
@@ -1255,6 +1336,33 @@
         const b = row.querySelector(".stream-count");
         if (v === null) { delete b.dataset.count; b.textContent = "—"; } else { b.dataset.count = v; b.textContent = "0"; }
       });
+
+      /* 01 · 每条流最常出现的词条，以及它们有多集中 */
+      const LX = d.lexicon;
+      const hide = (name) => { const box = S(name); if (box) box.style.display = "none"; };
+      if (!LX) { hide("conc-block"); $$(".stream-terms").forEach((box) => { box.style.display = "none"; }); }
+      else {
+        const noChat = c.chat === null ? "备用文件不含聊天" : "当前环境不支持分词";
+        const terms = (slot, field, tag) => {
+          const box = S(slot); if (!box) return;
+          box.textContent = "";
+          if (!field) { box.append(el("small", "", noChat)); return; }
+          if (!field.sampled) { box.append(el("small", "", tag ? "记录里没有话题标签" : "没有可统计的词")); return; }
+          field.top.slice(0, 3).forEach((t) => box.append(el("i", "", tag ? `#${t.name}` : t.name)));
+          box.append(el("small", "", `${num(field.distinct)} 个不同${tag ? "话题" : "词"} · 前 12 个覆盖 ${pct(field.coverage)}${field.halfAt ? ` · 覆盖一半要 ${num(field.halfAt)} 个` : ""}`));
+        };
+        terms("terms-watch", LX.watch, true);
+        terms("terms-liked", LX.liked, true);
+        terms("terms-favorite", LX.favorite, true);
+        terms("terms-chat", LX.chat, false);
+        const conc = [LX.watch, LX.liked, LX.favorite, LX.chat];
+        const halfMax = Math.max(1, ...conc.map((f) => (f && f.halfAt) || 0));
+        $$(".ml", S("concentration")).forEach((row, i) => { const f = conc[i]; bar(row, f && f.halfAt ? f.halfAt / halfMax : 0, f && f.halfAt ? `${num(f.halfAt)} 个` : "—"); });
+        const hw = LX.watch.halfAt, hl = LX.liked.halfAt;
+        txt("concentration-note", hw && hl
+          ? `覆盖一半的喜欢要 ${num(hl)} 个词条，看过只要 ${num(hw)} 个——${hl > hw * 1.2 ? "留下的比看过的更分散" : hw > hl * 1.2 ? "留下的比看过的更集中" : "两边差不多"}。`
+          : "记录里的话题标签还不够画出集中度。");
+      }
 
       /* 02 time */
       txt("months-label", `${d.year} · 12 months`);
@@ -1353,6 +1461,26 @@
         list.forEach((cv) => convs.append(conv({ kind: cv.kind, name: cv.name, avatarUrl: cv.avatarUrl, small: cv.kind === "group" ? `群聊 · 仅汇总 · 本人 ${num(cv.ownMessageCount)} 条` : "好友 · 逐条形态可见", n: `${num(cv.messageCount)} 条` })));
       }
 
+      /* 05 · 说出口的词，转发出去的话题 */
+      if (!LX) hide("words");
+      else {
+        rankLines("chat-words", LX.chat ? LX.chat.top.slice(0, 6) : [], (t) => t.name);
+        rankLines("share-terms", LX.shared ? LX.shared.top.slice(0, 6) : [], (t) => `#${t.name}`);
+        txt("chat-words-foot", LX.chat
+          ? `${num(LX.chat.total)} 条文字消息${LX.chat.excluded ? ` · 去掉 ${num(LX.chat.excluded)} 条平台模板` : ""} · 前 12 个词覆盖 ${pct(LX.chat.coverage)}`
+          : noChatFoot(c));
+        txt("share-terms-foot", LX.shared
+          ? `${num(LX.shared.total)} 张分享卡 · ${num(LX.shared.sampled)} 张带话题 · 前 12 个覆盖 ${pct(LX.shared.coverage)}`
+          : "备用文件不含聊天");
+        const ct = LX.contrast;
+        if (!ct || (!ct.sharedOnly.length && !ct.likedOnly.length)) hide("contrast");
+        else {
+          const chips = (slot, label, list) => { const box = S(slot); if (!box) return; box.textContent = label; if (!list.length) box.append(el("i", "", "—")); else list.forEach((name) => box.append(el("i", "", `#${name}`))); };
+          chips("contrast-shared", "只在分享里 ", ct.sharedOnly);
+          chips("contrast-liked", "只在喜欢里 ", ct.likedOnly);
+        }
+      }
+
       /* 06 evidence */
       txt("reliable", pct(d.reliableRatio));
       const track = $(".ratio-track i"); if (track) track.style.setProperty("--w", `${Math.round(d.reliableRatio * 100)}%`);
@@ -1366,8 +1494,20 @@
         if (d.source.kind === "archive") { code.textContent = "ARCHIVE"; span.textContent = `解析 ${d.source.parsedFileCount ?? "—"} 个文件 · 忽略 ${d.source.ignoredFileCount ?? "—"} 个`; b.textContent = "JSON / ZIP"; }
         else { code.textContent = "COLLECTOR"; span.textContent = `本地采集器${stamp ? ` · 更新于 ${stamp}` : ""}`; b.textContent = d.status === "partial" ? "partial" : "live"; }
       }
+      const fieldRows = S("fields");
+      if (!d.fields || !d.fields.length) hide("fields-block");
+      else if (fieldRows) {
+        fieldRows.textContent = "";
+        d.fields.forEach((f, i) => {
+          const row = el("div", "ml"), track = el("span", "track"), fill = el("i", i ? "fill" : "fill blue");
+          fill.style.setProperty("--w", `${Math.round(Math.max(0, Math.min(1, f.share || 0)) * 100)}%`);
+          track.append(fill);
+          row.append(el("span", "", f.label), track, el("small", "", `${num(f.count)} / ${num(f.base)}`), el("b", "", pct(f.share)));
+          fieldRows.append(row);
+        });
+      }
       const caveat = $("#caveat");
-      if (caveat) { caveat.textContent = ""; caveat.append(el("b", "", "CAVEATS / 当前边界"), el("br"), `${num(d.caveats.noTime)} 条记录没有可用行为时间，不参与时间轴；${num(d.caveats.noVideoId)} 条没有稳定作品 ID 的记录仍保留在原清单，但不参与交集计算；${d.caveats.warnings ? `采集器警告 ${num(d.caveats.warnings)} 条，原文见工作台。` : "没有采集器警告。"}`); }
+      if (caveat) { caveat.textContent = ""; caveat.append(el("b", "", "CAVEATS / 当前边界"), el("br"), `${num(d.caveats.noTime)} 条记录没有可用行为时间，不参与时间轴；${num(d.caveats.noVideoId)} 条没有稳定作品 ID 的记录仍保留在原清单，但不参与交集计算；${d.caveats.warnings ? `采集器警告 ${num(d.caveats.warnings)} 条，原文见工作台。` : "没有采集器警告。"}${LX && LX.chat && LX.chat.excluded ? `聊天高频词剔除了 ${num(LX.chat.excluded)} 条平台模板（同一文案出现在三个以上会话）；群聊正文不参与。` : ""}`); }
 
       /* 07 signature */
       const sig = S("sig-name");
