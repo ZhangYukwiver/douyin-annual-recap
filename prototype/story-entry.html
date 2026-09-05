@@ -45,6 +45,10 @@
     .nav-btn { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; border-radius: 50px; border: 1px solid var(--blue); color: var(--blue); background: transparent; cursor: pointer; font-size: 13px; font-weight: 500; }
     .nav-btn:hover { background: rgba(65,161,207,.09); }
     .nav-btn .cir { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; }
+    /* framed inside the app (StoryFrame): a way back to the workspace */
+    [hidden] { display: none !important; }
+    .nav-btn.ghost { border-color: rgba(246,241,228,.35); color: var(--cream); }
+    .nav-btn.ghost:hover { background: rgba(246,241,228,.09); }
 
     /* scene */
     main { position: relative; z-index: 5; height: 100%; display: grid; place-items: center; perspective: 1200px; }
@@ -105,6 +109,7 @@
       <span class="brand-name">内容年志<small>TRACE · ANNUAL</small></span>
     </a>
     <div class="nav-center"><span>演示快照</span><i></i><span>仅本地解释 · 不上传</span></div>
+    <button id="toWorkspace" class="nav-btn ghost" hidden onclick="toWorkspace()">工作台</button>
     <button class="nav-btn" onclick="enter()">进入年志 <span class="cir">→</span></button>
   </header>
 
@@ -112,7 +117,7 @@
     <div class="gate-headline">
       <p class="eyebrow"><i></i>TRACE · PERSONAL SIGNALS</p>
       <h1>穿过这张卡，<br>进入<em>你的一年</em>。</h1>
-      <p>卡片那一边是你的一年：一册由本地数据流装订的内容年志。风景会随阅读换色，而数字始终有出处。</p>
+      <p>卡片的另一边是你的一年：一册用本地记录装订成的内容年志。翻着看，风景会跟着换色，数字始终有出处。</p>
     </div>
     <button class="gate-card" id="gateCard" aria-label="点按进入年志">
       <i class="gate-glow" aria-hidden="true"></i>
@@ -267,6 +272,17 @@
     }
     card.addEventListener("click", enter);
     addEventListener("keydown", (e) => { if (e.key === "Enter" && document.activeElement !== card) enter(); });
+
+    // framed inside the app (StoryFrame): Escape / 工作台 hand back to the living report
+    const framed = window.parent !== window;
+    function toWorkspace() {
+      if (framed) parent.postMessage({ type: "trace:open-dashboard" }, location.origin);
+      else location.href = "/";
+    }
+    if (framed) {
+      document.getElementById("toWorkspace").hidden = false;
+      addEventListener("keydown", (e) => { if (e.key === "Escape") toWorkspace(); });
+    }
   </script>
 </body>
 </html>

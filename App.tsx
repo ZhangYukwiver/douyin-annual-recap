@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AppState,
   Alert,
@@ -13,6 +13,8 @@ import {
   ContentWorkspace,
   LegacyContentWorkspace,
   SetupWorkspace,
+  StoryFrame,
+  ensureThemeStyles,
   type LegacyWorkspaceViewKey,
   type RecordDownloadState,
   workspaceColors,
@@ -63,7 +65,7 @@ import {
 } from "./src/services/importPersonalArchive";
 import { getDesktopCollectorConfig } from "./src/desktopRuntime";
 import { shouldAutoSync } from "./src/services/autoSync";
-import { buildStoryEntryUrl, loadReportStyle, saveReportStyle, type ReportStyle } from "./src/services/reportStyle";
+import { applyAppStyle, buildStoryEntryUrl, loadAppStyle, saveAppStyle, type AppStyle } from "./src/services/appStyle";
 import { buildStoryData, clearStoryData, writeStoryData } from "./src/services/storyData";
 import { buildReportModel } from "./src/components/workspace/ReportWorkspace";
 
@@ -181,7 +183,11 @@ function AppContent() {
   const [collectorError, setCollectorError] = useState<string | null>(null);
   const [downloadStates, setDownloadStates] = useState<Record<string, RecordDownloadState>>({});
   const [downloadJobs, setDownloadJobs] = useState<Record<string, VideoDownloadJob>>({});
-  const [reportStyle, setReportStyle] = useState<ReportStyle>(loadReportStyle);
+  const [appStyle, setAppStyle] = useState<AppStyle>(loadAppStyle);
+  // 内容年志入口卡的地址；非空时以应用内 iframe 盖在工作台上（见 StoryFrame）
+  const [storySrc, setStorySrc] = useState<string | null>(null);
+  // 采集进行中，报告与内容库用这次采集开始前的快照；采集结束（busy 落下）再换成新数据
+  const [frozenSnapshot, setFrozenSnapshot] = useState<CollectorSnapshot | null>(null);
   const importRequest = useRef(0);
   const pollRequest = useRef(0);
   const downloadRequestRef = useRef(0);
@@ -205,6 +211,28 @@ function AppContent() {
     chatPollRequestRef.current = null;
     downloadRequestRef.current += 1;
     downloadInFlightRef.current.clear();
+  }, []);
+
+  // 整体风格：主题 CSS 变量挂在 <html data-style> 上，采集器页、内容库与持续报告一起换。
+  // 用 layout effect 是为了在首帧绘制前就把变量表和 data-style 挂上，否则第一帧没有颜色。
+  useLayoutEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    ensureThemeStyles();
+    applyAppStyle(appStyle);
+  }, [appStyle]);
+
+  // 内容年志卷尾的「进入持续报告」与导航上的「工作台」从 iframe 里回到应用
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return undefined;
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || (event.data as { type?: unknown } | null)?.type !== "trace:open-dashboard") return;
+      setStorySrc(null);
+      setDashboardView("summary");
+      setDashboardOpen(true);
+      setActiveView("summary");
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
   }, []);
 
   useEffect(() => {
@@ -233,14 +261,21 @@ function AppContent() {
     return () => focusStyles.remove();
   }, []);
 
-  const displaySnapshot: DisplaySnapshot | null = collectorSnapshot
+  useEffect(() => {
+    // 只在 busy 翻转时取值：翻成 true 的那一刻 collectorSnapshot 还是采集前的数据
+    setFrozenSnapshot(collectorBusy ? collectorSnapshot : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collectorBusy]);
+
+  const shownSnapshot = frozenSnapshot ?? collectorSnapshot;
+  const displaySnapshot: DisplaySnapshot | null = shownSnapshot
     ? {
         source: "collector",
-        records: collectorSnapshot.records,
-        chatMessages: collectorSnapshot.chatMessages,
-        chatConversations: collectorSnapshot.chatConversations,
-        warnings: collectorSnapshot.warnings,
-        updatedAt: collectorSnapshot.updatedAt,
+        records: shownSnapshot.records,
+        chatMessages: shownSnapshot.chatMessages,
+        chatConversations: shownSnapshot.chatConversations,
+        warnings: shownSnapshot.warnings,
+        updatedAt: shownSnapshot.updatedAt,
       }
     : selectedArchive?.data
       ? {
@@ -928,10 +963,12 @@ function AppContent() {
       }
     : null;
 
+  const traceMode = appStyle === "trace" && Platform.OS === "web";
+
   function enterWorkspace() {
-    if (reportStyle === "trace" && Platform.OS === "web") {
-      // The story pages are static HTML under /story; a new tab keeps this session's collector token alive.
-      // They read one aggregated snapshot from localStorage, so the token never leaves this page.
+    if (traceMode) {
+      // The story pages are static HTML under /story, shown in a same-origin iframe so this session's
+      // collector token and records stay alive. They read one aggregated snapshot from localStorage.
       const chatMessages = displaySnapshot?.chatMessages ?? [];
       const chatConversations = displaySnapshot?.chatConversations ?? [];
       const source = displaySnapshot?.source ?? "archive";
@@ -946,12 +983,12 @@ function AppContent() {
         archive: source === "archive" && selectedArchive?.data ? { parsedFileCount: selectedArchive.data.parsedFileCount, ignoredFileCount: selectedArchive.data.ignoredFileCount } : null,
       });
       writeStoryData(story);
-      window.open(buildStoryEntryUrl({
+      setStorySrc(buildStoryEntryUrl({
         watch: workspaceRecords.watch_history.length,
         liked: workspaceRecords.liked_videos.length,
         favorite: workspaceRecords.favorite_videos.length,
         chat: collectorStatus?.counts.chat_messages ?? null,
-      }, story.year), "_blank", "noopener");
+      }, story.year));
       return;
     }
     setDashboardOpen(false);
@@ -959,6 +996,10 @@ function AppContent() {
   }
 
   function replayStory() {
+    if (traceMode) {
+      enterWorkspace();
+      return;
+    }
     setDashboardOpen(false);
     setActiveView("summary");
   }
@@ -969,6 +1010,7 @@ function AppContent() {
   }
 
   function openSettings() {
+    setStorySrc(null);
     setDashboardOpen(false);
     setActiveView("sources");
   }
@@ -1013,10 +1055,10 @@ function AppContent() {
           onSwitchAccount={confirmAccountSwitch}
           autoSyncEnabled={autoSyncEnabled}
           onToggleAutoSync={() => setAutoSyncEnabled((value) => !value)}
-          reportStyle={reportStyle}
-          onChangeReportStyle={(style) => {
-            setReportStyle(style);
-            saveReportStyle(style);
+          appStyle={appStyle}
+          onChangeAppStyle={(style) => {
+            setAppStyle(style);
+            saveAppStyle(style);
           }}
           observing={collectorStatus?.state === "observing" && collectorStatus?.phase !== "chat_messages"}
           pairingCode={pairingCode}
@@ -1028,9 +1070,10 @@ function AppContent() {
           stoppingSync={stoppingSync}
           switchingAccount={switchingAccount}
         />
-      ) : dashboardOpen ? (
+      ) : dashboardOpen || traceMode ? (
         <LegacyContentWorkspace
           activeView={dashboardView}
+          appStyle={appStyle}
           busy={collectorBusy}
           chatConversations={displaySnapshot?.chatConversations ?? []}
           chatMessages={displaySnapshot?.chatMessages ?? []}
@@ -1076,6 +1119,7 @@ function AppContent() {
           updatedAt={displaySnapshot?.updatedAt ?? null}
         />
       )}
+      {storySrc && traceMode ? <StoryFrame src={storySrc} /> : null}
     </SafeAreaView>
   );
 }

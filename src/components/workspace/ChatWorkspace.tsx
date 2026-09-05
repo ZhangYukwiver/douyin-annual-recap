@@ -39,7 +39,7 @@ import {
   type ChatMessage,
   hasChatShareEvidence,
 } from "../../domain/chatRecords";
-import { workspaceColors as color, workspaceFonts as font, workspaceRadii as radius } from "./workspaceTheme";
+import { alpha, workspaceColors as color, workspaceFonts as font, workspaceRadii as radius } from "./workspaceTheme";
 
 const webPointer = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
 const CHAT_MESSAGE_RENDER_LIMIT = 320;
@@ -71,7 +71,7 @@ export interface ChatConversationRow {
   accent: string;
 }
 
-const avatarPalette = ["#4E7578", "#6E5D49", "#805B38", "#3E5254", "#5A4833", "#2B6C72"];
+const avatarPalette = color.avatars;
 const MESSAGE_AUTO_SCROLL_THRESHOLD = 72;
 
 /**
@@ -615,7 +615,7 @@ function ChatDetailPane({
 function GroupSummary({ row, privacy }: { row: ChatConversationRow; privacy: boolean }) {
   return (
     <ScrollView contentContainerStyle={styles.groupSummaryContent} showsVerticalScrollIndicator={false}>
-      <View style={[styles.groupSummaryIcon, { backgroundColor: `${row.accent}28` }]}>
+      <View style={[styles.groupSummaryIcon, { backgroundColor: alpha(row.accent, 0.16) }]}>
         <UsersRound color={row.accent} size={30} strokeWidth={1.7} />
       </View>
       <Text style={styles.groupSummaryTitle}>{privacy ? "群聊" : row.name}</Text>
@@ -792,7 +792,7 @@ function ChatAvatar({
   useEffect(() => setImageFailed(false), [avatarUrl]);
   const showImage = !privacy && !imageFailed && Boolean(safeChatAvatarUrl(avatarUrl));
   return (
-    <View style={[styles.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: `${accent}30` }]}>
+    <View style={[styles.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: alpha(accent, 0.19) }]}>
       {showImage ? (
         <Image
           accessibilityLabel="联系人头像"
@@ -930,9 +930,9 @@ function hashString(value: string): number {
 }
 
 // ponytail: 与档案风一致的默认衬线字体，见 workspaceTheme
-const archiveType = { fontFamily: font.serif } as const;
+const bodyType = { fontFamily: font.body } as const;
 function Text({ style, ...rest }: TextProps) {
-  return <RNText {...rest} style={[archiveType, style]} />;
+  return <RNText {...rest} style={[bodyType, style]} />;
 }
 
 const styles = StyleSheet.create({
@@ -942,7 +942,7 @@ const styles = StyleSheet.create({
   listPaneMobile: { width: "100%", flex: 1, minHeight: 0, borderRightWidth: 0 },
   listHeader: { minHeight: 78, flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 18, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border },
   listHeaderCopy: { flex: 1, minWidth: 0 },
-  chatTitle: { color: color.text, fontSize: 22, fontWeight: "900", letterSpacing: 0.2 },
+  chatTitle: { color: color.text, fontSize: 22, fontWeight: "900", letterSpacing: 0.2, fontFamily: font.serif },
   chatSubtitle: { color: color.textMuted, fontSize: 10, marginTop: 5 },
   iconButton: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: color.borderSoft, borderRadius: radius.medium, backgroundColor: color.surface },
   searchBox: { height: 40, flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 14, marginTop: 14, paddingHorizontal: 11, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.surface },
@@ -976,17 +976,17 @@ const styles = StyleSheet.create({
   emptyChatIcon: { width: 54, height: 54, alignItems: "center", justifyContent: "center", borderRadius: 27, backgroundColor: color.cyanSoft },
   listEmptyTitle: { color: color.text, fontSize: 14, fontWeight: "900", marginTop: 15 },
   listEmptyBody: { maxWidth: 230, color: color.textMuted, fontSize: 10, lineHeight: 17, textAlign: "center", marginTop: 7 },
-  emptyAction: { minHeight: 38, alignItems: "center", justifyContent: "center", marginTop: 18, paddingHorizontal: 14, borderRadius: radius.medium, backgroundColor: color.cyan },
+  emptyAction: { minHeight: 38, alignItems: "center", justifyContent: "center", marginTop: 18, paddingHorizontal: 14, borderRadius: radius.pill, backgroundColor: color.cyan },
   emptyActionText: { color: color.black, fontSize: 11, fontWeight: "900" },
   detailPane: { flex: 1, minWidth: 0, minHeight: 0, backgroundColor: color.canvas },
   detailPaneMobile: { width: "100%", minHeight: 0 },
   detailHeader: { minHeight: 78, flexDirection: "row", alignItems: "center", gap: 11, paddingHorizontal: 18, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border, backgroundColor: color.canvas },
   detailBackButton: { width: 34, height: 34, alignItems: "center", justifyContent: "center", marginLeft: -5 },
   detailHeaderCopy: { flex: 1, minWidth: 0 },
-  detailTitle: { color: color.text, fontSize: 16, fontWeight: "900" },
+  detailTitle: { color: color.text, fontSize: 16, fontWeight: "900", fontFamily: font.serif },
   detailMeta: { color: color.textMuted, fontSize: 10, marginTop: 4 },
   detailHeaderActions: { flexDirection: "row", alignItems: "center", gap: 8 },
-  readonlyBadge: { height: 27, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 8, borderWidth: 1, borderColor: `${color.green}55`, borderRadius: radius.small, backgroundColor: color.greenSoft },
+  readonlyBadge: { height: 27, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 8, borderWidth: 1, borderColor: alpha(color.green, 0.33), borderRadius: radius.small, backgroundColor: color.greenSoft },
   readonlyBadgeText: { color: color.green, fontSize: 9, fontWeight: "800" },
   privacyNotice: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border, backgroundColor: color.cyanSoft },
   privacyNoticeText: { color: color.cyan, fontSize: 10 },

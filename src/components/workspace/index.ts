@@ -6,4 +6,5 @@ export {
   type WorkspaceViewKey as LegacyWorkspaceViewKey,
 } from "./LegacyContentWorkspace";
 export { SetupWorkspace, type SetupArchiveInfo, type SetupWorkspaceProps } from "./SourceWorkspace";
-export { workspaceColors } from "./workspaceTheme";
+export { StoryFrame } from "./StoryFrame";
+export { ensureThemeStyles, workspaceColors } from "./workspaceTheme";
