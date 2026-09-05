@@ -10,3 +10,25 @@ release-*/
 .env*
 !.env.example
 npm-debug.log*
+
+# Local visual-production intermediates and capture evidence.
+/collector-cover-*.jpeg
+/cover-paper-render-*.png
+/cropped_pages/
+/jimeng/README.md
+/jimeng/assemble.sh
+/jimeng/clips/
+/jimeng/frames/
+/jimeng/story-images/*.png
+/jimeng/story-images/entry-mix-composite.jpg
+/jimeng/story-images/entry-mix-v1-reshaped.jpg
+/jimeng/story-images/entry-mix-v2-reshaped.jpg
+/prototype/clips
+/prototype/daylight-scroll-video.html
+/prototype/daylight-scroll.html
+/prototype/deepdive-scroll.html
+/prototype/signal-story.html
+/prototype/story-draft.html
+/scripts/shoot-daylight-frames.mjs
+/scripts/shoot-report-pages.mjs
+/visual-baseline/reference-*.jpg

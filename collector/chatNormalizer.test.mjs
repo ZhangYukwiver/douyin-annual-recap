@@ -388,6 +388,100 @@ describe("normalizeImapiResponse", () => {
     });
   });
 
+  it("keeps an aweType-only title as ordinary text when share metadata is absent", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        server_id: "plain-with-awe-type",
+        type_code: 0,
+        content_json: {
+          aweType: 11054,
+          content_title: "把手伸模型佬的钱包里就算了",
+        },
+      }],
+    });
+
+    expect(result.chatMessages[0]).toMatchObject({
+      type: "text",
+      text: "把手伸模型佬的钱包里就算了",
+      share: null,
+    });
+  });
+
+  it("keeps a nested title-only payload as ordinary text", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        server_id: "plain-nested-share",
+        type_code: 0,
+        content_json: { share: { title: "只是普通正文" } },
+      }],
+    });
+
+    expect(result.chatMessages[0]).toMatchObject({ type: "text", text: "只是普通正文", share: null });
+  });
+
+  it("does not downgrade a share that has a cover or link", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        server_id: "share-with-evidence",
+        type_code: 0,
+        content_json: {
+          aweType: 11054,
+          content_title: "真正的分享",
+          cover_url: { url_list: ["https://p3.douyinpic.com/real-cover.jpg"] },
+          itemId: "789",
+        },
+      }],
+    });
+
+    expect(result.chatMessages[0]).toMatchObject({
+      type: "share",
+      share: {
+        title: "真正的分享",
+        coverUrl: "https://p3.douyinpic.com/real-cover.jpg",
+        url: "https://www.douyin.com/video/789",
+      },
+    });
+  });
+
+  it("recognizes a direct Douyin URL as share evidence", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        server_id: "share-direct-url",
+        type_code: 0,
+        content_json: {
+          aweType: 11054,
+          title: "直接链接分享",
+          url: "https://www.douyin.com/video/987?from=chat",
+        },
+      }],
+    });
+
+    expect(result.chatMessages[0]).toMatchObject({
+      type: "share",
+      share: { title: "直接链接分享", url: "https://www.douyin.com/video/987" },
+    });
+  });
+
+  it("keeps a nested media payload as a video message", () => {
+    const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
+    const result = normalizeImapiResponse(endpoint, {
+      msgs: [{
+        server_id: "video-message",
+        type_code: 0,
+        content_json: {
+          video: { title: "视频消息", duration: 12, play_url: "https://p3.douyinvod.com/play" },
+          poster: { origin_url_list: ["https://p3.douyinpic.com/poster.jpg"] },
+        },
+      }],
+    });
+
+    expect(result.chatMessages[0]).toMatchObject({ type: "video", text: "视频消息" });
+  });
+
   it("returns conversation metadata so group bodies can be discarded", () => {
     const endpoint = matchImapiEndpoint("https://imapi.douyin.com/v1/message/get_by_conversation");
     const result = normalizeImapiResponse(endpoint, {

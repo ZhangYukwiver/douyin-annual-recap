@@ -1,0 +1,1529 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TRACE · 内容年志 — 故事页设计稿</title>
+  <script>if (/[?&]from=card/.test(location.search)) document.documentElement.classList.add("from-card");</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,300;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* ============ tokens (refero: General Intelligence Company) ============ */
+    :root {
+      --parchment: #fefffc;
+      --paper: #ffffff;
+      --linen: #f9faf7;
+      --ink: #171717;
+      --graphite: #2c2c2c;
+      --charcoal: #444141;
+      --ash: #646464;
+      --fog: #b4b8b4;
+      --mist: #dee2de;
+      --twilight: #282834;
+      --dusk: #1f1f29;
+      --blue: #41a1cf;
+      --cerulean: #0081c0;
+      --cream: #f6f1e4;          /* text over painted sky */
+      --serif: "Fraunces", "Songti SC", "STSong", "Noto Serif SC", Georgia, serif;
+      --sans: "Inter", "PingFang SC", "Helvetica Neue", sans-serif;
+      --mono: "SFMono-Regular", ui-monospace, "Roboto Mono", monospace;
+      --shadow-card: rgba(0,0,0,.08) 0 1px 1px, rgba(0,0,0,.08) 0 4px 5px;
+      --shadow-diagram: rgba(0,0,0,.05) 0 1px 8px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-snap-type: y mandatory; }
+    body { margin: 0; overflow-x: hidden; background: var(--dusk); color: var(--graphite); font-family: var(--sans); font-size: 16px; letter-spacing: -.01em; }
+    button { font: inherit; letter-spacing: inherit; }
+    button:focus-visible, a:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+    h1, h2, h3, p { margin: 0; }
+
+    /* ============ the painted sky — one continuous world ============ */
+    #sky { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; background: #0c1018; }
+    .sky-state { position: absolute; inset: -6% 0; opacity: 0; will-change: opacity; }
+    .cloudband { position: absolute; inset: 0; will-change: transform; }
+    .blob { position: absolute; border-radius: 50%; filter: blur(32px); animation: drift 26s ease-in-out infinite alternate; }
+    .blob.slow { animation-duration: 38s; }
+    @keyframes drift { to { transform: translateX(2.2%) translateY(-1.2%) scale(1.03); } }
+
+    /* S0 · the hero layer — the painting is set by the script (local hour); this gradient is the loading fallback */
+    .s0 { background:
+      radial-gradient(120% 68% at 76% 10%, #2f5480 0%, rgba(47,84,128,0) 52%),
+      radial-gradient(85% 55% at 22% 40%, rgba(238,164,78,.72) 0%, rgba(238,164,78,0) 60%),
+      radial-gradient(150% 85% at 50% 112%, #331d17 0%, rgba(51,29,23,0) 60%),
+      linear-gradient(180deg, #23405f 0%, #7d6448 38%, #d29a4e 62%, #a86331 80%, #3d211a 100%); }
+    /* S1 · clear morning (01 样本 / 02 时间) */
+    .s1 { background:
+      radial-gradient(110% 60% at 74% 8%, #8fb4cc 0%, rgba(143,180,204,0) 56%),
+      radial-gradient(90% 55% at 22% 66%, rgba(250,238,208,.9) 0%, rgba(250,238,208,0) 62%),
+      linear-gradient(180deg, #9cbcd2 0%, #d8dcCb 46%, #f2ecd8 74%, #e6d9bd 100%); }
+    /* S2 · violet dusk (03 留下 / 04 组成) */
+    .s2 { background:
+      radial-gradient(110% 62% at 72% 6%, #4d456e 0%, rgba(77,69,110,0) 58%),
+      radial-gradient(95% 58% at 26% 62%, rgba(226,164,138,.78) 0%, rgba(226,164,138,0) 60%),
+      linear-gradient(180deg, #453e63 0%, #907a9c 44%, #d8ac96 76%, #7c5468 100%); }
+    /* S3 · ink night (05 回声 / 06 证据) */
+    .s3 { background:
+      radial-gradient(120% 70% at 70% 4%, #1d2940 0%, rgba(29,41,64,0) 60%),
+      radial-gradient(80% 45% at 30% 82%, rgba(58,76,110,.5) 0%, rgba(58,76,110,0) 62%),
+      linear-gradient(180deg, #0e1420 0%, #162034 52%, #0a0e16 100%); }
+    /* S4 · ember colophon (07 签名) */
+    .s4 { background:
+      radial-gradient(110% 60% at 70% 6%, #46202a 0%, rgba(70,32,42,0) 58%),
+      radial-gradient(95% 55% at 28% 70%, rgba(226,150,66,.8) 0%, rgba(226,150,66,0) 58%),
+      linear-gradient(180deg, #24121a 0%, #612a26 46%, #c07a35 78%, #38191a 100%); }
+
+    /* painted sky (即梦生成，同一组云的五个时辰) — only behind the hero, picked by the local hour in the script;
+       every window after the hero keeps the gradient skies above */
+    .sky-state { background-size: cover; background-repeat: no-repeat; background-position: center calc(50% + var(--shift, 0px)); animation: skydrift 52s ease-in-out infinite alternate; transform-origin: 50% 60%; }
+    .sky-state:nth-child(2n) { animation-duration: 64s; }
+    @keyframes skydrift { to { transform: scale(1.05) translateY(-0.8%); } }
+
+    /* painted birds crossing the upper sky */
+    .bird { position: absolute; width: 26px; height: 12px; opacity: 0; animation: fly 34s linear infinite; }
+    .bird svg { width: 100%; height: 100%; }
+    .bird.b2 { width: 18px; animation-delay: -12s; animation-duration: 46s; }
+    .bird.b3 { width: 13px; animation-delay: -25s; animation-duration: 40s; }
+    @keyframes fly {
+      0%   { transform: translate(-6vw, 30vh) rotate(4deg); opacity: 0; }
+      6%   { opacity: .85; }
+      50%  { transform: translate(52vw, 16vh) rotate(-3deg); opacity: .85; }
+      94%  { opacity: .7; }
+      100% { transform: translate(108vw, 24vh) rotate(2deg); opacity: 0; }
+    }
+
+    /* ============ frosted pill navigation ============ */
+    .nav { position: fixed; z-index: 40; top: 18px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100vw - 40px); height: 56px; display: flex; align-items: center; gap: 30px; padding: 0 12px 0 20px; border: 1px solid rgba(40,40,52,.35); border-radius: 50px; background: rgba(255,255,255,.07); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: rgba(0,0,0,.15) 0 2px 6px; transition: background .4s ease, border-color .4s ease; }
+    body.nav-light .nav { background: rgba(255,255,255,.6); border-color: var(--mist); }
+    .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--cream); text-decoration: none; transition: color .4s ease; }
+    body.nav-light .brand { color: var(--graphite); }
+    .brand svg { width: 20px; height: 20px; display: block; }
+    .brand-name { font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+    .brand-name small { display: block; margin-top: 1px; font: 400 9px var(--mono); letter-spacing: .22em; opacity: .72; }
+    .nav-center { display: flex; align-items: center; gap: 14px; color: var(--cream); font: 400 10px var(--mono); letter-spacing: .14em; opacity: .8; transition: color .4s ease; }
+    body.nav-light .nav-center { color: var(--charcoal); }
+    .nav-center i { width: 36px; height: 1px; background: currentColor; opacity: .4; }
+    .nav-right { display: flex; align-items: center; gap: 8px; }
+    #clock { color: var(--cream); font: 400 10px var(--mono); letter-spacing: .1em; opacity: .85; transition: color .4s ease; }
+    body.nav-light #clock { color: var(--charcoal); }
+    .nav-btn { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; border-radius: 50px; border: 1px solid var(--blue); color: var(--blue); background: transparent; cursor: pointer; font-size: 13px; font-weight: 500; }
+    .nav-btn:hover { background: rgba(65,161,207,.09); }
+    .nav-icon { width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: 50%; border: 1px solid rgba(180,184,180,.55); color: var(--cream); background: transparent; cursor: pointer; font-size: 13px; transition: color .4s ease; }
+    body.nav-light .nav-icon { color: var(--charcoal); border-color: var(--fog); }
+    .nav-icon:hover { border-color: var(--blue); }
+
+    /* chapter rail */
+    .rail { position: fixed; z-index: 35; right: 22px; top: 50%; transform: translateY(-50%); display: grid; gap: 12px; }
+    .rail button { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 0; border: 0; background: transparent; cursor: pointer; color: var(--cream); font: 400 9px var(--mono); letter-spacing: .08em; opacity: .62; transition: opacity .3s ease, color .4s ease; }
+    body.over-light .rail button { color: var(--charcoal); }
+    .rail button .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .5; transition: all .25s ease; }
+    .rail button.active { opacity: 1; }
+    .rail button.active .dot { width: 9px; height: 9px; background: var(--blue); opacity: 1; }
+    .rail button span { opacity: 0; transform: translateX(4px); transition: all .25s ease; }
+    .rail:hover button span, .rail button.active span { opacity: 1; transform: none; }
+
+    main { position: relative; z-index: 5; }
+    /* paging: every sky window / chapter snaps to the top; a fling stops one section at a time (ponytail: swap mandatory→proximity if trackpad snap-back feels stiff) */
+    main > section { scroll-snap-align: start; scroll-snap-stop: always; }
+
+    /* ============ sky windows — illustrated interludes ============ */
+    .window { position: relative; min-height: 100vh; display: grid; place-items: center; padding: 120px 8%; text-align: center; }
+    .window::before { content: ""; position: absolute; inset: 0; background: radial-gradient(58% 44% at 50% 54%, rgba(12,14,20,.34), transparent 72%); opacity: 0; transition: opacity .8s ease; }
+    .window[data-tone="light"]::before { background: radial-gradient(58% 44% at 50% 54%, rgba(254,255,252,.5), transparent 74%); }
+    .window.in::before { opacity: 1; }
+    .window-copy { position: relative; max-width: 920px; }
+    .w-eyebrow { display: inline-flex; align-items: center; gap: 12px; margin-bottom: 26px; color: var(--cream); font: 400 10px var(--mono); letter-spacing: .3em; opacity: 0; transform: translateY(14px); transition: all .7s ease .1s; }
+    .window[data-tone="light"] .w-eyebrow { color: var(--charcoal); }
+    .window.in .w-eyebrow { opacity: .92; transform: none; }
+    .w-title { color: var(--cream); font: 300 clamp(32px, 4.1vw, 56px)/1.22 var(--serif); letter-spacing: -.02em; text-wrap: balance; opacity: 0; transform: translateY(22px); transition: all .9s cubic-bezier(.2,.6,.2,1) .18s; }
+    .w-title em { font-style: italic; font-weight: 400; }
+    .w-title b { font-weight: 600; }
+    .window[data-tone="light"] .w-title { color: var(--ink); }
+    .window.in .w-title { opacity: 1; transform: none; }
+    .w-sub { margin-top: 20px; color: var(--cream); font-size: 14px; line-height: 1.8; opacity: 0; transform: translateY(16px); transition: all .8s ease .32s; }
+    .window[data-tone="light"] .w-sub { color: var(--charcoal); }
+    .window.in .w-sub { opacity: .85; transform: none; }
+
+    /* hero window */
+    .hero { min-height: 100vh; align-items: end; text-align: left; place-items: end start; padding: 0 8% 11vh; }
+    .hero::before { background: linear-gradient(180deg, transparent 30%, rgba(20,14,12,.42) 100%); }
+    .hero-copy { position: relative; max-width: 760px; }
+    .hero .eyebrow { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; color: var(--cream); font: 400 10px var(--mono); letter-spacing: .3em; opacity: .9; }
+    .hero .eyebrow i { width: 44px; height: 1px; background: var(--cream); opacity: .5; }
+    .hero h1 { color: var(--cream); font: 300 clamp(48px, 5.6vw, 78px)/1.1 var(--serif); letter-spacing: -.03em; }
+    .hero h1 b { font-weight: 600; }
+    .hero-lead { max-width: 520px; margin-top: 24px; color: var(--cream); font-size: 15px; line-height: 1.85; opacity: .88; }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 26px; margin-top: 30px; color: var(--cream); font: 400 10px var(--mono); letter-spacing: .06em; opacity: .78; }
+    .hero-actions { display: flex; gap: 12px; margin-top: 32px; }
+    .scroll-cue { position: absolute; right: 8%; bottom: 30px; display: flex; align-items: center; gap: 10px; color: var(--cream); font: 400 9px var(--mono); letter-spacing: .26em; opacity: .7; }
+    .scroll-cue::after { content: ""; width: 1px; height: 34px; background: linear-gradient(var(--cream), transparent); animation: cue 2.2s ease-in-out infinite; }
+    @keyframes cue { 50% { transform: translateY(6px); opacity: .4; } }
+    /* hero on the bright morning painting */
+    /* the morning painting is too bright on its own: a gamma curve (#dimcurve, inline svg below) pushes the mids down while white stays white —
+       plain brightness() reads as haze, and contrast() alone cannot lift a white point once the image sits below mid-grey */
+    .s0.dim { filter: url(#dimcurve) contrast(1.12) saturate(1.2); }
+
+    /* buttons — outlined is the identity */
+    .btn { min-height: 44px; display: inline-flex; align-items: center; gap: 9px; padding: 0 18px; border-radius: 50px; background: transparent; cursor: pointer; font-size: 14px; font-weight: 500; text-decoration: none; transition: transform .25s ease, background .25s ease; }
+    .btn:hover { transform: translateY(-1px); }
+    .btn .cir { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid currentColor; border-radius: 50%; font-size: 11px; }
+    .btn-blue { border: 1px solid var(--blue); color: var(--blue); }
+    .btn-blue:hover { background: rgba(65,161,207,.1); }
+    .btn-cream { border: 1px solid rgba(246,241,228,.75); color: var(--cream); }
+    .btn-cream:hover { background: rgba(246,241,228,.09); }
+    .btn-cream.faint { border-color: rgba(246,241,228,.35); }
+    .btn-dark { border: 1px solid var(--twilight); background: var(--dusk); color: #fff; }
+    .btn-ghost { border: 1px solid transparent; color: var(--charcoal); }
+
+    /* ============ parchment chapters ============ */
+    .chapter { position: relative; height: 100vh; padding: clamp(84px, 10vh, 120px) 8% clamp(40px, 5vh, 80px); display: grid; align-content: center; overflow: clip; background: var(--parchment); border-top: 1px solid var(--mist); border-bottom: 1px solid var(--mist); }
+    .chapter-inner { width: 100%; max-width: 1200px; margin: 0 auto; transform: scale(var(--fit, 1)); }
+    .ch-head { max-width: 760px; }
+    .meta-line { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; color: var(--ash); font: 400 10px var(--mono); letter-spacing: .22em; }
+    .meta-line b { color: var(--blue); font-weight: 400; }
+    .meta-line::after { content: ""; flex: 0 0 46px; height: 1px; background: var(--mist); }
+    .chapter h2 { color: var(--graphite); font: 400 clamp(30px, 3.4vw, 44px)/1.18 var(--serif); letter-spacing: -.02em; }
+    .chapter h2 em { font-style: italic; }
+    .lead { max-width: 560px; margin-top: 18px; color: var(--ash); font-size: 15px; line-height: 1.8; }
+    .lead code { color: var(--charcoal); font: 12px var(--mono); background: var(--linen); padding: 1px 5px; border-radius: 4px; }
+    .note { margin-top: 24px; color: var(--fog); font: 400 11px/1.8 var(--mono); }
+    .note b { color: var(--ash); font-weight: 400; }
+
+    .cols { display: grid; grid-template-columns: .9fr 1.1fr; gap: 56px; align-items: center; margin-top: 56px; }
+    .cols.rev { grid-template-columns: 1.1fr .9fr; }
+    .metrics { display: flex; flex-wrap: wrap; gap: 30px; margin-top: 28px; }
+    .metric strong { display: block; color: var(--ink); font: 400 30px var(--serif); }
+    .metric span { display: block; margin-top: 6px; color: var(--ash); font: 400 10px var(--mono); letter-spacing: .04em; }
+
+    /* boards — white paper cards */
+    .board { padding: 26px; border: 1px solid var(--mist); border-radius: 16px; background: var(--paper); box-shadow: var(--shadow-card); }
+    .board-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 20px; color: var(--charcoal); font: 400 10px var(--mono); letter-spacing: .18em; }
+    .board-head small { color: var(--fog); letter-spacing: .04em; }
+    .board-foot { display: flex; align-items: center; gap: 9px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--mist); color: var(--fog); font: 400 10px var(--mono); }
+
+    /* 01 streams */
+    .stream-row { display: grid; grid-template-columns: 120px 1fr 52px; gap: 14px; align-items: center; padding: 13px 0; border-bottom: 1px solid var(--linen); }
+    .stream-row:last-of-type { border-bottom: 0; }
+    .stream-name { color: var(--charcoal); font-size: 13px; font-weight: 500; }
+    .stream-name small { display: block; margin-top: 2px; color: var(--fog); font: 9px var(--mono); letter-spacing: .06em; }
+    .track { height: 4px; border-radius: 2px; overflow: hidden; background: var(--linen); }
+    .fill { display: block; height: 100%; width: 0; border-radius: 2px; background: var(--graphite); transition: width 1.2s cubic-bezier(.2,.7,.2,1) .2s; }
+    .fill.blue { background: var(--blue); }
+    .in .fill { width: var(--w); }
+    .stream-count { color: var(--ink); text-align: right; font: 400 15px var(--mono); }
+
+    /* 01 · terms under each stream + how concentrated each stream is */
+    #sample .chapter-inner { max-width: 1400px; }
+    .stream-row { grid-template-rows: auto auto; row-gap: 7px; padding: 11px 0; }
+    .stream-terms { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .stream-terms i { padding: 2px 6px; border-radius: 4px; color: var(--charcoal); background: var(--linen); font: 10px var(--mono); font-style: normal; }
+    .stream-terms small { color: var(--fog); font: 10px var(--mono); }
+    .conc { margin-top: 12px; }
+    .conc .ml { grid-template-columns: 72px 1fr 48px; }
+    .conc-note { margin-top: 14px; }
+
+    /* 02 time */
+    .month-bars { height: 170px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 9px; align-items: end; padding-bottom: 16px; border-bottom: 1px solid var(--mist); }
+    .month { display: grid; grid-template-rows: 1fr auto; gap: 9px; height: 100%; align-items: end; text-align: center; }
+    .month i { display: block; width: 68%; height: 0; margin: 0 auto; border-radius: 2px 2px 0 0; background: var(--fog); transition: height 1s cubic-bezier(.2,.7,.2,1) calc(var(--d) * 60ms); }
+    .month.peak i { background: var(--blue); }
+    .in .month i { height: var(--h); }
+    .month em { color: var(--fog); font: 8px var(--mono); font-style: normal; }
+    .hour-dots { display: grid; grid-template-columns: repeat(24, 1fr); gap: 5px; margin-top: 18px; }
+    .hour-dots i { width: 7px; height: 7px; margin: auto; border-radius: 50%; background: var(--graphite); opacity: 0; transform: scale(.3); transition: all .5s ease calc(var(--d) * 30ms); }
+    .in .hour-dots i { opacity: var(--o); transform: scale(var(--s)); }
+    .hour-dots i.hot { background: var(--blue); }
+    .hour-labels { display: flex; justify-content: space-between; margin-top: 8px; color: var(--fog); font: 8px var(--mono); }
+    .time-sources { display: grid; gap: 10px; margin-top: 22px; }
+    .ts-row { display: flex; align-items: center; gap: 10px; color: var(--ash); font-size: 12px; }
+    .ts-row code { flex: 0 0 132px; color: var(--charcoal); font: 9px var(--mono); letter-spacing: .04em; }
+    .ts-row b { margin-left: auto; color: var(--ink); font: 12px var(--mono); font-weight: 400; }
+
+    /* 03 kept */
+    .venn { position: relative; width: 320px; height: 260px; margin: 0 auto; }
+    .venn i { position: absolute; width: 165px; height: 165px; border: 1.5px solid; border-radius: 50%; opacity: 0; transform: scale(.7); transition: all .9s cubic-bezier(.2,.7,.2,1); }
+    .venn.in i, .in .venn i { opacity: 1; transform: none; }
+    .venn .va { left: 26px; top: 22px; border-color: var(--blue); background: rgba(65,161,207,.07); }
+    .venn .vb { left: 122px; top: 22px; border-color: var(--fog); background: rgba(180,184,180,.1); transition-delay: .15s; }
+    .venn .vc { left: 74px; top: 74px; border-color: var(--charcoal); background: rgba(68,65,65,.05); transition-delay: .3s; }
+    .venn strong { position: absolute; left: 0; right: 0; top: 108px; color: var(--ink); font: 400 30px var(--serif); text-align: center; }
+    .venn strong small { display: block; margin-top: 3px; color: var(--ash); font: 9px var(--mono); letter-spacing: .14em; }
+    .venn span { position: absolute; color: var(--ash); font: 10px var(--mono); }
+    .venn .la { left: 52px; top: 4px; color: var(--cerulean); }
+    .venn .lb { right: 52px; top: 4px; }
+    .venn .lc { left: 0; right: 0; bottom: 2px; text-align: center; }
+    .key-list { margin-top: 4px; }
+    .key-row { display: flex; justify-content: space-between; align-items: center; padding: 13px 0; border-bottom: 1px solid var(--linen); color: var(--ash); font-size: 13px; }
+    .key-row b { color: var(--ink); font: 14px var(--mono); font-weight: 400; }
+    .progress-mini { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 22px; }
+    .pm { padding: 14px; border: 1px solid var(--mist); border-radius: 12px; background: var(--linen); }
+    .pm strong { display: block; color: var(--ink); font: 400 21px var(--serif); }
+    .pm span { display: block; margin-top: 4px; color: var(--ash); font: 9px var(--mono); }
+
+    .recent { margin-top: 64px; padding-top: 26px; border-top: 1px solid var(--mist); }
+    .recent-head { display: flex; align-items: end; justify-content: space-between; margin-bottom: 20px; }
+    .recent-head h3 { color: var(--graphite); font: 400 24px var(--serif); }
+    .recent-head small { color: var(--fog); font: 9px var(--mono); letter-spacing: .06em; }
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .card { display: block; color: inherit; text-decoration: none; border: 1px solid var(--mist); border-radius: 12px; background: var(--paper); overflow: hidden; box-shadow: var(--shadow-diagram); transition: transform .3s ease, border-color .3s ease; }
+    .card:hover { transform: translateY(-3px); border-color: var(--blue); }
+    .card-cover { position: relative; height: 132px; transition: filter .4s ease; }
+    .card-cover.c1 { background: linear-gradient(160deg, #2f5480 0%, #d29a4e 78%); }
+    .card-cover.c2 { background: linear-gradient(160deg, #453e63 0%, #d8ac96 82%); }
+    .card-cover.c3 { background: linear-gradient(160deg, #162034 0%, #4c6a94 90%); }
+    .card-cover.c4 { background: linear-gradient(160deg, #612a26 0%, #e2a24e 84%); }
+    .card-cover::after { content: ""; position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; transform: translate(-50%,-50%); border: 1px solid rgba(254,255,252,.65); border-radius: 50%; }
+    .card-cover.real::after { display: none; }
+    .card-cover b { position: absolute; left: 10px; top: 10px; padding: 3px 7px; border-radius: 4px; color: var(--charcoal); background: rgba(254,255,252,.92); font: 400 9px var(--mono); }
+    .card-body { padding: 13px 14px 15px; }
+    .card h4 { margin: 0; color: var(--graphite); font-size: 13px; font-weight: 500; line-height: 1.5; }
+    .card p { margin: 6px 0 0; color: var(--fog); font: 9px var(--mono); }
+    .card .open { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; color: var(--blue); font-size: 11px; font-weight: 500; }
+
+    /* 03 · staggered sheet: a wider page on wide screens, one beat of offset between neighbours */
+    #kept .chapter-inner { max-width: 1400px; --beat: 36px; }
+    .kept-grid { display: grid; grid-template-columns: 1fr 1.15fr 1fr; gap: 44px; align-items: start; margin-top: 44px; }
+    .venn-col, .depth { margin-top: var(--beat); }
+    .kept-copy .lead { margin-top: 0; }
+    .venn strong small em { font-style: normal; color: var(--blue); }
+    .rings { gap: 26px; margin-top: 24px; }
+    .rings .metric span i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; border: 1.5px solid var(--fog); background: rgba(180,184,180,.35); vertical-align: 0; }
+    .rings .metric span i.dot-a { border-color: var(--blue); background: rgba(65,161,207,.25); }
+    .rings .metric span i.dot-c { border-color: var(--charcoal); background: rgba(68,65,65,.2); }
+    .kept-copy .key-list { margin-top: 18px; }
+    .key-row.muted { color: var(--fog); border-bottom: 0; border-top: 1px dashed var(--mist); }
+    .key-row.muted b { color: var(--ash); }
+    .depth .deep { --c: var(--blue); }
+    .depth .mid { --c: var(--graphite); }
+    .depth .shallow { --c: var(--fog); }
+    .depth-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--linen); }
+    .depth-bar i { display: block; width: 0; height: 100%; background: var(--c); transition: width 1.2s cubic-bezier(.2,.7,.2,1) .2s; }
+    .depth-bar i + i { box-shadow: -1px 0 0 rgba(255,255,255,.9); }
+    .in .depth-bar i { width: var(--w, 0%); }
+    .stair { grid-template-columns: 1fr; gap: 8px; margin-top: 18px; }
+    .stair .pm { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px; }
+    .stair .pm:nth-child(2) { margin-left: 18px; }
+    .stair .pm:nth-child(3) { margin-left: 36px; }
+    .stair .dot { align-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+    .stair .pm strong { font-size: 22px; }
+    .stair .pm span { margin: 0 0 0 auto; }
+    .depth .board-foot { margin-top: 18px; padding-top: 12px; }
+    #kept .recent { display: grid; grid-template-columns: 200px 1fr; gap: 24px; align-items: start; margin-top: 40px; }
+    #kept .recent-head { flex-direction: column; align-items: start; gap: 10px; margin: 0; padding-top: 4px; }
+    #kept .recent-head h3 { font-size: 20px; line-height: 1.3; white-space: nowrap; }
+    #kept .recent-head small { line-height: 1.7; }
+    .cards { align-items: stretch; }
+    .cards .card:nth-child(even) { margin-top: var(--beat); }
+    .card { display: flex; flex-direction: column; }
+    .card-cover { flex: none; }
+    .card-body { display: flex; flex: 1; flex-direction: column; }
+    .card h4 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .card .open { margin-top: auto; padding-top: 12px; }
+    .card.in:hover { transform: translateY(-3px); }
+    .card-kind { position: absolute; right: 10px; top: 10px; padding: 3px 7px; border-radius: 4px; color: var(--cerulean); background: rgba(255,255,255,.78); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); font: 400 9px var(--mono); font-style: normal; letter-spacing: .1em; }
+    body.privacy-on .card-cover { filter: blur(12px) saturate(.4); }
+    body.privacy-on .rc .card-cover { filter: blur(12px) saturate(.4); }
+
+    /* 04 mix — bento; cerulean card is the one saturated surface */
+    .bento { display: grid; grid-template-columns: 1.1fr .9fr .9fr; gap: 16px; align-items: start; margin-top: 40px; --beat: 36px; }
+    .bento-col { display: grid; gap: 16px; }
+    .bento-col:nth-child(2) { margin-top: var(--beat); }
+    .bento-cell { position: relative; padding: 22px; border: 1px solid var(--mist); border-radius: 16px; background: var(--paper); box-shadow: var(--shadow-diagram); overflow: hidden; }
+    .bento-cell.cerulean { border-color: var(--cerulean); background: var(--cerulean); color: #fff; }
+    .bento-cell .label { color: var(--ash); font: 400 9px var(--mono); letter-spacing: .18em; }
+    .bento-cell.cerulean .label { color: rgba(255,255,255,.75); }
+    .bento-cell strong { display: block; margin-top: 18px; color: var(--ink); font: 400 27px var(--serif); letter-spacing: -.02em; }
+    .bento-cell.cerulean strong { color: #fff; font-size: 32px; }
+    .bento-cell small { display: block; margin-top: 8px; color: var(--ash); font: 400 10px var(--mono); }
+    .bento-cell.cerulean small { color: rgba(255,255,255,.78); }
+    .bento-cell .avatar { position: absolute; right: 20px; top: 18px; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--mist); background: linear-gradient(140deg, #907a9c, #d8ac96); }
+    .mini-lines { margin-top: 20px; display: grid; gap: 10px; }
+    .mini-lines .ml { display: grid; grid-template-columns: 58px 1fr 38px; gap: 10px; align-items: center; color: var(--ash); font-size: 11px; }
+    .mini-lines .ml b { color: var(--charcoal); font: 11px var(--mono); font-weight: 400; text-align: right; }
+    .mini-lines .track { height: 3px; }
+    .topic-lines, .creator-lines { margin-top: 22px; }
+    .topic-lines .ml, .creator-lines .ml { grid-template-columns: 96px 1fr 30px; }
+    .topic-lines .ml > span:first-child, .creator-lines .ml > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cerulean .mini-lines .ml { color: rgba(255,255,255,.86); }
+    .cerulean .mini-lines .ml b { color: #fff; }
+    .cerulean .track { background: rgba(255,255,255,.22); }
+    .cerulean .fill { background: #fff; }
+    .cell-foot { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--mist); color: var(--fog); font: 400 10px/1.6 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cerulean .cell-foot { border-top-color: rgba(255,255,255,.28); color: rgba(255,255,255,.72); }
+    .cell-metrics { display: flex; gap: 28px; margin-top: 20px; }
+    .cell-metrics strong { margin-top: 0; font-size: 22px; }
+    .cell-metrics span { display: block; margin-top: 4px; color: var(--ash); font: 400 9px var(--mono); letter-spacing: .04em; }
+    .music-rows { margin-top: 10px; }
+    .music-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--linen); color: var(--charcoal); font-size: 12px; }
+    .music-row:last-child { border-bottom: 0; padding-bottom: 2px; }
+    .music-row .mt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .music-row .mt b { color: var(--graphite); font-weight: 500; }
+    .music-row small { color: var(--ash); font: 10px var(--mono); white-space: nowrap; }
+    .heat-rows { margin-top: 18px; }
+    .heat-row { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--linen); color: var(--charcoal); font-size: 12px; }
+    .heat-row span { color: var(--fog); font: 9px var(--mono); letter-spacing: .1em; }
+    .heat-row em { font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .heat-row b { color: var(--ink); font: 12px var(--mono); font-weight: 400; }
+    .age-bar { margin-top: 18px; }
+    .age-bar i:nth-child(1), .age-legend span:nth-child(1) i { --c: var(--blue); }
+    .age-bar i:nth-child(2), .age-legend span:nth-child(2) i { --c: var(--graphite); }
+    .age-bar i:nth-child(3), .age-legend span:nth-child(3) i { --c: var(--fog); }
+    .age-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; color: var(--ash); font: 400 10px var(--mono); }
+    .age-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .age-legend i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); }
+    .age-legend b { color: var(--ink); font-weight: 400; }
+    .tag-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--mist); }
+    .tag-line > b { margin-right: 12px; color: var(--ash); font: 400 10px var(--mono); font-weight: 400; letter-spacing: .1em; }
+    .tag { padding: 7px 12px; border: 1px solid var(--mist); border-radius: 50px; color: var(--charcoal); background: var(--paper); font-size: 12px; transition: border-color .25s ease; }
+    .tag:hover { border-color: var(--blue); }
+    .music-line { display: flex; align-items: center; gap: 12px; margin-top: 22px; padding: 14px 16px; border: 1px solid var(--mist); border-radius: 12px; background: var(--linen); color: var(--charcoal); font-size: 12px; }
+    .eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; flex: none; }
+    .eq i { width: 2.5px; background: var(--blue); animation: eq 1.1s ease-in-out infinite alternate; }
+    .eq i:nth-child(1) { height: 6px; } .eq i:nth-child(2) { height: 13px; animation-delay: -.3s; } .eq i:nth-child(3) { height: 9px; animation-delay: -.6s; } .eq i:nth-child(4) { height: 12px; animation-delay: -.15s; }
+    @keyframes eq { to { transform: scaleY(.4); } }
+    .music-line b { color: var(--ink); font-weight: 500; }
+    .music-line small { margin-left: auto; color: var(--fog); font: 9px var(--mono); }
+
+    /* 04 · roll — one sticky screen; the page keeps scrolling down while the roll slides left (ponytail: direct scroll→x mapping, no inertia).
+       Each panel is set like the reference screen (see rollLayout): a headline of two tags across the width, and a row of
+       standing word · cover · caption · standing word filling the rest; the headline alternates top / bottom per panel. --bh = body height. */
+    .roll { position: relative; height: 400vh; }
+    .roll-stage { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: clamp(84px, 10vh, 120px) 0 0; overflow: hidden; }
+    .roll-head .lead { max-width: 760px; }
+    .roll-head { position: relative; z-index: 1; display: flex; align-items: end; justify-content: space-between; gap: 24px; padding: 0 8%; }
+    .roll-cue { display: grid; gap: 8px; justify-items: end; color: var(--ash); font: 400 9px var(--mono); letter-spacing: .22em; white-space: nowrap; }
+    .roll-cue .track { width: 120px; }
+    .roll-cue .fill { width: var(--w, 0%); transition: none; }
+    .roll-body { position: relative; z-index: 1; flex: 1; margin-top: 2vh; }
+    .roll-strip { position: absolute; inset: 0; will-change: transform; }
+    .roll-strip > * { position: absolute; white-space: nowrap; }
+    /* big words: the script sizes each one to fill its 52vw box (capped at 29% of the body); the letters rise out of a mask one by one on entry */
+    .rw { color: var(--ink); font-family: var(--serif); font-weight: 300; line-height: 1; letter-spacing: -.03em; }
+    .rw .mask { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: .08em; margin-bottom: -.08em; }
+    .rw .ch { display: inline-block; transform: translateY(108%); transition: transform .8s cubic-bezier(.2,.7,.2,1) calc(var(--d) * 55ms); }
+    .rw.in .ch { transform: none; }
+    .rw small { display: inline-block; vertical-align: top; margin: .28em .1em 0 .3em; color: var(--ash); font: 400 10px var(--mono); letter-spacing: .14em; opacity: 0; transition: opacity .5s ease .7s; }
+    .rw.in small { opacity: 1; }
+    .rw.first small { color: var(--blue); }
+    /* the standing word hangs from the tail of the top word down to the bottom edge, its right side against the bottom word — the script sets
+       its size (fills that height, capped like the big words) and x; drawn top-down on entry (a 1px outline turned the thin serif into wireframe) */
+    .rv { writing-mode: vertical-rl; text-orientation: upright; color: rgba(23,23,23,.6); font-family: var(--serif); font-weight: 300; line-height: 1; letter-spacing: .04em; clip-path: inset(0 0 100% 0); transition: clip-path .9s cubic-bezier(.2,.7,.2,1) .15s; }
+    .rv.in { clip-path: inset(0); }
+    /* cover card: the cover opens from a sliver, the caption slides in after it */
+    .rc { display: flex; gap: 26px; align-items: flex-start; color: inherit; text-decoration: none; }
+    .rc .card-cover { width: calc(var(--bh, 60vh) * .465); height: calc(var(--bh, 60vh) * .62); flex: none; border: 1px solid rgba(255,255,255,.74); border-radius: 12px; box-shadow: var(--shadow-card); transform-origin: 0 50%; transform: scaleX(.04); transition: transform .9s cubic-bezier(.2,.7,.2,1); }
+    .rc.in .card-cover { transform: none; }
+    .rc-body { width: 24vw; min-width: 220px; padding-top: 6px; white-space: normal; opacity: 0; transform: translateX(28px); transition: opacity .7s ease .35s, transform .7s cubic-bezier(.2,.7,.2,1) .35s; }
+    .rc.in .rc-body { opacity: 1; transform: none; }
+    .rc h4 { margin: 0; color: var(--graphite); font: 400 clamp(20px, 1.9vw, 30px)/1.35 var(--serif); letter-spacing: -.01em; line-break: strict; } /* #tags are wrapped nowrap by the script */ /* #tags are wrapped nowrap by the script */
+    .rc p { margin: 10px 0 0; color: var(--ash); font: 10px var(--mono); letter-spacing: .04em; }
+    .rc .open { display: inline-flex; align-items: center; gap: 5px; margin-top: 12px; color: var(--blue); font-size: 11px; font-weight: 500; }
+    .rc:hover h4 { color: var(--blue); }
+    .rend { max-width: 460px; white-space: normal; opacity: 0; transform: translateY(18px); transition: opacity .8s ease .2s, transform .8s cubic-bezier(.2,.6,.2,1) .2s; }
+    .rend.in { opacity: 1; transform: none; }
+    .rend .meta-line { margin-bottom: 12px; }
+    .rend strong { display: block; color: var(--ink); font: 400 clamp(22px, 2.2vw, 30px)/1.25 var(--serif); letter-spacing: -.02em; }
+    .rend small { display: block; margin-top: 10px; color: var(--fog); font: 400 10px/1.7 var(--mono); }
+
+    /* 05 echo */
+    .echo-rows { margin-top: 4px; }
+    .echo-row { display: grid; grid-template-columns: 64px 1fr 46px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--linen); }
+    .echo-row:last-child { border-bottom: 0; }
+    .echo-row span { color: var(--charcoal); font-size: 12px; }
+    .echo-row span code { color: var(--fog); font: 8px var(--mono); display: block; letter-spacing: .04em; }
+    .echo-row b { color: var(--ink); text-align: right; font: 12px var(--mono); font-weight: 400; }
+    .conv-list { margin-top: 24px; padding-top: 8px; border-top: 1px solid var(--mist); }
+    .conv { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--linen); }
+    .conv:last-child { border-bottom: 0; }
+    .conv .ava { width: 34px; height: 34px; flex: none; border-radius: 50%; border: 1px solid var(--mist); background: linear-gradient(140deg, #9cbcd2, #f2ecd8); }
+    .conv .ava.g { border-radius: 10px; background: linear-gradient(140deg, #453e63, #907a9c); }
+    .conv .who { min-width: 0; }
+    .conv .who b { display: block; color: var(--graphite); font-size: 13px; font-weight: 500; }
+    .conv .who small { display: block; margin-top: 2px; color: var(--fog); font: 9px var(--mono); }
+    .conv .n { margin-left: auto; color: var(--ash); font: 11px var(--mono); white-space: nowrap; }
+    .share-sample { display: flex; gap: 14px; margin-top: 22px; padding: 14px; border: 1px solid var(--mist); border-radius: 12px; background: var(--linen); }
+    .share-sample .sc { width: 62px; height: 78px; flex: none; border-radius: 8px; background: linear-gradient(160deg, #162034, #4c6a94); }
+    .share-sample .st b { display: block; color: var(--graphite); font-size: 12px; font-weight: 500; line-height: 1.5; }
+    .share-sample .st span { display: block; margin-top: 5px; color: var(--fog); font: 9px var(--mono); }
+    .share-sample .st p { margin: 8px 0 0; color: var(--ash); font-size: 10px; line-height: 1.6; }
+
+    /* 05 · third column: the words themselves */
+    #echo .chapter-inner { max-width: 1400px; --beat: 36px; }
+    #echo .cols { grid-template-columns: .95fr 1.05fr 1fr; gap: 40px; align-items: start; }
+    #echo .words { margin-top: var(--beat); }
+    .words .sub { margin-top: 22px; color: var(--ash); font: 400 9px var(--mono); letter-spacing: .18em; }
+    .words .sub:first-of-type { margin-top: 0; }
+    .words .mini-lines { margin-top: 12px; gap: 8px; }
+    .words .ml { grid-template-columns: 96px 1fr 38px; }
+    .words .ml > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .words .cell-foot { margin-top: 12px; white-space: normal; }
+    .chips-block { display: grid; gap: 8px; margin-top: 24px; }
+    .chips-head { margin: 0; color: var(--ash); font: 400 9px var(--mono); letter-spacing: .18em; }
+    .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--fog); font: 400 10px var(--mono); }
+    .chips i { padding: 2px 6px; border-radius: 4px; color: var(--charcoal); background: var(--linen); font-style: normal; }
+    body.privacy-on [data-slot="terms-chat"], body.privacy-on [data-slot="chat-words"] { filter: blur(6px); }
+
+    /* 06 evidence */
+    .ratio { display: grid; grid-template-columns: 1fr 100px; gap: 22px; align-items: center; padding-bottom: 22px; border-bottom: 1px solid var(--mist); }
+    .ratio-track { height: 6px; border-radius: 3px; overflow: hidden; background: var(--linen); }
+    .ratio-track i { display: block; width: 0; height: 100%; border-radius: 3px; background: var(--blue); transition: width 1.3s cubic-bezier(.2,.7,.2,1) .2s; }
+    .in .ratio-track i { width: var(--w, 97%); }
+    .ratio strong { display: block; color: var(--ink); font: 400 30px var(--serif); }
+    .ratio span { display: block; margin-top: 3px; color: var(--ash); font: 9px var(--mono); }
+    .evidence-row { display: grid; grid-template-columns: 150px 1fr auto; gap: 12px; min-height: 48px; align-items: center; border-bottom: 1px solid var(--linen); }
+    .evidence-row code { color: var(--ash); font: 9px var(--mono); letter-spacing: .04em; }
+    .evidence-row span { color: var(--charcoal); font-size: 12px; }
+    .evidence-row b { color: var(--ink); font: 12px var(--mono); font-weight: 400; }
+    .caveat { display: none; margin-top: 18px; padding: 15px 16px; border: 1px solid var(--mist); border-left: 2px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--linen); color: var(--ash); font-size: 12px; line-height: 1.8; }
+    .caveat.open { display: block; }
+    .caveat b { color: var(--charcoal); font-weight: 500; }
+
+    /* 06 · field ledger */
+    #evidence .chapter-inner { max-width: 1400px; }
+    .fields { margin-top: 12px; }
+    .fields .ml { grid-template-columns: 96px 1fr 78px 42px; }
+    .fields .ml small { color: var(--ash); font: 10px var(--mono); text-align: right; }
+
+    /* 07 signature */
+    .chapter.colophon { background: var(--parchment); }
+    .signature { display: grid; grid-template-columns: 1fr 380px; gap: 56px; align-items: center; margin-top: 56px; }
+    .signature-name { color: var(--ink); font: 300 clamp(40px, 4.6vw, 62px)/1.12 var(--serif); letter-spacing: -.025em; }
+    .signature-name em { font-style: italic; font-weight: 400; }
+    .signature-en { margin-top: 12px; color: var(--ash); font: 400 10px var(--mono); letter-spacing: .3em; }
+    .seal { position: relative; min-height: 320px; display: grid; place-items: center; border: 1px solid var(--mist); border-radius: 24px; background: var(--paper); box-shadow: var(--shadow-diagram); overflow: hidden; }
+    .seal svg { width: 240px; height: 240px; }
+    .seal small { position: absolute; left: 20px; bottom: 16px; color: var(--fog); font: 9px var(--mono); letter-spacing: .12em; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+    .colophon-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; margin-top: 72px; padding-top: 22px; border-top: 1px solid var(--mist); color: var(--fog); font: 400 10px var(--mono); letter-spacing: .04em; }
+    .colophon-foot span { flex: 1; min-width: 220px; }
+    .colophon-foot button { border: 0; padding: 0; color: var(--charcoal); background: none; cursor: pointer; font-size: 11px; }
+    .colophon-foot button:hover { color: var(--blue); }
+
+    /* reveal helpers */
+    [data-reveal] { opacity: 0; transform: translateY(24px); transition: opacity .8s ease, transform .8s cubic-bezier(.2,.6,.2,1); transition-delay: calc(var(--i, 0) * 90ms); }
+    [data-reveal].in { opacity: 1; transform: none; }
+
+    /* arriving from the entry card: white curtain lifts onto the hero */
+    #curtain { position: fixed; inset: 0; z-index: 70; background: #fff; opacity: 0; pointer-events: none; transition: opacity 1s ease .1s; }
+    html.from-card #curtain { opacity: 1; }
+    html.from-card.arrived #curtain { opacity: 0; }
+    html.from-card .hero-copy { transform: scale(1.06); transition: transform 1.3s cubic-bezier(.2,.7,.2,1) .05s; }
+    html.from-card.arrived .hero-copy { transform: none; }
+    .colophon-foot a { color: var(--charcoal); text-decoration: none; font-size: 11px; }
+    .colophon-foot a:hover { color: var(--blue); }
+
+    /* ============ glass — paper lets the sky through; cards are three tiers of frosted glass ============ */
+    .chapter { background: rgba(254,255,252,.80); backdrop-filter: blur(26px) saturate(1.12); -webkit-backdrop-filter: blur(26px) saturate(1.12); border-color: rgba(255,255,255,.7); }
+    /* watercolour wash in the chapter's own sky colours — this is what the glass has to show through */
+    .chapter::before { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; filter: blur(34px); background:
+      radial-gradient(40% 36% at 76% 44%, var(--w1), transparent 72%),
+      radial-gradient(34% 30% at 20% 80%, var(--w2), transparent 72%),
+      radial-gradient(26% 24% at 52% 16%, var(--w3), transparent 74%),
+      radial-gradient(22% 20% at 40% 56%, var(--w2), transparent 72%); }
+    .chapter-inner { position: relative; z-index: 1; }
+    .chapter[data-wash="dawn"]  { --w1: rgba(120,168,204,.62); --w2: rgba(236,196,120,.58); --w3: rgba(210,154,78,.34); }
+    .chapter[data-wash="dusk"]  { --w1: rgba(150,118,170,.6);  --w2: rgba(228,164,140,.62); --w3: rgba(77,69,110,.36); }
+    .chapter[data-wash="night"] { --w1: rgba(96,124,168,.6);   --w2: rgba(150,176,210,.6);  --w3: rgba(29,41,64,.34); }
+    .chapter[data-wash="ember"] { --w1: rgba(204,128,54,.55);  --w2: rgba(150,80,56,.48);   --w3: rgba(226,150,66,.36); }
+    /* tier A · primary boards */
+    .board, .seal { background: linear-gradient(150deg, rgba(255,255,255,.64), rgba(255,255,255,.36)); border-color: rgba(255,255,255,.82); box-shadow: 0 0 0 1px rgba(222,226,222,.55), inset 0 1px 0 rgba(255,255,255,.95), inset 0 -1px 0 rgba(255,255,255,.35), rgba(0,0,0,.06) 0 6px 18px; backdrop-filter: blur(20px) saturate(1.25); -webkit-backdrop-filter: blur(20px) saturate(1.25); }
+    /* tier B · bento cells, content cards, share card */
+    .bento-cell, .card, .share-sample { background: linear-gradient(150deg, rgba(255,255,255,.5), rgba(255,255,255,.24)); border-color: rgba(255,255,255,.74); box-shadow: 0 0 0 1px rgba(222,226,222,.5), inset 0 1px 0 rgba(255,255,255,.9), rgba(0,0,0,.05) 0 4px 12px; backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); }
+    /* tier C · small tiles, pills, notes */
+    .pm, .music-line, .caveat, .tag { background: linear-gradient(150deg, rgba(255,255,255,.34), rgba(255,255,255,.12)); border-color: rgba(255,255,255,.66); box-shadow: 0 0 0 1px rgba(222,226,222,.42), inset 0 1px 0 rgba(255,255,255,.8); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+    .caveat { border-left-color: var(--blue); }
+    /* the one saturated surface stays saturated, but it is glass too */
+    .bento-cell.cerulean { background: linear-gradient(150deg, rgba(0,129,192,.92), rgba(0,129,192,.72)); border-color: rgba(255,255,255,.42); box-shadow: 0 0 0 1px rgba(0,129,192,.45), inset 0 1px 0 rgba(255,255,255,.4), rgba(0,80,120,.18) 0 8px 22px; }
+    /* inner hairlines and tracks read through the glass */
+    .track, .ratio-track { background: rgba(44,44,44,.09); }
+    .stream-row, .key-row, .echo-row, .conv, .evidence-row { border-bottom-color: rgba(44,44,44,.08); }
+    .board-foot, .conv-list, .ratio, .month-bars, .tag-line, .recent { border-color: rgba(44,44,44,.12); }
+    .card-cover b { background: rgba(255,255,255,.78); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+    .card:hover, .tag:hover { border-color: rgba(65,161,207,.8); }
+
+    @media (max-width: 1240px) {
+      #kept .recent { grid-template-columns: 1fr; gap: 20px; }
+      #kept .recent-head { flex-direction: row; align-items: end; }
+    }
+    @media (max-width: 1180px) {
+      .kept-grid { grid-template-columns: 1fr 1.1fr 1fr; gap: 28px; }
+      .rings { gap: 18px; }
+      .stair .pm { flex-wrap: wrap; }
+      .stair .pm:nth-child(2) { margin-left: 10px; }
+      .stair .pm:nth-child(3) { margin-left: 20px; }
+    }
+    @media (max-width: 1000px) {
+      .kept-grid { grid-template-columns: 1fr 1fr; }
+      .depth { grid-column: 1 / -1; margin-top: 0; }
+      .stair { grid-template-columns: repeat(3, 1fr); }
+      .stair .pm:nth-child(2) { margin: 14px 0 0; }
+      .stair .pm:nth-child(3) { margin: 28px 0 0; }
+    }
+    @media (max-width: 1100px) {
+      #echo .cols { grid-template-columns: 1fr 1fr; }
+      #echo .words { grid-column: 1 / -1; margin-top: 0; }
+    }
+    @media (max-width: 880px) {
+      .nav { top: 12px; height: 50px; }
+      .nav-center, #clock { display: none; }
+      .rail { right: 12px; }
+      .rail button span { display: none; }
+      .hero { padding: 0 8% 16vh; }
+      .cols, .cols.rev, .signature { grid-template-columns: 1fr; gap: 36px; }
+      .cards { grid-template-columns: repeat(2, 1fr); }
+      .kept-grid { grid-template-columns: 1fr; gap: 28px; }
+      .venn-col, .depth, .cards .card:nth-child(even) { margin-top: 0; }
+      .stair { grid-template-columns: 1fr; }
+      .stair .pm:nth-child(2), .stair .pm:nth-child(3) { margin: 0; }
+      .bento { grid-template-columns: 1fr; }
+      .bento-col:nth-child(2) { margin-top: 0; }
+      .window { min-height: 78vh; }
+      .chapter { height: auto; }
+      .chapter-inner { transform: none; }
+      .roll-stage { height: 100vh; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="curtain" aria-hidden="true"></div>
+
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="dimcurve" color-interpolation-filters="sRGB"><feComponentTransfer><feFuncR type="gamma" exponent="2.3"/><feFuncG type="gamma" exponent="2.3"/><feFuncB type="gamma" exponent="2.3"/></feComponentTransfer></filter></svg>
+  <!-- one continuous painted sky -->
+  <div id="sky" aria-hidden="true">
+    <div class="sky-state s0" style="opacity:1"><div class="cloudband" data-par="0.05"></div></div>
+    <div class="sky-state s1"><div class="cloudband" data-par="0.07"></div></div>
+    <div class="sky-state s2"><div class="cloudband" data-par="0.06"></div></div>
+    <div class="sky-state s3"><div class="cloudband" data-par="0.04"></div></div>
+    <div class="sky-state s4"><div class="cloudband" data-par="0.06"></div></div>
+    <div class="bird b1"><svg viewBox="0 0 26 12" fill="none"><path d="M1 7 Q7 1 13 6 Q19 1 25 7" stroke="#f6f1e4" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+    <div class="bird b2"><svg viewBox="0 0 26 12" fill="none"><path d="M1 7 Q7 1 13 6 Q19 1 25 7" stroke="#f6f1e4" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+    <div class="bird b3"><svg viewBox="0 0 26 12" fill="none"><path d="M1 7 Q7 1 13 6 Q19 1 25 7" stroke="#f6f1e4" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+  </div>
+
+  <header class="nav">
+    <a href="story-entry.html" class="brand" aria-label="回到入口卡">
+      <svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="9" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 15.5 H18.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M4 12.8 Q10 10.4 16 12.8" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+      <span class="brand-name">内容年志<small>TRACE · ANNUAL</small></span>
+    </a>
+    <div class="nav-center"><span data-slot="nav-mode">演示快照</span><i></i><span>仅本地解释 · 不上传</span></div>
+    <div class="nav-right">
+      <span id="clock">--:--</span>
+      <button id="skyBtn" class="nav-icon" aria-label="切换卷首天空" title="切换卷首天空">◐</button>
+      <button class="nav-btn" onclick="document.querySelector('#evidence').scrollIntoView({behavior:'smooth'})">数据口径 <span class="cir">→</span></button>
+    </div>
+  </header>
+
+  <nav class="rail" aria-label="章节">
+    <button data-target="sample"><span>01 样本</span><i class="dot"></i></button>
+    <button data-target="time"><span>02 时间</span><i class="dot"></i></button>
+    <button data-target="kept"><span>03 留下</span><i class="dot"></i></button>
+    <button data-target="mix"><span>04 组成</span><i class="dot"></i></button>
+    <button data-target="echo"><span>05 回声</span><i class="dot"></i></button>
+    <button data-target="evidence"><span>06 证据</span><i class="dot"></i></button>
+    <button data-target="signature"><span>07 签名</span><i class="dot"></i></button>
+  </nav>
+
+  <main id="top">
+
+    <!-- 卷首 -->
+    <section class="window hero in" data-skystate="0" data-tone="dark" id="hero">
+      <div class="hero-copy">
+        <p class="eyebrow"><i></i>TRACE · <span data-slot="hero-year">二〇二五</span> · PERSONAL SIGNALS</p>
+        <h1>把这一年的停留，<br><b>打开成一卷。</b></h1>
+        <p class="hero-lead">观看、喜欢、收藏与聊天——四条在本地采集的数据流，被装订成一册可以回看的年志。每一个数字都有出处，每一条边界都被写明。</p>
+        <div class="hero-meta"><span data-slot="hero-unique">21 个独立内容</span><span data-slot="hero-days">28 个活跃日</span><span data-slot="hero-streams">4 条数据流</span><span>LOCAL · PRIVATE</span></div>
+        <div class="hero-actions">
+          <button class="btn btn-cream" onclick="document.querySelector('#w-sample').scrollIntoView({behavior:'smooth'})">开始阅读 <span class="cir">↓</span></button>
+          <button class="btn btn-cream faint" onclick="document.querySelector('#evidence').scrollIntoView({behavior:'smooth'})">先看数据口径</button>
+        </div>
+      </div>
+      <span class="scroll-cue">SCROLL TO REVEAL</span>
+    </section>
+
+    <!-- ( 01 ) 样本 -->
+    <section class="window" data-skystate="1" data-tone="light" id="w-sample">
+      <div class="window-copy">
+        <p class="w-eyebrow">( 01 ) · THE SAMPLE · [ <span data-slot="streams-n">4</span> STREAMS ]</p>
+        <h2 class="w-title">你留下的，<em>不只是</em>播放记录。</h2>
+        <p class="w-sub">四条数据流在同一片天空下汇合。</p>
+      </div>
+    </section>
+
+    <section class="chapter" id="sample" data-wash="dawn">
+      <div class="chapter-inner">
+        <div class="ch-head" data-reveal>
+          <div class="meta-line"><b>01</b> THE SAMPLE</div>
+          <h2>一份样本，四种笔迹。</h2>
+        </div>
+        <div class="cols">
+          <div data-reveal style="--i:1">
+            <p class="lead">观看历史、喜欢、收藏、聊天，是四种笔迹不同的记录。年志只对已经写下的字负责——不推断没有被记录的生活。</p>
+            <div class="metrics">
+              <div class="metric"><strong data-slot="unique" data-count="21">0</strong><span>独立内容 · 去重后</span></div>
+              <div class="metric"><strong data-slot="days" data-count="28">0</strong><span>活跃日</span></div>
+              <div class="metric"><strong data-slot="chat-n">—</strong><span data-slot="chat-label">聊天消息 · 待采集</span></div>
+            </div>
+            <div data-slot="conc-block">
+              <p class="chips-head" style="margin-top:26px">CONCENTRATION · 覆盖一半需要多少词条</p>
+              <div class="mini-lines conc" data-slot="concentration">
+                <div class="ml"><span>看过</span><span class="track"><i class="fill blue" style="--w:38%"></i></span><b>34 个</b></div>
+                <div class="ml"><span>喜欢</span><span class="track"><i class="fill" style="--w:100%"></i></span><b>90 个</b></div>
+                <div class="ml"><span>收藏</span><span class="track"><i class="fill" style="--w:27%"></i></span><b>24 个</b></div>
+                <div class="ml"><span>聊天</span><span class="track"><i class="fill" style="--w:0%"></i></span><b>—</b></div>
+              </div>
+              <p class="note conc-note" data-slot="concentration-note">条越短，越集中：覆盖一半的记录只要更少的词条。</p>
+            </div>
+            <p class="note">观测范围 <b data-slot="range">2025-01-03 → 2025-12-20</b> · <span data-slot="source">演示快照 · 本地浏览器采集</span></p>
+          </div>
+          <div class="board" data-reveal style="--i:2">
+            <div class="board-head"><span>FOUR STREAMS</span><small data-slot="events">34 video events</small></div>
+            <div class="stream-row" data-slot="stream-watch"><span class="stream-name">观看历史<small>WATCH</small></span><span class="track"><i class="fill blue" style="--w:100%"></i></span><b class="stream-count" data-count="20">0</b><div class="stream-terms" data-slot="terms-watch"><i>#示例话题一</i><i>#示例话题二</i><i>#示例话题三</i><small>2,756 个不同话题 · 前 12 个覆盖 31% · 覆盖一半要 34 个</small></div></div>
+            <div class="stream-row" data-slot="stream-liked"><span class="stream-name">喜欢<small>LIKED</small></span><span class="track"><i class="fill" style="--w:40%"></i></span><b class="stream-count" data-count="8">0</b><div class="stream-terms" data-slot="terms-liked"><i>#示例话题一</i><i>#示例话题四</i><i>#示例话题五</i><small>2,361 个不同话题 · 前 12 个覆盖 18% · 覆盖一半要 90 个</small></div></div>
+            <div class="stream-row" data-slot="stream-favorite"><span class="stream-name">收藏<small>FAVORITE</small></span><span class="track"><i class="fill" style="--w:30%"></i></span><b class="stream-count" data-count="6">0</b><div class="stream-terms" data-slot="terms-favorite"><i>#示例话题六</i><i>#示例话题二</i><i>#示例话题七</i><small>318 个不同话题 · 前 12 个覆盖 33% · 覆盖一半要 24 个</small></div></div>
+            <div class="stream-row" data-slot="stream-chat"><span class="stream-name">聊天<small>CHAT</small></span><span class="track"><i class="fill" style="--w:3%"></i></span><b class="stream-count">—</b><div class="stream-terms" data-slot="terms-chat"><small>等待聊天读取</small></div></div>
+            <div class="board-foot">▤ <span>一次性读取 · 不持续监听 · 不上传云端</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ( 02 ) 时间 -->
+    <section class="window" data-skystate="1" data-tone="light" id="w-time">
+      <div class="window-copy">
+        <p class="w-eyebrow">( 02 ) · WHEN YOU ARRIVED · [ ASIA/SHANGHAI ]</p>
+        <h2 class="w-title">时间把偏好，写成<em>一条起伏的线</em>。</h2>
+        <p class="w-sub">只有带可靠行为时间的记录，才被允许进入时间轴。</p>
+      </div>
+    </section>
+
+    <section class="chapter" id="time" data-wash="dawn">
+      <div class="chapter-inner">
+        <div class="ch-head" data-reveal>
+          <div class="meta-line"><b>02</b> WHEN YOU ARRIVED</div>
+          <h2>抵达的月份，与抵达的时辰。</h2>
+        </div>
+        <div class="cols rev">
+          <div class="board" data-reveal style="--i:1">
+            <div class="board-head"><span>MONTHLY TRACE</span><small data-slot="months-label">2025 · 12 months</small></div>
+            <div class="month-bars">
+              <div class="month" style="--d:0"><i style="--h:22%"></i><em>1</em></div>
+              <div class="month" style="--d:1"><i style="--h:38%"></i><em>2</em></div>
+              <div class="month" style="--d:2"><i style="--h:52%"></i><em>3</em></div>
+              <div class="month" style="--d:3"><i style="--h:65%"></i><em>4</em></div>
+              <div class="month peak" style="--d:4"><i style="--h:72%"></i><em>5</em></div>
+              <div class="month" style="--d:5"><i style="--h:56%"></i><em>6</em></div>
+              <div class="month" style="--d:6"><i style="--h:42%"></i><em>7</em></div>
+              <div class="month peak" style="--d:7"><i style="--h:88%"></i><em>8</em></div>
+              <div class="month" style="--d:8"><i style="--h:60%"></i><em>9</em></div>
+              <div class="month" style="--d:9"><i style="--h:48%"></i><em>10</em></div>
+              <div class="month" style="--d:10"><i style="--h:33%"></i><em>11</em></div>
+              <div class="month" style="--d:11"><i style="--h:26%"></i><em>12</em></div>
+            </div>
+            <div class="board-head" style="margin:20px 0 0"><span>DAY / NIGHT</span><small>24h</small></div>
+            <div id="hourDots" class="hour-dots"></div>
+            <div class="hour-labels"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+          </div>
+          <div data-reveal style="--i:2">
+            <p class="lead">每条记录的行为时间都标注了来源。发布时间只属于内容，不属于你——它不会被当成你的行为画进这条线。</p>
+            <div class="metrics">
+              <div class="metric"><strong data-slot="peak-hour">15:00</strong><span>最常抵达的时刻</span></div>
+              <div class="metric"><strong data-slot="peak-day">2025-05-05</strong><span>最密集的一天</span></div>
+            </div>
+            <div class="time-sources">
+              <div class="ts-row"><code>PLATFORM</code><span>平台行为时间</span><b data-slot="ts-platform">33 条</b></div>
+              <div class="ts-row"><code>ARCHIVE</code><span>归档动作时间</span><b data-slot="ts-archive">0 条</b></div>
+              <div class="ts-row"><code>NO TIME</code><span>暂无可靠时间 · 不入轴</span><b data-slot="ts-unknown">1 条</b></div>
+            </div>
+            <p class="note">没有时间来源的内容仍留在清单里，只是不被硬塞进时间轴。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ( 03 ) 留下 -->
+    <section class="window" data-skystate="2" data-tone="dark" id="w-kept">
+      <div class="window-copy">
+        <p class="w-eyebrow">( 03 ) · WHAT STAYED · [ STABLE IDS ONLY ]</p>
+        <h2 class="w-title">真正留下来的，都经过<em>两次选择</em>。</h2>
+        <p class="w-sub">看过、喜欢、收藏——三个环，只用稳定的 ID 相扣。</p>
+      </div>
+    </section>
+
+    <section class="chapter" id="kept" data-wash="dusk">
+      <div class="chapter-inner">
+        <div class="ch-head" data-reveal>
+          <div class="meta-line"><b>03</b> WHAT STAYED</div>
+          <h2>三个环的交集，和看完的深度。</h2>
+        </div>
+        <div class="kept-grid">
+          <div class="venn-col" data-reveal style="--i:1">
+            <div class="venn">
+              <i class="va"></i><i class="vb"></i><i class="vc"></i>
+              <strong data-slot="all-three" data-count="5">0<small>三重交集<em data-slot="k-share"> · 占独立内容 0.4%</em></small></strong>
+              <span class="la">看过</span><span class="lb">喜欢</span><span class="lc">收藏</span>
+            </div>
+          </div>
+          <div class="kept-copy" data-reveal style="--i:2">
+            <p class="lead">交集只认稳定的作品 ID；没有 ID 的记录不会被强行连线。看的深浅来自每条观看的已看时长与百分比。</p>
+            <div class="metrics rings">
+              <div class="metric"><strong data-slot="k-watch" data-count="1240">0</strong><span><i class="dot-a"></i>看过 · WATCHED</span></div>
+              <div class="metric"><strong data-slot="k-liked" data-count="96">0</strong><span><i class="dot-b"></i>喜欢 · LIKED</span></div>
+              <div class="metric"><strong data-slot="k-fav" data-count="24">0</strong><span><i class="dot-c"></i>收藏 · SAVED</span></div>
+            </div>
+            <div class="key-list">
+              <div class="key-row"><span>看过 × 喜欢</span><b data-slot="x-wl">8</b></div>
+              <div class="key-row"><span>看过 × 收藏</span><b data-slot="x-wf">5</b></div>
+              <div class="key-row"><span>喜欢 × 收藏</span><b data-slot="x-lf">5</b></div>
+              <div class="key-row muted"><span>没有作品 ID · 未连线</span><b data-slot="k-noid">1 条</b></div>
+            </div>
+          </div>
+          <div class="board depth" data-reveal style="--i:3">
+            <div class="board-head"><span>DEPTH OF WATCH</span><small>已看百分比 · 三层</small></div>
+            <div class="depth-bar" id="depthBar"><i class="deep" data-k="done" style="--w:42%"></i><i class="mid" data-k="mid" style="--w:37%"></i><i class="shallow" data-k="shallow" style="--w:21%"></i></div>
+            <div class="progress-mini stair">
+              <div class="pm deep"><i class="dot"></i><strong data-slot="p-done">42%</strong><span>看完 · ≥90%</span></div>
+              <div class="pm mid"><i class="dot"></i><strong data-slot="p-mid">37%</strong><span>中途 · 30–90%</span></div>
+              <div class="pm shallow"><i class="dot"></i><strong data-slot="p-shallow">21%</strong><span>浅尝 · &lt;30%</span></div>
+            </div>
+            <div class="board-foot">只统计带已看时长的观看记录</div>
+          </div>
+        </div>
+        <div class="recent">
+          <div class="recent-head" data-reveal>
+            <div><div class="meta-line" style="margin-bottom:10px"><b>RECENT</b> SIGNALS</div><h3>最近被你留下的内容</h3></div>
+            <small>封面来自原视频 · 点击打开抖音</small>
+          </div>
+          <div class="cards">
+            <a class="card" href="#" onclick="return false" data-reveal style="--i:1"><div class="card-cover c1"><b>01</b><em class="card-kind">喜欢</em></div><div class="card-body"><h4>#城市散步 年末灯火</h4><p>示例创作者甲</p><span class="open">查看 ↗</span></div></a>
+            <a class="card" href="#" onclick="return false" data-reveal style="--i:2"><div class="card-cover c2"><b>02</b><em class="card-kind">收藏</em></div><div class="card-body"><h4>修补一只旧包 #手作</h4><p>示例创作者乙</p><span class="open">查看 ↗</span></div></a>
+            <a class="card" href="#" onclick="return false" data-reveal style="--i:3"><div class="card-cover c3"><b>03</b><em class="card-kind">喜欢</em></div><div class="card-body"><h4>#家常菜 热气腾腾</h4><p>示例创作者丙</p><span class="open">查看 ↗</span></div></a>
+            <a class="card" href="#" onclick="return false" data-reveal style="--i:4"><div class="card-cover c4"><b>04</b><em class="card-kind">看过</em></div><div class="card-body"><h4>秋天的配色 #摄影</h4><p>示例创作者甲</p><span class="open">查看 ↗</span></div></a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ( 04 ) 组成 -->
+    <section class="window" data-skystate="2" data-tone="dark" id="w-mix">
+      <div class="window-copy">
+        <p class="w-eyebrow">( 04 ) · THE MIX · [ TOPICS · CREATORS · MEDIA · DURATION · MUSIC ]</p>
+        <h2 class="w-title">你选择的内容，有自己的<em>材质</em>。</h2>
+        <p class="w-sub">话题聚成星群，创作者留下轨迹。</p>
+      </div>
+    </section>
+
+    <section class="chapter" id="mix" data-wash="dusk">
+      <div class="chapter-inner">
+        <div class="ch-head" data-reveal>
+          <div class="meta-line"><b>04</b> THE MIX</div>
+          <h2>话题、来路，与质地。</h2>
+          <p class="lead">显式的话题标签、创作者、媒介形态与时长分层——这些拼出内容的材质；作品热度只是内容的快照，不叙述成你的行为。</p>
+        </div>
+        <div class="bento">
+          <div class="bento-col">
+            <div class="bento-cell cerulean" data-reveal style="--i:1">
+              <span class="label">TOPIC SIGNAL · 唯一的一块颜色</span>
+              <strong data-slot="topic-name">#城市散步</strong>
+              <small data-slot="topic-meta">5 条 · 31% · 年度最常出现的话题</small>
+              <div class="mini-lines topic-lines" data-slot="tags">
+                <div class="ml"><span>#手作</span><span class="track"><i class="fill" style="--w:100%"></i></span><b>4</b></div>
+                <div class="ml"><span>#家常菜</span><span class="track"><i class="fill" style="--w:75%"></i></span><b>3</b></div>
+                <div class="ml"><span>#摄影</span><span class="track"><i class="fill" style="--w:75%"></i></span><b>3</b></div>
+                <div class="ml"><span>#植物</span><span class="track"><i class="fill" style="--w:25%"></i></span><b>1</b></div>
+              </div>
+              <div class="cell-foot" data-slot="topic-foot">共 5 个显式话题 · 按出现次数</div>
+            </div>
+            <div class="bento-cell" data-reveal style="--i:4"><span class="label">DURATION</span>
+              <div class="mini-lines" data-slot="duration">
+                <div class="ml"><span>&lt; 1 分钟</span><span class="track"><i class="fill" style="--w:43%"></i></span><b>43%</b></div>
+                <div class="ml"><span>1–10 分钟</span><span class="track"><i class="fill blue" style="--w:48%"></i></span><b>48%</b></div>
+                <div class="ml"><span>10 分钟以上</span><span class="track"><i class="fill" style="--w:9%"></i></span><b>9%</b></div>
+              </div>
+              <div class="cell-metrics">
+                <div><strong data-slot="len-median">48 秒</strong><span>内容中位时长</span></div>
+                <div><strong data-slot="len-watched">3 时 20 分</strong><span>累计已看</span></div>
+              </div>
+              <div class="cell-foot" data-slot="len-longest">最长的一条 · 1 时 12 分 · 示例长视频</div>
+            </div>
+          </div>
+          <div class="bento-col">
+            <div class="bento-cell" data-reveal style="--i:2"><span class="label">CREATOR FIELD</span><span class="avatar" data-slot="creator-avatar" aria-hidden="true"></span><strong data-slot="creator-name">示例创作者甲</strong><small data-slot="creator-meta">8 个独立内容 · 出现最多的创作者</small>
+              <div class="mini-lines creator-lines" data-slot="creators">
+                <div class="ml"><span>示例创作者乙</span><span class="track"><i class="fill" style="--w:100%"></i></span><b>5</b></div>
+                <div class="ml"><span>示例创作者丙</span><span class="track"><i class="fill" style="--w:60%"></i></span><b>3</b></div>
+                <div class="ml"><span>示例创作者丁</span><span class="track"><i class="fill" style="--w:40%"></i></span><b>2</b></div>
+                <div class="ml"><span>示例创作者戊</span><span class="track"><i class="fill" style="--w:20%"></i></span><b>1</b></div>
+              </div>
+              <div class="cell-foot" data-slot="creator-foot">共 12 位创作者 · 前三位占 62%</div>
+            </div>
+            <div class="bento-cell" data-reveal style="--i:5"><span class="label">BGM · 重复出现的音乐</span>
+              <div class="music-rows" data-slot="musics">
+                <div class="music-row"><span class="eq"><i></i><i></i><i></i><i></i></span><span class="mt"><b>《示例旋律 · 城市黄昏》</b> — 示例音乐人</span><small>7 次</small></div>
+                <div class="music-row"><span class="eq"><i></i><i></i><i></i><i></i></span><span class="mt"><b>《示例旋律 · 雨夜》</b> — 示例音乐人</span><small>4 次</small></div>
+                <div class="music-row"><span class="eq"><i></i><i></i><i></i><i></i></span><span class="mt"><b>《示例旋律 · 清晨》</b> — 示例乐队</span><small>2 次</small></div>
+              </div>
+              <div class="cell-foot" data-slot="music-foot">共 9 首不同的音乐 · 只列出现两次以上的</div>
+            </div>
+          </div>
+          <div class="bento-col">
+            <div class="bento-cell" data-reveal style="--i:3"><span class="label">STATS SNAPSHOT</span><strong data-slot="heat-median">1.2 万</strong><small data-slot="heat-meta">你遇到的内容 · 点赞数中位 · 热度只是内容的快照</small>
+              <div class="heat-rows">
+                <div class="heat-row"><span>最热</span><em data-slot="heat-hot-title">示例 · 最多人点赞的一条</em><b data-slot="heat-hot">320 万</b></div>
+                <div class="heat-row"><span>最冷</span><em data-slot="heat-cold-title">示例 · 最安静的一条</em><b data-slot="heat-cold">12</b></div>
+              </div>
+            </div>
+            <div class="bento-cell" data-reveal style="--i:6"><span class="label">CONTENT AGE</span><strong data-slot="age-median">3 天</strong><small data-slot="age-meta">遇到它时，它已发布多久 · 中位</small>
+              <div class="depth-bar age-bar" data-slot="age-bar"><i style="--w:60%"></i><i style="--w:30%"></i><i style="--w:10%"></i></div>
+              <div class="age-legend" data-slot="age-legend"><span><i></i>一周内 <b>60%</b></span><span><i></i>三个月内 <b>30%</b></span><span><i></i>更早 <b>10%</b></span></div>
+            </div>
+            <div class="bento-cell" data-reveal style="--i:7"><span class="label">MEDIA</span>
+              <div class="mini-lines" data-slot="media">
+                <div class="ml"><span>视频</span><span class="track"><i class="fill blue" style="--w:72%"></i></span><b>72%</b></div>
+                <div class="ml"><span>图文</span><span class="track"><i class="fill" style="--w:18%"></i></span><b>18%</b></div>
+                <div class="ml"><span>直播</span><span class="track"><i class="fill" style="--w:10%"></i></span><b>10%</b></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ( 04 · roll ) 高频词条长卷 — the page scrolls down, the roll slides sideways -->
+    <section class="roll" id="roll" data-tone="light">
+      <div class="chapter roll-stage" data-wash="dusk">
+        <div class="roll-head">
+          <div class="ch-head" data-reveal>
+            <div class="meta-line"><b>04</b> THE MIX · HIGH-FREQUENCY ROLL</div>
+            <h2>高频词条，铺成<em>一卷</em>。</h2>
+          </div>
+          <div class="roll-cue" aria-hidden="true"><span>SCROLL ↓ · ROLL ←</span><span class="track"><i class="fill blue" id="rollBar"></i></span></div>
+        </div>
+        <div class="roll-body"><div class="roll-strip" id="rollStrip"></div></div>
+      </div>
+    </section>
+
+    <!-- ( 05 ) 回声 -->
+    <section class="window" data-skystate="3" data-tone="dark" id="w-echo">
+      <div class="window-copy">
+        <p class="w-eyebrow">( 05 ) · THE ECHO · [ CHAT · ONE-TIME READ ]</p>
+        <h2 class="w-title">内容之外，还有人与你<em>交换回声</em>。</h2>
+        <p class="w-sub">夜空下，消息只留形态与时间。</p>
+      </div>
+    </section>
+
+    <section class="chapter" id="echo" data-wash="night">
+      <div class="chapter-inner">
+        <div class="ch-head" data-reveal>
+          <div class="meta-line"><b>05</b> THE ECHO</div>
+          <h2>九种消息形态，两种边界。</h2>
+        </div>
+        <div class="cols">
+          <div data-reveal style="--i:1">
+            <p class="lead">聊天读取是一次性动作。好友消息只观察形态；群聊正文从不落盘——只保留群名、消息总量与本人条数。带作者或封面证据的分享，才算一张分享卡。</p>
+            <div class="metrics">
+              <div class="metric"><strong data-slot="chat-friend">—</strong><span data-slot="chat-friend-label">好友消息 · 待采集</span></div>
+              <div class="metric"><strong data-slot="chat-call">—</strong><span>通话总时长</span></div>
+              <div class="metric"><strong data-slot="chat-convs">—</strong><span>会话样本</span></div>
+            </div>
+            <div class="share-sample" data-slot="share">
+              <div class="sc" aria-hidden="true"></div>
+              <div class="st"><b>分享卡示例：《示例视频 · 夜色片段》</b><span>分享自好友</span><p>好友转发的视频会以分享卡的形式进入回声——前提是带得出证据。</p></div>
+            </div>
+            <div class="chips-block" data-slot="contrast">
+              <p class="chips-head">SHARED VS LIKED · 两边不重合的话题</p>
+              <span class="chips" data-slot="contrast-shared">只在分享里 <i>#示例话题八</i><i>#示例话题九</i></span>
+              <span class="chips" data-slot="contrast-liked">只在喜欢里 <i>#示例话题一</i><i>#示例话题四</i></span>
+            </div>
+          </div>
+          <div class="board" data-reveal style="--i:2">
+            <div class="board-head"><span>MESSAGE FORMS</span><small data-slot="chat-head">WAITING FOR CHAT</small></div>
+            <div class="echo-rows" data-slot="echo">
+              <div class="echo-row"><span>文字</span><span class="track"><i class="fill blue" style="--w:68%"></i></span><b>68%</b></div>
+              <div class="echo-row"><span>图片</span><span class="track"><i class="fill" style="--w:17%"></i></span><b>17%</b></div>
+              <div class="echo-row"><span>分享</span><span class="track"><i class="fill" style="--w:9%"></i></span><b>9%</b></div>
+              <div class="echo-row"><span>表情</span><span class="track"><i class="fill" style="--w:4%"></i></span><b>4%</b></div>
+              <div class="echo-row"><span>通话 / 语音</span><span class="track"><i class="fill" style="--w:2%"></i></span><b>2%</b></div>
+            </div>
+            <div class="conv-list" data-slot="convs">
+              <div class="conv"><span class="ava" aria-hidden="true"></span><span class="who"><b>好友 · 示例会话</b><small>好友 · 逐条形态可见</small></span><span class="n">— 条</span></div>
+              <div class="conv"><span class="ava g" aria-hidden="true"></span><span class="who"><b>群聊 · 仅汇总</b><small>群名 + 总量 + 本人条数</small></span><span class="n">— 条</span></div>
+            </div>
+          </div>
+          <div class="board words" data-reveal data-slot="words" style="--i:3">
+            <div class="board-head"><span>WORDS</span><small>说出口的，转发出去的</small></div>
+            <p class="sub">CHAT · 聊天里最常出现的词</p>
+            <div class="mini-lines" data-slot="chat-words">
+              <div class="ml"><span>示例词一</span><span class="track"><i class="fill blue" style="--w:100%"></i></span><b>8</b></div>
+              <div class="ml"><span>示例词二</span><span class="track"><i class="fill" style="--w:75%"></i></span><b>6</b></div>
+              <div class="ml"><span>示例词三</span><span class="track"><i class="fill" style="--w:50%"></i></span><b>4</b></div>
+            </div>
+            <div class="cell-foot" data-slot="chat-words-foot">等待聊天读取 · 平台模板不计入</div>
+            <p class="sub">SHARED · 好友分享的视频带着什么话题</p>
+            <div class="mini-lines" data-slot="share-terms">
+              <div class="ml"><span>#示例话题八</span><span class="track"><i class="fill" style="--w:100%"></i></span><b>31</b></div>
+              <div class="ml"><span>#示例话题九</span><span class="track"><i class="fill" style="--w:45%"></i></span><b>14</b></div>
+              <div class="ml"><span>#示例话题十</span><span class="track"><i class="fill" style="--w:39%"></i></span><b>12</b></div>
+            </div>
+            <div class="cell-foot" data-slot="share-terms-foot">等待聊天读取 · 只统计带证据的分享卡</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ( 06 ) 证据 -->
+    <section class="window" data-skystate="3" data-tone="dark" id="w-evidence">
+      <div class="window-copy">
+        <p class="w-eyebrow">( 06 ) · HOW WE KNOW · [ EVIDENCE LEDGER ]</p>
+        <h2 class="w-title">故事的边界，也是<em>故事的一部分</em>。</h2>
+        <p class="w-sub">每个数字，都能翻回它的原始账目。</p>
+      </div>
+    </section>
+
+    <section class="chapter" id="evidence" data-wash="night">
+      <div class="chapter-inner">
+        <div class="ch-head" data-reveal>
+          <div class="meta-line"><b>06</b> HOW WE KNOW</div>
+          <h2>台账与边界。</h2>
+        </div>
+        <div class="cols rev">
+          <div class="board" data-reveal style="--i:1">
+            <div class="ratio">
+              <div class="ratio-track"><i></i></div>
+              <div><strong data-slot="reliable">97%</strong><span>可靠行为时间占比</span></div>
+            </div>
+            <div class="evidence-row"><code>WATCH</code><span>观看历史</span><b data-slot="ev-watch">20 条</b></div>
+            <div class="evidence-row"><code>LIKED</code><span>喜欢列表</span><b data-slot="ev-liked">8 条</b></div>
+            <div class="evidence-row"><code>FAVORITE</code><span>收藏列表</span><b data-slot="ev-favorite">6 条</b></div>
+            <div class="evidence-row"><code>CHAT</code><span>聊天消息</span><b data-slot="ev-chat">— 条</b></div>
+            <div class="evidence-row" data-slot="ev-meta"><code>ARCHIVE</code><span>解析 6 个文件 · 忽略 1 个</span><b>JSON / ZIP</b></div>
+            <div class="caveat" id="caveat"><b>CAVEATS / 当前边界</b><br>1 条记录没有可用行为时间，不参与时间轴；没有稳定作品 ID 的记录仍保留在原清单，但不参与交集计算；采集器警告 1 条，原文附在档案里。</div>
+          </div>
+          <div data-reveal style="--i:2">
+            <p class="lead">这一页只对可采集、可解释的字段负责。没有时间、没有稳定 ID、没有明确来源的内容，会被诚实地标记为边界——而不是被编成漂亮的数字。</p>
+            <p class="note"><b>数据来源：</b>观看、喜欢、收藏三份清单，加上聊天消息、会话目录与归档警告。</p>
+            <div data-slot="fields-block">
+              <p class="sub" style="margin-top:24px;color:var(--ash);font:400 9px var(--mono);letter-spacing:.18em">FIELD COVERAGE · 每个字段有多少条记录填了</p>
+              <div class="mini-lines fields" data-slot="fields">
+                <div class="ml"><span>行为时间</span><span class="track"><i class="fill blue" style="--w:54%"></i></span><small>1,632 / 3,003</small><b>54%</b></div>
+                <div class="ml"><span>作品 ID</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>3,003 / 3,003</small><b>100%</b></div>
+                <div class="ml"><span>话题标签</span><span class="track"><i class="fill" style="--w:88%"></i></span><small>2,647 / 3,003</small><b>88%</b></div>
+                <div class="ml"><span>时长</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>3,002 / 3,003</small><b>100%</b></div>
+                <div class="ml"><span>发布时间</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>3,003 / 3,003</small><b>100%</b></div>
+                <div class="ml"><span>点赞数</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>3,003 / 3,003</small><b>100%</b></div>
+                <div class="ml"><span>已看进度</span><span class="track"><i class="fill" style="--w:100%"></i></span><small>1,593 / 1,593</small><b>100%</b></div>
+              </div>
+            </div>
+            <button class="btn btn-blue" style="margin-top:22px" onclick="document.querySelector('#caveat').classList.toggle('open')">查看数据口径 <span class="cir">›</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ( 07 ) 签名 -->
+    <section class="window" data-skystate="4" data-tone="dark" id="w-signature">
+      <div class="window-copy">
+        <p class="w-eyebrow">( 07 ) · THE SIGNATURE · [ SEAL & COLOPHON ]</p>
+        <h2 class="w-title">当信号聚拢，<em>签下这一年</em>。</h2>
+        <p class="w-sub">所有星点归拢成一枚印。</p>
+      </div>
+    </section>
+
+    <section class="chapter colophon" id="signature" data-wash="ember">
+      <div class="chapter-inner">
+        <div class="ch-head" data-reveal>
+          <div class="meta-line"><b>07</b> YOUR SIGNATURE</div>
+          <h2>一个正在成形的自己。</h2>
+        </div>
+        <div class="signature">
+          <div data-reveal style="--i:1">
+            <div class="signature-name" data-slot="sig-name">午后的<em>收藏者</em></div>
+            <div class="signature-en" data-slot="sig-en">THE AFTERNOON COLLECTOR</div>
+            <p class="lead" style="margin-top:22px" data-slot="sig-lead">这不是人格测试。只是把已经发生的选择，放回它们自己的上下文里，然后签上一个名字。</p>
+            <div class="actions">
+              <button class="btn btn-dark" onclick="window.scrollTo({top:0,behavior:'smooth'})">再读一遍 <span class="cir">↺</span></button>
+              <button class="btn btn-blue" onclick="document.querySelector('#evidence').scrollIntoView({behavior:'smooth'})">回到数据口径</button>
+            </div>
+          </div>
+          <div class="seal" data-reveal style="--i:2">
+            <svg viewBox="0 0 240 240" fill="none" aria-hidden="true">
+              <circle cx="120" cy="120" r="96" stroke="#dee2de" stroke-width="1"/>
+              <circle cx="120" cy="120" r="78" stroke="#41a1cf" stroke-width="1" stroke-dasharray="1 7" stroke-linecap="round"/>
+              <circle cx="120" cy="120" r="44" stroke="#2c2c2c" stroke-width="1"/>
+              <text x="120" y="113" text-anchor="middle" font-family="Fraunces, Georgia, serif" font-size="17" fill="#171717">TRACE</text>
+              <text x="120" y="134" text-anchor="middle" font-family="ui-monospace, monospace" font-size="8" letter-spacing="3" fill="#646464" data-slot="seal-year">2025</text>
+            </svg>
+            <small data-slot="seal-note">SEALED · PARTIAL SAMPLE · LOCAL</small>
+          </div>
+        </div>
+        <div class="colophon-foot">
+          <span data-slot="colophon">内容年志 · 交互设计稿 · 数字为演示快照，不构成第二份事实源 · 口径以采集器为准</span>
+          <a href="story-entry.html">回到入口卡 ↗</a><button id="privacy">隐藏封面与名称 ◐</button><button onclick="window.scrollTo({top:0,behavior:'smooth'})">回到卷首 ↑</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (s, el) => (el || document).querySelector(s);
+    const $$ = (s, el) => [...(el || document).querySelectorAll(s)];
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    /* ---------- hero sky: the painting follows the local hour; ?sky=0-4 or the ◐ button overrides it ---------- */
+    const SKIES = ["s0-dawn", "s1-morning", "s2-dusk", "s3-night", "s4-ember"];
+    const SKY_NAMES = ["金晨", "晨白", "紫暮", "墨夜", "余烬"];
+    const hour = new Date().getHours();
+    const forced = /[?&]sky=([0-4])(?!\d)/.exec(location.search);
+    let heroSky = forced ? +forced[1] : hour < 5 ? 3 : hour < 8 ? 0 : hour < 17 ? 1 : hour < 19 ? 2 : hour < 21 ? 4 : 3;
+    const clockEl = $("#clock");
+    const tickClock = () => { const d = new Date(); clockEl.textContent = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")} · ${SKY_NAMES[heroSky]}`; };
+    const applySky = () => {
+      $(".sky-state.s0").style.backgroundImage = `url("story-images/sky-${SKIES[heroSky]}.jpg")`;
+      $(".sky-state.s0").classList.toggle("dim", heroSky === 1); // the morning painting is dimmed through #dimcurve; text stays cream like the other four
+      tickClock();
+    };
+    applySky(); setInterval(tickClock, 30000);
+
+    /* ---------- scroll engine: sky grade + parallax ---------- */
+    const windows = $$(".window");
+    const states = $$(".sky-state");
+    let anchors = [], ranges = [];
+    const measure = () => {
+      anchors = windows.map((w) => ({ y: w.offsetTop + w.offsetHeight / 2, state: +w.dataset.skystate }));
+      ranges = $$("main > section").map((s) => ({ top: s.offsetTop, light: s.classList.contains("chapter") || s.dataset.tone === "light" }));
+    };
+    const toneAt = (y) => { let light = false; for (const r of ranges) { if (y >= r.top) light = r.light; else break; } return light; };
+    const ease = (t) => t * t * (3 - 2 * t);
+    const lerp = (a, b, t) => a + (b - a) * t;
+
+    let ticking = false;
+    function frame() {
+      ticking = false;
+      const mid = scrollY + innerHeight / 2;
+      let k = 0;
+      while (k < anchors.length - 1 && mid > anchors[k + 1].y) k++;
+      const a = anchors[k], b = anchors[Math.min(k + 1, anchors.length - 1)];
+      const span = Math.max(1, b.y - a.y);
+      const t = ease(Math.max(0, Math.min(1, (mid - a.y) / span)));
+
+      // sky cross-fade
+      const sv = lerp(a.state, b.state, t);
+      states.forEach((el, i) => { el.style.opacity = Math.max(0, 1 - Math.abs(sv - i)).toFixed(3); });
+
+      // tone: nav follows what's under the bar, the rail follows the viewport middle
+      document.body.classList.toggle("nav-light", toneAt(scrollY + 46));
+      document.body.classList.toggle("over-light", toneAt(mid));
+
+      // sky parallax (clamped so `cover` never shows an edge)
+      $("#sky").style.setProperty("--shift", `${Math.max(-70, -scrollY * 0.03).toFixed(1)}px`);
+      roll();
+    }
+    addEventListener("scroll", () => { if (!ticking) { ticking = true; requestAnimationFrame(frame); } }, { passive: true });
+    addEventListener("resize", () => { measure(); frame(); });
+    measure(); frame();
+
+    /* ---------- one chapter = one screen: the sheet scales down when it would overflow the page ---------- */
+    const sheets = $$(".chapter-inner");
+    const fit = (el) => {
+      const cs = getComputedStyle(el.parentElement);
+      const room = el.parentElement.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      el.style.setProperty("--fit", Math.min(1, room / el.offsetHeight).toFixed(3));
+    };
+    const sheetRo = new ResizeObserver((entries) => entries.forEach((e) => fit(e.target)));
+    sheets.forEach((el) => sheetRo.observe(el));
+    addEventListener("resize", () => sheets.forEach(fit));
+
+    /* ---------- reveals + count-ups + section triggers ---------- */
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((en) => {
+        if (!en.isIntersecting) return;
+        en.target.classList.add("in");
+        $$("[data-count]", en.target).forEach(countUp);
+        if (en.target.hasAttribute("data-count")) countUp(en.target);
+        io.unobserve(en.target);
+      });
+    }, { threshold: 0.25 });
+    $$("[data-reveal], .window, .board").forEach((el) => io.observe(el));
+
+    function countUp(el) {
+      if (el.dataset.done) return;
+      el.dataset.done = 1;
+      const end = +el.dataset.count;
+      const keep = $("small", el);
+      if (reduced || !end) { el.childNodes[0].textContent = end; return; }
+      const t0 = performance.now();
+      (function tick(now) {
+        const p = Math.min(1, (now - t0) / 1100);
+        el.childNodes[0].textContent = Math.round(end * ease(p));
+        if (p < 1) requestAnimationFrame(tick);
+      })(t0);
+    }
+
+    /* rail active state */
+    const chapters = $$(".chapter[id]");
+    const railBtns = $$(".rail button");
+    railBtns.forEach((b) => b.addEventListener("click", () => $("#" + b.dataset.target).scrollIntoView({ behavior: "smooth" })));
+    const chIo = new IntersectionObserver((entries) => {
+      const vis = entries.filter((e) => e.isIntersecting).sort((x, y) => y.intersectionRatio - x.intersectionRatio)[0];
+      if (!vis) return;
+      railBtns.forEach((b) => b.classList.toggle("active", b.dataset.target === vis.target.id));
+    }, { threshold: [0.2, 0.5] });
+    chapters.forEach((c) => chIo.observe(c));
+
+    /* ---------- 24h dots ---------- */
+    $("#hourDots").innerHTML = Array.from({ length: 24 }, (_, i) => {
+      const w = .25 + ((i * 17) % 70) / 100;
+      const hot = (i >= 14 && i <= 16) || i >= 21 ? " class=hot" : "";
+      return `<i${hot} style="--o:${w.toFixed(2)};--s:${(0.6 + w * .55).toFixed(2)};--d:${i}"></i>`;
+    }).join("");
+
+    /* ---------- ◐ in the nav: step through the five paintings by hand ---------- */
+    $("#skyBtn").addEventListener("click", () => { heroSky = (heroSky + 1) % 5; applySky(); });
+
+    /* ---------- privacy (colophon foot) ---------- */
+
+    $("#privacy").addEventListener("click", (e) => {
+      const on = document.body.classList.toggle("privacy-on");
+      e.currentTarget.textContent = on ? "显示封面与名称 ◑" : "隐藏封面与名称 ◐";
+      $$(".card p, .rc p, .conv .who b").forEach((el) => {
+        if (on) { el.dataset.orig = el.textContent; el.textContent = "HIDDEN / 已隐藏"; }
+        else if (el.dataset.orig) el.textContent = el.dataset.orig;
+      });
+    });
+
+    // the painted gradient stays underneath, so a cover that fails to load never leaves a white hole
+    const cover = (el, url) => { if (!el || !url) return; const prev = getComputedStyle(el).backgroundImage; el.classList.add("real"); el.style.backgroundImage = `url("${String(url).replace(/"/g, "%22")}")${prev && prev !== "none" ? `, ${prev}` : ""}`; el.style.backgroundSize = "cover"; el.style.backgroundPosition = "center"; };
+    const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
+
+    /* ---------- 04 · roll: one sticky screen; every scrolled pixel slides the roll ROLL_SPEED pixels left.
+       Each panel is set like the reference screen: one headline across the width — two tags in a line, the way "District Eindhoven"
+       is two of the site's words — and a row of [standing word · cover · caption · standing word] filling the rest. The headline
+       alternates top / bottom from panel to panel, as the video does; the closing panel puts the tally under the first pair. ---------- */
+    const rollSec = $("#roll"), rollStrip = $("#rollStrip"), rollBar = $("#rollBar");
+    const ROLL_SPEED = 1.5;
+    var rollW = 0, rollPanels = [], rollItems = []; // var: frame() already ran once above, so roll() must see these as undefined, not TDZ
+    const rollCanvas = document.createElement("canvas").getContext("2d");
+    const emWidth = (text) => { rollCanvas.font = `300 100px ${getComputedStyle(document.documentElement).getPropertyValue("--serif")}`; return rollCanvas.measureText(text).width / 100; };
+    function buildRoll(words, cards, total) {
+      const N = Math.max(1, words.length);
+      const word = (i) => words[i % N] || { name: "暂无显式话题", count: 0 };
+      // standing words are set upright, so prefer a tag without Latin letters (stacked upright letters read badly)
+      const stand = (i) => { for (let j = 0; j < N; j++) { const w = words[(i + j) % N]; if (w && /^[#一-鿿]+$/.test(w.name)) return w; } return word(i); };
+      const glyphs = (mask, text, d) => Array.from(text).forEach((ch) => { const c = el("span", "ch", ch === " " ? " " : ch); c.style.setProperty("--d", d.n++); mask.append(c); }); // a lone space in an inline-block collapses
+      const headline = (i) => {
+        const node = el("div", "rw"), d = { n: 0 }, ws = N > 1 ? [word(i), word(i + 1)] : [word(i)];
+        ws.forEach((w, j) => { const mask = el("span", "mask"); glyphs(mask, (j ? " " : "") + w.name, d); node.append(mask); if (w.count) node.append(el("small", w === words[0] ? "first" : "", `${w.count} 次`)); });
+        node.dataset.em = emWidth(ws.map((w) => w.name).join(" ")).toFixed(3);
+        rollStrip.append(node);
+        return node;
+      };
+      const vertical = (w) => { const node = el("div", "rv", w.name); rollStrip.append(node); return node; };
+      rollStrip.textContent = "";
+      rollPanels = [];
+      for (let k = 0; k < Math.max(3, cards.length); k++) {
+        const p = { h: headline(2 * k), vl: vertical(stand(2 * k + 2)), c: null, vr: vertical(stand(2 * k + 3)), flip: k % 2 === 1 };
+        const c = cards[k];
+        if (c) {
+          const a = el("a", "rc");
+          if (c.url) { a.href = c.url; a.target = "_blank"; a.rel = "noopener"; } else { a.href = "#"; a.addEventListener("click", (e) => e.preventDefault()); }
+          const cv = el("span", `card-cover c${k % 4 + 1}`); cv.append(el("b", "", String(k + 1).padStart(2, "0"))); cover(cv, c.coverUrl);
+          const h4 = el("h4"); // a #tag inside a caption never breaks across lines
+          (c.title || "未命名内容").split(/(#\S+)/).forEach((part) => { if (!part) return; if (part.startsWith("#")) { const sp = el("span", "", part); sp.style.whiteSpace = "nowrap"; h4.append(sp); } else h4.append(part); });
+          const body = el("div", "rc-body"); body.append(h4, el("p", "", c.author || "未知创作者"), el("span", "open", c.url ? "查看 ↗" : "无链接"));
+          a.append(cv, body); rollStrip.append(a); p.c = a;
+        }
+        rollPanels.push(p);
+      }
+      const end = el("div", "rend"), ml = el("div", "meta-line"); ml.append(el("b", "", "END"), " OF ROLL");
+      end.append(ml, el("strong", "", words.length ? `${words.length} 个高频词条 · 共出现 ${total.toLocaleString("zh-CN")} 次` : "这一年的记录里没有显式话题标签"), el("small", "", "封面来自原视频 · 点击打开抖音 · 继续向下，进入下一章"));
+      rollStrip.append(end);
+      rollPanels.push({ h: headline(0), end, flip: false });
+      rollItems = [...rollStrip.children].map((node) => ({ node, x: 0 }));
+      rollLayout();
+    }
+    function rollLayout() {
+      if (!rollPanels.length) return;
+      const W = innerWidth, vw = W / 100, H = rollStrip.parentElement.clientHeight, rowH = H * .62;
+      rollStrip.style.setProperty("--bh", `${H}px`);
+      // sizes first: the headline fills 84vw, capped at 32% of the body; standing words fill the row height, capped the same way
+      $$(".rw", rollStrip).forEach((n) => { n.style.fontSize = `${Math.min(H * .32, W * .84 / +n.dataset.em).toFixed(1)}px`; });
+      $$(".rv", rollStrip).forEach((n) => { n.style.fontSize = "100px"; n.style.fontSize = `${Math.min(H * .32, rowH / (n.offsetHeight / 100)).toFixed(1)}px`; });
+      // then one panel after another: headline at 4vw, the row spread evenly under (or over) it across the headline's width
+      let x = 0, origin = 0;
+      for (const p of rollPanels) {
+        origin = x;
+        const hw = p.h.offsetWidth, span = hw + 2 * vw, rowY = p.flip ? 0 : H - rowH;
+        p.h.style.left = `${x + 4 * vw}px`;
+        p.h.style.top = p.flip ? `${H - p.h.offsetHeight - .08 * parseFloat(p.h.style.fontSize)}px` : "0px"; // the mask pads .08em below the line
+        if (p.end) { p.end.style.left = `${x + 4 * vw}px`; p.end.style.top = `${H - p.end.offsetHeight}px`; }
+        else {
+          const items = [p.vl, p.c, p.vr].filter(Boolean), total = items.reduce((s, n) => s + n.offsetWidth, 0);
+          const gap = Math.max(3 * vw, (span - total) / (items.length - 1));
+          let ix = x + 2 * vw;
+          for (const n of items) { n.style.left = `${ix}px`; n.style.top = `${rowY}px`; ix += n.offsetWidth + gap; }
+        }
+        x += 4 * vw + hw + 8 * vw;
+      }
+      rollW = Math.max(origin + W, W * 1.5); // the last screen is the closing panel
+      rollStrip.style.width = `${rollW}px`;
+      rollSec.style.height = `${Math.round((rollW - W) / ROLL_SPEED + innerHeight)}px`;
+      rollItems.forEach((it) => { it.x = it.node.offsetLeft; });
+      measure(); frame();
+    }
+    function roll() {
+      if (!rollW) return;
+      const W = innerWidth, top = rollSec.offsetTop, len = Math.max(1, rollSec.offsetHeight - innerHeight);
+      const p = Math.max(0, Math.min(1, (scrollY - top) / len));
+      const x = p * (rollW - W);
+      rollStrip.style.transform = `translate3d(${(-x).toFixed(1)}px,0,0)`;
+      rollBar.style.setProperty("--w", `${(p * 100).toFixed(1)}%`);
+      // entrances play once the page is on screen; whatever is still off to the right (or everything, once the page is left) is re-armed and replays
+      const onStage = scrollY + innerHeight > top + innerHeight * .4 && scrollY < top + rollSec.offsetHeight;
+      for (const it of rollItems) {
+        const left = it.x - x;
+        if (!onStage || left > W) it.node.classList.remove("in");
+        else if (left < W * .92) it.node.classList.add("in");
+      }
+    }
+    addEventListener("resize", rollLayout);
+    document.fonts.ready.then(rollLayout); // words are measured in the display font
+    buildRoll(
+      [["#城市散步", 5], ["#手作", 4], ["#家常菜", 3], ["#摄影", 3], ["#植物", 1]].map(([name, count]) => ({ name, count })),
+      [["#城市散步 年末灯火", "示例创作者甲"], ["修补一只旧包 #手作", "示例创作者乙"], ["#家常菜 热气腾腾", "示例创作者丙"], ["秋天的配色 #摄影", "示例创作者甲"]].map(([title, author]) => ({ title, author })),
+      16);
+
+    /* ---------- real data: the app writes one JSON snapshot (localStorage "content-insights.story") before opening this page; without it the demo numbers stay ---------- */
+    (() => {
+      let d = null;
+      try { d = JSON.parse(localStorage.getItem("content-insights.story") || "null"); } catch {}
+      if (!d || d.version !== 1) return;
+      document.documentElement.classList.add("live-data");
+      const S = (name, root) => (root || document).querySelector(`[data-slot="${name}"]`);
+      const txt = (name, value) => { const el = S(name); if (el) el.textContent = value; };
+      const num = (v) => (+v || 0).toLocaleString("zh-CN");
+      const pct = (v) => v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`;
+      const cnt = (name, v) => { const el = S(name); if (!el) return; if (v === null || v === undefined) { delete el.dataset.count; el.childNodes[0].textContent = "—"; return; } el.dataset.count = v; el.childNodes[0].textContent = "0"; };
+      const bar = (row, share, label) => { const fill = row.querySelector(".fill"); if (fill) fill.style.setProperty("--w", `${Math.round(Math.max(0, Math.min(1, share || 0)) * 100)}%`); const b = row.querySelector("b"); if (b && label !== undefined) b.textContent = label; };
+      const clock = (secs) => secs >= 3600 ? `${Math.floor(secs / 3600)} 时 ${Math.round(secs % 3600 / 60)} 分` : secs >= 60 ? `${Math.round(secs / 60)} 分钟` : `${Math.round(secs)} 秒`;
+      const noChatFoot = (counts) => (counts.chat === null ? "备用文件不含聊天" : "当前环境不支持分词");
+      const cn = (year) => String(year).replace(/\d/g, (c) => "〇一二三四五六七八九"[+c]);
+      const c = d.counts;
+      const streams = c.chat === null ? 3 : 4;
+      const sourceLabel = d.source.kind === "archive" ? "备用文件导入" : "本地采集器";
+      const stamp = d.source.updatedAt ? new Date(d.source.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : null;
+
+      /* nav + hero */
+      txt("nav-mode", "本地快照");
+      txt("hero-year", cn(d.year));
+      txt("hero-unique", `${num(d.unique)} 个独立内容`);
+      txt("hero-days", `${num(d.activeDays)} 个活跃日`);
+      txt("hero-streams", `${streams} 条数据流`);
+
+      /* 01 sample */
+      txt("streams-n", streams);
+      cnt("unique", d.unique);
+      cnt("days", d.activeDays);
+      if (c.chat === null) { cnt("chat-n", null); txt("chat-label", "聊天消息 · 备用文件不含聊天"); } else { cnt("chat-n", c.chat); txt("chat-label", "聊天消息 · 一次性读取"); }
+      txt("range", d.range ? `${d.range[0]} → ${d.range[1]}` : "暂无可靠行为时间");
+      txt("source", `本地快照 · ${sourceLabel}${stamp ? ` · ${stamp}` : ""}`);
+      txt("events", `${num(c.events)} video events`);
+      const maxStream = Math.max(1, c.watch, c.liked, c.favorite, c.chat || 0);
+      [["stream-watch", c.watch], ["stream-liked", c.liked], ["stream-favorite", c.favorite], ["stream-chat", c.chat]].forEach(([name, v]) => {
+        const row = S(name); if (!row) return;
+        bar(row, v === null ? 0 : v / maxStream);
+        const b = row.querySelector(".stream-count");
+        if (v === null) { delete b.dataset.count; b.textContent = "—"; } else { b.dataset.count = v; b.textContent = "0"; }
+      });
+
+      /* 01 · 每条流最常出现的词条，以及它们有多集中 */
+      const LX = d.lexicon;
+      const hide = (name) => { const box = S(name); if (box) box.style.display = "none"; };
+      if (!LX) { hide("conc-block"); $$(".stream-terms").forEach((box) => { box.style.display = "none"; }); }
+      else {
+        const noChat = c.chat === null ? "备用文件不含聊天" : "当前环境不支持分词";
+        const terms = (slot, field, tag) => {
+          const box = S(slot); if (!box) return;
+          box.textContent = "";
+          if (!field) { box.append(el("small", "", noChat)); return; }
+          if (!field.sampled) { box.append(el("small", "", tag ? "记录里没有话题标签" : "没有可统计的词")); return; }
+          field.top.slice(0, 3).forEach((t) => box.append(el("i", "", tag ? `#${t.name}` : t.name)));
+          box.append(el("small", "", `${num(field.distinct)} 个不同${tag ? "话题" : "词"} · 前 12 个覆盖 ${pct(field.coverage)}${field.halfAt ? ` · 覆盖一半要 ${num(field.halfAt)} 个` : ""}`));
+        };
+        terms("terms-watch", LX.watch, true);
+        terms("terms-liked", LX.liked, true);
+        terms("terms-favorite", LX.favorite, true);
+        terms("terms-chat", LX.chat, false);
+        const conc = [LX.watch, LX.liked, LX.favorite, LX.chat];
+        const halfMax = Math.max(1, ...conc.map((f) => (f && f.halfAt) || 0));
+        $$(".ml", S("concentration")).forEach((row, i) => { const f = conc[i]; bar(row, f && f.halfAt ? f.halfAt / halfMax : 0, f && f.halfAt ? `${num(f.halfAt)} 个` : "—"); });
+        const hw = LX.watch.halfAt, hl = LX.liked.halfAt;
+        txt("concentration-note", hw && hl
+          ? `覆盖一半的喜欢要 ${num(hl)} 个词条，看过只要 ${num(hw)} 个——${hl > hw * 1.2 ? "留下的比看过的更分散" : hw > hl * 1.2 ? "留下的比看过的更集中" : "两边差不多"}。`
+          : "记录里的话题标签还不够画出集中度。");
+      }
+
+      /* 02 time */
+      txt("months-label", `${d.year} · 12 months`);
+      const mMax = Math.max(1, ...d.months);
+      const peaks = d.months.map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]).slice(0, 2).filter(([v]) => v > 0).map(([, i]) => i);
+      $$(".month-bars .month").forEach((m, i) => { const v = d.months[i] || 0; m.querySelector("i").style.setProperty("--h", `${v ? Math.max(4, Math.round(v / mMax * 100)) : 0}%`); m.classList.toggle("peak", peaks.includes(i)); });
+      const hMax = Math.max(1, ...d.hours);
+      $("#hourDots").innerHTML = d.hours.map((v, i) => { const r = v / hMax; return `<i${r >= .7 ? " class=hot" : ""} style="--o:${(v ? .25 + .75 * r : .12).toFixed(2)};--s:${(v ? .6 + .6 * r : .45).toFixed(2)};--d:${i}"></i>`; }).join("");
+      txt("peak-hour", d.peakHour === null ? "—" : `${String(d.peakHour).padStart(2, "0")}:00`);
+      txt("peak-day", d.peakDay || "—");
+      txt("ts-platform", `${num(d.timeSources.platform_action)} 条`);
+      txt("ts-archive", `${num(d.timeSources.archive_action)} 条`);
+      txt("ts-unknown", `${num(d.timeSources.unknown)} 条`);
+
+      /* 03 kept */
+      cnt("all-three", d.intersection.allThree);
+      txt("x-wl", num(d.intersection.watchLiked));
+      txt("x-wf", num(d.intersection.watchFavorite));
+      txt("x-lf", num(d.intersection.likedFavorite));
+      txt("p-done", pct(d.progress && d.progress.done));
+      txt("p-mid", pct(d.progress && d.progress.mid));
+      txt("p-shallow", pct(d.progress && d.progress.shallow));
+      cnt("k-watch", c.watch); cnt("k-liked", c.liked); cnt("k-fav", c.favorite);
+      txt("k-share", d.unique && d.intersection.allThree ? ` · 占独立内容 ${(d.intersection.allThree / d.unique * 100).toFixed(1)}%` : "");
+      txt("k-noid", `${num(d.caveats ? d.caveats.noVideoId : 0)} 条`);
+      const bands = d.progress || {};
+      $$("#depthBar i").forEach((seg) => seg.style.setProperty("--w", `${Math.round((bands[seg.dataset.k] || 0) * 100)}%`));
+      if (!d.recent.length) $(".recent").style.display = "none";
+      $$(".recent .card").forEach((card, i) => {
+        const item = d.recent[i];
+        if (!item) { card.style.display = "none"; return; }
+        card.querySelector("h4").textContent = item.title || "未命名内容";
+        card.querySelector(".card-body p").textContent = item.author || "未知创作者";
+        const kind = card.querySelector(".card-kind"); if (kind) kind.textContent = { liked: "喜欢", favorite: "收藏", watch: "看过" }[item.kind] || "看过";
+        cover(card.querySelector(".card-cover"), item.coverUrl);
+        if (item.url) { card.href = item.url; card.target = "_blank"; card.rel = "noopener"; card.removeAttribute("onclick"); }
+        else card.querySelector(".open").textContent = "无链接";
+      });
+
+      /* 04 mix */
+      if (d.topTopic) { txt("topic-name", `#${d.topTopic.name}`); txt("topic-meta", `${num(d.topTopic.count)} 条 · ${pct(d.topTopic.share)} · 年度最常出现的话题`); }
+      else { txt("topic-name", "—"); txt("topic-meta", "记录里没有显式话题标签"); }
+      // ranked rows rebuilt from data (variable length): label · bar relative to the first row · count
+      const rankLines = (name, items, label) => { const box = S(name); if (!box) return; box.innerHTML = ""; box.style.display = items.length ? "" : "none"; const max = Math.max(1, ...items.map((it) => it.count)); items.forEach((it) => { const row = el("div", "ml"); const track = el("span", "track"); const fill = el("i", "fill"); fill.style.setProperty("--w", `${Math.round(it.count / max * 100)}%`); track.append(fill); row.append(el("span", "", label(it)), track, el("b", "", num(it.count))); box.append(row); }); };
+      rankLines("tags", d.topics.slice(1, 5), (t) => `#${t.name}`);
+      txt("topic-foot", d.topicsCount ? `共 ${num(d.topicsCount)} 个显式话题 · 按出现次数` : "记录里没有显式话题");
+      if (d.topCreator) { txt("creator-name", d.topCreator.name); txt("creator-meta", `${num(d.topCreator.unique)} 个独立内容 · 出现最多的创作者`); cover(S("creator-avatar"), d.topCreator.avatarUrl); }
+      else { txt("creator-name", "—"); txt("creator-meta", "记录里没有创作者字段"); }
+      const creators = d.creators || [];
+      rankLines("creators", creators.slice(1, 5), (c) => c.name);
+      txt("creator-foot", creators.length ? `共 ${num(d.creatorsCount)} 位创作者 · 前三位占 ${pct(creators.slice(0, 3).reduce((sum, c) => sum + c.share, 0))}` : "记录里没有创作者字段");
+      const lines = (name, items) => $$(".ml", S(name)).forEach((row, i) => { const it = items && items[i]; bar(row, it ? it.share : 0, it ? pct(it.share) : "—"); });
+      lines("media", d.media);
+      lines("duration", d.durations);
+      const L = d.length || {};
+      txt("len-median", typeof L.medianDuration === "number" ? clock(L.medianDuration) : "—");
+      txt("len-watched", L.seconds ? clock(L.seconds) : "—");
+      txt("len-longest", L.longest ? `最长的一条 · ${clock(L.longest.seconds)} · ${L.longest.title}` : "记录里没有时长字段");
+      const musics = S("musics");
+      if (musics) {
+        musics.innerHTML = "";
+        const list = d.musics && d.musics.length ? d.musics : d.music ? [d.music] : [];
+        if (!list.length) musics.append(el("div", "music-row", "暂无重复出现的音乐"));
+        txt("music-foot", d.musicsCount ? `共 ${num(d.musicsCount)} 首不同的音乐 · 只列出现两次以上的` : "记录里没有音乐字段");
+        list.forEach((m) => { const row = el("div", "music-row"); const eq = el("span", "eq"); for (let i = 0; i < 4; i++) eq.append(el("i")); const t = el("span", "mt"); t.append(el("b", "", `《${m.title}》`), ` — ${m.author || "未知音乐人"}`); row.append(eq, t, el("small", "", `${num(m.count)} 次`)); musics.append(row); });
+      }
+      const big = (n) => n >= 1e8 ? `${(n / 1e8).toFixed(1).replace(/\.0$/, "")} 亿` : n >= 1e4 ? `${(n / 1e4).toFixed(n < 1e5 ? 1 : 0).replace(/\.0$/, "")} 万` : num(n);
+      if (d.heat) { txt("heat-median", big(d.heat.median)); txt("heat-meta", `${num(d.heat.sampled)} 条内容的点赞数中位 · 热度只是内容的快照`); txt("heat-hot-title", d.heat.hottest.title); txt("heat-hot", big(d.heat.hottest.count)); txt("heat-cold-title", d.heat.quietest.title); txt("heat-cold", big(d.heat.quietest.count)); }
+      else { txt("heat-median", "—"); txt("heat-meta", "记录里没有点赞数 · 热度只是内容的快照"); $(".heat-rows").style.display = "none"; }
+      if (d.age) { txt("age-median", `${num(d.age.medianDays)} 天`); txt("age-meta", `遇到它时，它已发布多久 · ${num(d.age.sampled)} 条的中位`); $$("i", S("age-bar")).forEach((seg, i) => seg.style.setProperty("--w", `${Math.round((d.age.bands[i] ? d.age.bands[i].share : 0) * 100)}%`)); $$("b", S("age-legend")).forEach((b, i) => { b.textContent = pct(d.age.bands[i] ? d.age.bands[i].share : 0); }); }
+      else { txt("age-median", "—"); txt("age-meta", "记录里没有发布时间"); S("age-bar").style.display = "none"; S("age-legend").style.display = "none"; }
+      buildRoll(d.topics.map((t) => ({ name: `#${t.name}`, count: t.count })), d.recent, d.topics.reduce((sum, t) => sum + t.count, 0));
+
+      /* 05 echo */
+      const ch = d.chat;
+      txt("chat-friend", ch ? num(ch.friendMessages) : "—");
+      txt("chat-friend-label", ch ? "好友消息 · 逐条形态" : "好友消息 · 备用文件不含聊天");
+      txt("chat-call", ch && ch.callSeconds > 0 ? clock(ch.callSeconds) : "—");
+      txt("chat-convs", ch ? num(ch.conversations) : "—");
+      txt("chat-head", ch ? `ONE-TIME READ · ${num(ch.friendMessages)} MSGS` : "WAITING FOR CHAT");
+      const share = S("share");
+      if (share) {
+        if (ch && ch.share) {
+          share.querySelector(".st b").textContent = `分享卡：《${ch.share.title || "未命名分享"}》`;
+          share.querySelector(".st span").textContent = ch.share.author ? `作者 ${ch.share.author} · 好友转发` : "好友转发的视频";
+          cover(share.querySelector(".sc"), ch.share.coverUrl);
+        } else share.style.display = "none";
+      }
+      $$(".echo-row", S("echo")).forEach((row, i) => { const f = ch && ch.forms[i]; bar(row, f ? f.share : 0, f ? pct(f.share) : "—"); });
+      const convs = S("convs");
+      if (convs) {
+        convs.textContent = "";
+        const list = ch ? ch.top : [];
+        const conv = ({ kind, name, avatarUrl, small, n }) => { const row = el("div", "conv"); const ava = el("span", `ava${kind === "group" ? " g" : ""}`); ava.setAttribute("aria-hidden", "true"); cover(ava, avatarUrl); const who = el("span", "who"); who.append(el("b", "", name), el("small", "", small)); row.append(ava, who, el("span", "n", n)); return row; };
+        if (!list.length) convs.append(conv({ kind: "friend", name: ch ? "暂无会话样本" : "好友 · 待采集", small: ch ? "本轮读取没有会话" : "备用文件不含聊天", n: "— 条" }));
+        list.forEach((cv) => convs.append(conv({ kind: cv.kind, name: cv.name, avatarUrl: cv.avatarUrl, small: cv.kind === "group" ? `群聊 · 仅汇总 · 本人 ${num(cv.ownMessageCount)} 条` : "好友 · 逐条形态可见", n: `${num(cv.messageCount)} 条` })));
+      }
+
+      /* 05 · 说出口的词，转发出去的话题 */
+      if (!LX) hide("words");
+      else {
+        rankLines("chat-words", LX.chat ? LX.chat.top.slice(0, 6) : [], (t) => t.name);
+        rankLines("share-terms", LX.shared ? LX.shared.top.slice(0, 6) : [], (t) => `#${t.name}`);
+        txt("chat-words-foot", LX.chat
+          ? `${num(LX.chat.total)} 条文字消息${LX.chat.excluded ? ` · 去掉 ${num(LX.chat.excluded)} 条平台模板` : ""} · 前 12 个词覆盖 ${pct(LX.chat.coverage)}`
+          : noChatFoot(c));
+        txt("share-terms-foot", LX.shared
+          ? `${num(LX.shared.total)} 张分享卡 · ${num(LX.shared.sampled)} 张带话题 · 前 12 个覆盖 ${pct(LX.shared.coverage)}`
+          : "备用文件不含聊天");
+        const ct = LX.contrast;
+        if (!ct || (!ct.sharedOnly.length && !ct.likedOnly.length)) hide("contrast");
+        else {
+          const chips = (slot, label, list) => { const box = S(slot); if (!box) return; box.textContent = label; if (!list.length) box.append(el("i", "", "—")); else list.forEach((name) => box.append(el("i", "", `#${name}`))); };
+          chips("contrast-shared", "只在分享里 ", ct.sharedOnly);
+          chips("contrast-liked", "只在喜欢里 ", ct.likedOnly);
+        }
+      }
+
+      /* 06 evidence */
+      txt("reliable", pct(d.reliableRatio));
+      const track = $(".ratio-track i"); if (track) track.style.setProperty("--w", `${Math.round(d.reliableRatio * 100)}%`);
+      txt("ev-watch", `${num(c.watch)} 条`);
+      txt("ev-liked", `${num(c.liked)} 条`);
+      txt("ev-favorite", `${num(c.favorite)} 条`);
+      txt("ev-chat", c.chat === null ? "— 条" : `${num(c.chat)} 条`);
+      const meta = S("ev-meta");
+      if (meta) {
+        const [code, span, b] = meta.children;
+        if (d.source.kind === "archive") { code.textContent = "ARCHIVE"; span.textContent = `解析 ${d.source.parsedFileCount ?? "—"} 个文件 · 忽略 ${d.source.ignoredFileCount ?? "—"} 个`; b.textContent = "JSON / ZIP"; }
+        else { code.textContent = "COLLECTOR"; span.textContent = `本地采集器${stamp ? ` · 更新于 ${stamp}` : ""}`; b.textContent = d.status === "partial" ? "partial" : "live"; }
+      }
+      const fieldRows = S("fields");
+      if (!d.fields || !d.fields.length) hide("fields-block");
+      else if (fieldRows) {
+        fieldRows.textContent = "";
+        d.fields.forEach((f, i) => {
+          const row = el("div", "ml"), track = el("span", "track"), fill = el("i", i ? "fill" : "fill blue");
+          fill.style.setProperty("--w", `${Math.round(Math.max(0, Math.min(1, f.share || 0)) * 100)}%`);
+          track.append(fill);
+          row.append(el("span", "", f.label), track, el("small", "", `${num(f.count)} / ${num(f.base)}`), el("b", "", pct(f.share)));
+          fieldRows.append(row);
+        });
+      }
+      const caveat = $("#caveat");
+      if (caveat) { caveat.textContent = ""; caveat.append(el("b", "", "CAVEATS / 当前边界"), el("br"), `${num(d.caveats.noTime)} 条记录没有可用行为时间，不参与时间轴；${num(d.caveats.noVideoId)} 条没有稳定作品 ID 的记录仍保留在原清单，但不参与交集计算；${d.caveats.warnings ? `采集器警告 ${num(d.caveats.warnings)} 条，原文见工作台。` : "没有采集器警告。"}${LX && LX.chat && LX.chat.excluded ? `聊天高频词剔除了 ${num(LX.chat.excluded)} 条平台模板（同一文案出现在三个以上会话）；群聊正文不参与。` : ""}`); }
+
+      /* 07 signature */
+      const sig = S("sig-name");
+      if (sig) { const t = d.profile.title || "正在成形的自己"; const k = t.lastIndexOf("的"); sig.textContent = ""; if (k > 0 && k < t.length - 1) sig.append(t.slice(0, k + 1), el("em", "", t.slice(k + 1))); else sig.append(t); }
+      txt("sig-en", d.profile.english || "TRACE · SIGNATURE");
+      if (d.profile.reason) txt("sig-lead", d.profile.reason);
+      txt("seal-year", d.year);
+      txt("seal-note", d.status === "partial" ? "SEALED · PARTIAL SAMPLE · LOCAL" : "SEALED · LOCAL SAMPLE");
+      txt("colophon", `内容年志 · 数字来自本地快照（${sourceLabel}${stamp ? ` · ${stamp}` : ""}）· 不构成第二份事实源 · 口径以采集器为准`);
+    })();
+
+    /* ---------- arrival from the entry card ---------- */
+    if (document.documentElement.classList.contains("from-card")) {
+      try { history.replaceState(null, "", location.pathname); } catch {}
+      requestAnimationFrame(() => requestAnimationFrame(() => document.documentElement.classList.add("arrived")));
+    }
+  </script>
+</body>
+</html>

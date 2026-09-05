@@ -37,6 +37,7 @@ import {
   type ChatConversationKind,
   type ChatConversationSummary,
   type ChatMessage,
+  hasChatShareEvidence,
 } from "../../domain/chatRecords";
 import { workspaceColors as color, workspaceFonts as font, workspaceRadii as radius } from "./workspaceTheme";
 
@@ -672,12 +673,16 @@ function ChatMessageBubble({
   }
   const own = !privacy && isOwnMessage(message, selfId);
   const sender = privacy ? "好友" : cleanText(message.senderName) ?? (own ? "我" : "对方");
+  // Image stickers already carry their own visual surface. Keep the message
+  // column/timestamp layout, but remove the generic chat-bubble background and
+  // padding so the sticker is shown on its own.
+  const framelessSticker = !privacy && message.type === "sticker" && Boolean(message.mediaUrl);
   return (
     <View style={[styles.messageLine, own && styles.messageLineOwn]}>
       {!own ? <ChatAvatar avatarUrl={row.avatarUrl} accent={row.accent} initials={initialsFor(sender, "friend")} kind="friend" privacy={privacy} size={30} /> : null}
       <View style={[styles.messageColumn, own && styles.messageColumnOwn]}>
         {!own ? <Text style={styles.senderLabel}>{sender}</Text> : null}
-        <View style={[styles.bubble, own ? styles.bubbleOwn : styles.bubbleIncoming]}>
+        <View style={[styles.bubble, framelessSticker ? styles.bubbleSticker : own ? styles.bubbleOwn : styles.bubbleIncoming]}>
           {privacy ? <Text style={styles.bubbleText}>消息内容已隐藏</Text> : <MessageContent message={message} onOpenRecord={onOpenRecord} />}
         </View>
         <Text style={[styles.messageTime, own && styles.messageTimeOwn]}>{formatMessageTime(message.sentAt)}</Text>
@@ -695,6 +700,13 @@ export function MessageContent({ message, onOpenRecord }: { message: ChatMessage
   }
   if (message.type === "share" && message.share) {
     const share = message.share;
+    // Older snapshots can contain a share-shaped object with only the text
+    // title. It is not enough evidence for a media card, so keep it in the
+    // ordinary text-bubble path instead of showing a misleading play button.
+    if (!hasChatShareEvidence(share)) {
+      const text = message.text && !/^\[分享\]$/u.test(message.text) ? message.text : share.title;
+      return <Text style={styles.bubbleText}>{text ?? "文字消息"}</Text>;
+    }
     const card = (
       <View style={styles.shareCard}>
         {share.coverUrl ? <Image accessibilityLabel="分享内容封面" resizeMode="cover" source={{ uri: share.coverUrl }} style={styles.shareCover} /> : <View style={styles.shareCoverFallback}><Play color={color.cyan} fill={color.cyan} size={18} /></View>}
@@ -819,7 +831,9 @@ function chatPreview(message: ChatMessage): string {
   switch (message.type) {
     case "image": return "[图片]";
     case "sticker": return "[表情包]";
-    case "share": return message.share?.title ? `分享：${message.share.title}` : "[分享视频]";
+    case "share": return hasChatShareEvidence(message.share)
+      ? message.share?.title ? `分享：${message.share.title}` : "[分享视频]"
+      : message.share?.title ?? "文字消息";
     case "call": return "[通话]";
     case "voice": return "[语音]";
     case "video": return "[视频通话]";
@@ -989,6 +1003,7 @@ const styles = StyleSheet.create({
   bubble: { minHeight: 34, justifyContent: "center", paddingHorizontal: 12, paddingVertical: 9, borderRadius: radius.medium },
   bubbleIncoming: { borderTopLeftRadius: 4, backgroundColor: color.surfaceRaised },
   bubbleOwn: { borderTopRightRadius: 4, backgroundColor: color.cyanSoft },
+  bubbleSticker: { minHeight: 0, paddingHorizontal: 0, paddingVertical: 0, borderRadius: 0, backgroundColor: "transparent" },
   bubbleText: { color: color.text, fontSize: 12, lineHeight: 19 },
   messageTime: { color: color.textMuted, fontSize: 8, marginTop: 4, marginLeft: 3 },
   messageTimeOwn: { marginRight: 3 },

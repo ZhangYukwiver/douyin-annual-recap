@@ -46,3 +46,23 @@ describe("desktop static server", () => {
     expect(missingAsset.status).toBe(404);
   });
 });
+
+describe("story pages", () => {
+  it("relaxes the policy only under /story so the inline prototype scripts run", async () => {
+    const directory = await fixture();
+    await mkdir(path.join(directory, "story"));
+    await writeFile(path.join(directory, "story", "story-entry.html"), "<!doctype html><script>document.title = 1</script>");
+    const runtime = await startStaticServer({ rootDirectory: directory });
+    runtimes.push(runtime);
+
+    const story = await fetch(`${runtime.url}/story/story-entry.html`);
+    expect(story.status).toBe(200);
+    expect(story.headers.get("content-security-policy")).toContain("script-src 'self' 'unsafe-inline'");
+    expect(story.headers.get("content-security-policy")).toContain("fonts.googleapis.com");
+    expect(story.headers.get("cache-control")).toBe("no-cache");
+
+    const app = await fetch(`${runtime.url}/assets/app.js`);
+    expect(app.headers.get("content-security-policy")).toContain("script-src 'self';");
+    expect(app.headers.get("content-security-policy")).not.toContain("unsafe-inline';");
+  });
+});

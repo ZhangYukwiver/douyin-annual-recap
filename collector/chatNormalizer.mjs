@@ -77,6 +77,15 @@ export function isSyntheticChatPlaceholder(value) {
     && !value.share;
 }
 
+/**
+ * A title by itself is not enough to identify a shared video.  The IM API
+ * frequently places an `aweType` and a title on ordinary text messages; a
+ * share card needs at least one piece of share-specific metadata.
+ */
+export function hasChatShareEvidence(value) {
+  return isObject(value) && Boolean(cleanString(value.author) || cleanString(value.coverUrl) || cleanString(value.url));
+}
+
 function normalizeConversationKind(value) {
   const text = cleanString(value, 50)?.toLowerCase();
   if (text === "1" || text === "one_to_one" || text === "one_to_one_chat" || text === "friend" || text === "private" || text === "好友" || text === "私聊") return "friend";
@@ -534,6 +543,15 @@ function parseCallDuration(content, depth = 0) {
 
 function parseText(content) {
   if (!isObject(content)) return null;
+  const nestedTextSource = [
+    content.share,
+    content.share_info,
+    content.shareInfo,
+    content.item,
+    content.link,
+    content.related_share_video,
+    content.video,
+  ].find((value) => isObject(value));
   return firstString(
     content.text,
     content.description,
@@ -547,6 +565,12 @@ function parseText(content) {
     content.tips,
     content.display_name,
     content.comment,
+    content.content_title,
+    content.aweme_title,
+    nestedTextSource?.text,
+    nestedTextSource?.title,
+    nestedTextSource?.description,
+    nestedTextSource?.desc,
   );
 }
 
@@ -559,7 +583,7 @@ function parseShare(content) {
           : isObject(content.item) ? content.item
             : isObject(content.link) ? content.link
               : isObject(content.related_share_video) ? content.related_share_video
-              : (content.content_title || content.aweme_title || content.cover_url || content.coverUrl || content.itemId || content.aweType || content.awe_type)
+              : (content.content_title || content.aweme_title || content.cover_url || content.coverUrl || content.share_url || content.shareUrl || content.url || content.link || content.itemId || content.item_id || content.aweme_id || content.author_name || content.content_name || content.author)
                 ? content
                 : null;
   if (!source) return null;
@@ -579,7 +603,7 @@ function parseShare(content) {
         ? `https://www.douyin.com/video/${encodeURIComponent(firstString(source.itemId, source.item_id, content.itemId, content.item_id, content.aweme_id))}`
         : null),
   };
-  return Object.values(share).some((value) => value) ? share : null;
+  return hasChatShareEvidence(share) ? share : null;
 }
 
 function parseMediaUrlFromContent(content) {
@@ -614,22 +638,31 @@ function parseMessageType(typeCode, content) {
   if (explicit === "call" || explicit === "193") return "call";
   if (!isObject(content)) return "unknown";
   if (isCallContent(typeCode, content)) return "call";
+  const parsedShare = parseShare(content);
+  // String message kinds are authoritative.  Inspecting the content shape
+  // first would let an incidental `video`/`poster` property turn an ordinary
+  // text payload into a media message.
+  if (CHAT_TYPES.has(explicit) && explicit !== "unknown") {
+    if (explicit === "share") return parsedShare ? "share" : parseText(content) ? "text" : "unknown";
+    return explicit;
+  }
+  if (explicit === "7") return "text";
   const numeric = /^\d+$/u.test(explicit ?? "") ? Number(explicit) : null;
   const contentNumericText = cleanString(content.aweType ?? content.awe_type, 50);
   const contentNumeric = /^\d+$/u.test(contentNumericText ?? "") ? Number(contentNumericText) : null;
   if (STICKER_TYPES.has(contentNumeric) || content.sticker || content.sticker_url || content.stickerUrl || content.stickers || content.joker_stickers) return "sticker";
   if (IMAGE_TYPES.has(contentNumeric)) return "image";
-  if (SHARE_TYPES.has(contentNumeric)) return "share";
+  if (SHARE_TYPES.has(contentNumeric) && parsedShare) return "share";
   if (contentNumeric !== null && contentNumeric >= 100_000) return "system";
+  // A nested `video`/`poster` payload is the protocol's media-message shape;
+  // do not reinterpret it as a share merely because it also has a title.
   if (content.video || content.poster) return "video";
   if (content.resource_url && content.duration) return "voice";
-  if (CHAT_TYPES.has(explicit)) return explicit;
-  if (explicit === "7") return "text";
   if (STICKER_TYPES.has(numeric)) return "sticker";
   if (IMAGE_TYPES.has(numeric)) return "image";
-  if (SHARE_TYPES.has(numeric)) return "share";
+  if (SHARE_TYPES.has(numeric) && parsedShare) return "share";
   if (numeric !== null && numeric >= 100_000) return "system";
-  if (parseShare(content)) return "share";
+  if (parsedShare) return "share";
   if (parseMediaUrlFromContent(content)) return content.type === "sticker" ? "sticker" : "image";
   if (parseText(content)) return "text";
   return "unknown";

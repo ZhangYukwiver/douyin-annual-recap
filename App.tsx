@@ -14,6 +14,7 @@ import {
   LegacyContentWorkspace,
   SetupWorkspace,
   type LegacyWorkspaceViewKey,
+  type RecordDownloadState,
   workspaceColors,
 } from "./src/components/workspace";
 import { buildPersonalSummary } from "./src/domain/annualReport";
@@ -27,6 +28,7 @@ import {
   createEmptyPersonalRecords,
   type PersonalArchiveData,
   type PersonalRecordCollection,
+  type PersonalVideoRecord,
 } from "./src/domain/personalRecords";
 import type { ChatConversationSummary, ChatMessage } from "./src/domain/chatRecords";
 import {
@@ -35,6 +37,7 @@ import {
   getCollectorPairingCode,
   getCollectorRecords,
   getCollectorStatus,
+  getCollectorVideoDownload,
   getDefaultCollectorBaseUrl,
   LocalCollectorError,
   normalizeCollectorBaseUrl,
@@ -44,12 +47,15 @@ import {
   startDirectRecordsSync,
   startCollectorObservation,
   startCollectorChatObservation,
+  startCollectorVideoDownload,
   stopCollectorSync,
   stopCollectorObservation,
   stopCollectorChatObservation,
   switchCollectorAccount,
+  fetchCollectorVideoFile,
   type CollectorSnapshot,
   type CollectorStatus,
+  type VideoDownloadJob,
 } from "./src/services/localCollector";
 import {
   describePersonalArchiveError,
@@ -57,8 +63,14 @@ import {
 } from "./src/services/importPersonalArchive";
 import { getDesktopCollectorConfig } from "./src/desktopRuntime";
 import { shouldAutoSync } from "./src/services/autoSync";
+import { buildStoryEntryUrl, loadReportStyle, saveReportStyle, type ReportStyle } from "./src/services/reportStyle";
+import { buildStoryData, clearStoryData, writeStoryData } from "./src/services/storyData";
+import { buildReportModel } from "./src/components/workspace/ReportWorkspace";
 
 type ViewKey = "summary" | "highlights" | "records" | "chat" | "sources";
+
+const DOWNLOAD_JOB_POLL_INTERVAL_MS = 800;
+const DOWNLOAD_JOB_TIMEOUT_MS = 15 * 60 * 1_000;
 
 interface SelectedArchive {
   name: string;
@@ -88,6 +100,24 @@ const TERMINAL_COLLECTOR_STATES = new Set(["idle", "complete", "partial", "error
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function triggerBrowserDownload(blob: Blob, fileName: string | null): void {
+  if (Platform.OS !== "web" || typeof document === "undefined" || typeof URL === "undefined") {
+    throw new LocalCollectorError("download_unsupported", "当前平台不支持直接保存视频文件。请在桌面 Web 工作台中重试。");
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName?.trim() || "douyin-video.mp4";
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  window.setTimeout(() => {
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  }, 0);
 }
 
 function showAlert(title: string, message: string) {
@@ -149,8 +179,13 @@ function AppContent() {
   const [stoppingSync, setStoppingSync] = useState(false);
   const [switchingAccount, setSwitchingAccount] = useState(false);
   const [collectorError, setCollectorError] = useState<string | null>(null);
+  const [downloadStates, setDownloadStates] = useState<Record<string, RecordDownloadState>>({});
+  const [downloadJobs, setDownloadJobs] = useState<Record<string, VideoDownloadJob>>({});
+  const [reportStyle, setReportStyle] = useState<ReportStyle>(loadReportStyle);
   const importRequest = useRef(0);
   const pollRequest = useRef(0);
+  const downloadRequestRef = useRef(0);
+  const downloadInFlightRef = useRef(new Set<string>());
   const connectingRef = useRef(false);
   const syncConfirmationOpenRef = useRef(false);
   const accountSwitchConfirmationOpenRef = useRef(false);
@@ -168,6 +203,8 @@ function AppContent() {
     chatStartupTriggeredRef.current = false;
     chatCollectionInFlightRef.current = false;
     chatPollRequestRef.current = null;
+    downloadRequestRef.current += 1;
+    downloadInFlightRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -574,6 +611,7 @@ function AppContent() {
       setCollectorUrl(normalizedUrl);
       setCollectorStatus(status);
       setCollectorSnapshot(snapshot);
+      clearStoryData();
       if (!chatStartupTriggeredRef.current) {
         chatStartupTriggeredRef.current = true;
         chatStartupPendingRef.current = true;
@@ -632,6 +670,8 @@ function AppContent() {
     const token = collectorToken;
     if (!token) return;
     pollRequest.current += 1;
+    downloadRequestRef.current += 1;
+    downloadInFlightRef.current.clear();
     autoSyncInFlightRef.current = false;
     chatStartupPendingRef.current = false;
     chatCollectionInFlightRef.current = false;
@@ -648,6 +688,8 @@ function AppContent() {
       setCollectorSnapshot(null);
       setStoppingSync(false);
       setCollectorBusy(false);
+      setDownloadStates({});
+      setDownloadJobs({});
       setCollectorError(stopError
         ? `已断开应用，但无法确认采集任务已停止：${stopError}`
         : null);
@@ -658,6 +700,8 @@ function AppContent() {
     if (!collectorToken || switchingAccount || collectorBusy) return;
     const requestId = pollRequest.current + 1;
     pollRequest.current = requestId;
+    downloadRequestRef.current += 1;
+    downloadInFlightRef.current.clear();
     autoSyncInFlightRef.current = false;
     chatStartupPendingRef.current = false;
     chatCollectionInFlightRef.current = false;
@@ -666,11 +710,14 @@ function AppContent() {
     setCollectorBusy(true);
     setCollectorError(null);
     setCollectorSnapshot(null);
+    setDownloadStates({});
+    setDownloadJobs({});
     try {
       const status = await switchCollectorAccount(collectorUrl, collectorToken);
       if (pollRequest.current !== requestId) return;
       setCollectorStatus(status);
       if (!await refreshCollectorSnapshot(collectorUrl, collectorToken, requestId)) return;
+      clearStoryData();
       setActiveView("records");
       void pollCollector(collectorUrl, collectorToken, requestId);
     } catch (error) {
@@ -722,6 +769,7 @@ function AppContent() {
         try {
           const data = await importPersonalArchive(asset);
           if (importRequest.current !== requestId) return;
+          clearStoryData();
           setSelectedArchive({ ...archive, inspection: { status: "complete", format: data.format }, data });
         } catch (error) {
           if (importRequest.current !== requestId) return;
@@ -744,6 +792,7 @@ function AppContent() {
       (confirmed) => {
         if (!confirmed) return;
         autoSyncInFlightRef.current = false;
+        clearStoryData();
         if (collectorToken) {
           const requestId = pollRequest.current + 1;
           const token = collectorToken;
@@ -785,6 +834,85 @@ function AppContent() {
     }
   }
 
+  function rememberDownloadJob(recordId: string, job: VideoDownloadJob) {
+    setDownloadJobs((current) => ({ ...current, [recordId]: job }));
+    setDownloadStates((current) => ({ ...current, [recordId]: job.status }));
+  }
+
+  function markDownloadState(recordId: string, state: RecordDownloadState) {
+    setDownloadStates((current) => ({ ...current, [recordId]: state }));
+  }
+
+  async function downloadRecord(record: PersonalVideoRecord): Promise<void> {
+    if (Platform.OS !== "web") {
+      showAlert("暂不支持下载", "请在桌面 Web 工作台中将视频保存到本地。");
+      return;
+    }
+    const sourceUrl = record.url?.trim();
+    if (!sourceUrl) {
+      showAlert("无法下载视频", "该记录没有可用的抖音链接。");
+      return;
+    }
+    const token = collectorToken;
+    const baseUrl = collectorUrl;
+    if (!token) {
+      showAlert("需要连接采集器", "请先在“连接与采集”页面连接本地采集服务，再下载视频。");
+      return;
+    }
+    if (downloadInFlightRef.current.has(record.id)) return;
+    const existing = downloadJobs[record.id];
+    if (existing?.status === "queued" || existing?.status === "running") return;
+
+    const requestId = downloadRequestRef.current;
+    downloadInFlightRef.current.add(record.id);
+    markDownloadState(record.id, "queued");
+    try {
+      let job = await startCollectorVideoDownload(baseUrl, token, sourceUrl);
+      if (downloadRequestRef.current !== requestId) return;
+      rememberDownloadJob(record.id, job);
+
+      const deadline = Date.now() + DOWNLOAD_JOB_TIMEOUT_MS;
+      while (job.status === "queued" || job.status === "running") {
+        if (Date.now() >= deadline) {
+          throw new LocalCollectorError("timeout", "视频下载超时，请稍后重试。");
+        }
+        await delay(DOWNLOAD_JOB_POLL_INTERVAL_MS);
+        if (downloadRequestRef.current !== requestId) return;
+        job = await getCollectorVideoDownload(baseUrl, token, job.id);
+        if (downloadRequestRef.current !== requestId) return;
+        rememberDownloadJob(record.id, job);
+      }
+      if (job.status !== "complete") {
+        throw new LocalCollectorError(job.errorCode ?? "download_failed", job.error ?? "视频下载失败，请稍后重试。");
+      }
+
+      const file = await fetchCollectorVideoFile(baseUrl, token, job.id);
+      if (downloadRequestRef.current !== requestId) return;
+      triggerBrowserDownload(file.blob, file.fileName ?? job.fileName);
+      markDownloadState(record.id, "complete");
+    } catch (error) {
+      if (downloadRequestRef.current !== requestId) return;
+      markDownloadState(record.id, "failed");
+      setDownloadJobs((current) => {
+        const previous = current[record.id];
+        if (!previous) return current;
+        return {
+          ...current,
+          [record.id]: {
+            ...previous,
+            status: "failed",
+            errorCode: error instanceof LocalCollectorError ? error.code : "download_failed",
+            error: error instanceof LocalCollectorError ? error.message : "视频下载失败，请稍后重试。",
+            updatedAt: new Date().toISOString(),
+          },
+        };
+      });
+      showAlert("下载失败", error instanceof LocalCollectorError ? error.message : "视频下载失败，请稍后重试。");
+    } finally {
+      downloadInFlightRef.current.delete(record.id);
+    }
+  }
+
   const workspaceRecords = displaySnapshot?.records ?? createEmptyPersonalRecords();
   const sourceLabel = displaySnapshot?.source === "collector"
     ? "本地浏览器采集"
@@ -801,6 +929,31 @@ function AppContent() {
     : null;
 
   function enterWorkspace() {
+    if (reportStyle === "trace" && Platform.OS === "web") {
+      // The story pages are static HTML under /story; a new tab keeps this session's collector token alive.
+      // They read one aggregated snapshot from localStorage, so the token never leaves this page.
+      const chatMessages = displaySnapshot?.chatMessages ?? [];
+      const chatConversations = displaySnapshot?.chatConversations ?? [];
+      const source = displaySnapshot?.source ?? "archive";
+      const model = buildReportModel(workspaceRecords, chatMessages, personalSummary ?? livingReport, chatConversations);
+      const story = buildStoryData(model, {
+        records: workspaceRecords,
+        chatMessages,
+        chatConversations,
+        source,
+        updatedAt: displaySnapshot?.updatedAt ?? null,
+        warnings: displaySnapshot?.warnings ?? [],
+        archive: source === "archive" && selectedArchive?.data ? { parsedFileCount: selectedArchive.data.parsedFileCount, ignoredFileCount: selectedArchive.data.ignoredFileCount } : null,
+      });
+      writeStoryData(story);
+      window.open(buildStoryEntryUrl({
+        watch: workspaceRecords.watch_history.length,
+        liked: workspaceRecords.liked_videos.length,
+        favorite: workspaceRecords.favorite_videos.length,
+        chat: collectorStatus?.counts.chat_messages ?? null,
+      }, story.year), "_blank", "noopener");
+      return;
+    }
     setDashboardOpen(false);
     setActiveView("summary");
   }
@@ -860,6 +1013,11 @@ function AppContent() {
           onSwitchAccount={confirmAccountSwitch}
           autoSyncEnabled={autoSyncEnabled}
           onToggleAutoSync={() => setAutoSyncEnabled((value) => !value)}
+          reportStyle={reportStyle}
+          onChangeReportStyle={(style) => {
+            setReportStyle(style);
+            saveReportStyle(style);
+          }}
           observing={collectorStatus?.state === "observing" && collectorStatus?.phase !== "chat_messages"}
           pairingCode={pairingCode}
           pickingArchive={pickingArchive}
@@ -877,6 +1035,7 @@ function AppContent() {
           chatConversations={displaySnapshot?.chatConversations ?? []}
           chatMessages={displaySnapshot?.chatMessages ?? []}
           onChangeView={setDashboardView}
+          onDownloadRecord={downloadRecord}
           onOpenRecord={openRecord}
           onOpenSettings={openSettings}
           onReplayStory={replayStory}
@@ -884,6 +1043,7 @@ function AppContent() {
           onTogglePrivacy={() => setPrivacy((value) => !value)}
           privacy={privacy}
           records={workspaceRecords}
+          downloadStates={downloadStates}
           report={personalSummary ?? livingReport}
           sourceLabel={sourceLabel}
           status={collectorStatus}

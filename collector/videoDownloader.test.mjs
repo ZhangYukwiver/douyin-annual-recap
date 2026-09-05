@@ -1,0 +1,163 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  collectDouyinMediaCandidates,
+  discoverDouyinVideo,
+  downloadMediaFile,
+  isAllowedMediaUrl,
+  makeVideoFileName,
+  normalizeDouyinVideoUrl,
+  selectDouyinMediaCandidate,
+  VideoDownloadError,
+} from "./videoDownloader.mjs";
+
+const temporaryDirectories = [];
+
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+describe("normalizeDouyinVideoUrl", () => {
+  it("accepts canonical and short HTTPS Douyin video links", () => {
+    expect(normalizeDouyinVideoUrl("https://www.douyin.com/video/1234567890#comment")).toBe(
+      "https://www.douyin.com/video/1234567890",
+    );
+    expect(normalizeDouyinVideoUrl("https://v.douyin.com/abc123/?enter_from=share")).toBe(
+      "https://v.douyin.com/abc123/?enter_from=share",
+    );
+  });
+
+  it("rejects non-Douyin and non-video URLs", () => {
+    expect(() => normalizeDouyinVideoUrl("https://example.com/video/1")).toThrowError(VideoDownloadError);
+    expect(() => normalizeDouyinVideoUrl("https://www.douyin.com/user/abc")).toThrowError(VideoDownloadError);
+    expect(() => normalizeDouyinVideoUrl("http://www.douyin.com/video/1")).toThrowError(VideoDownloadError);
+    expect(() => normalizeDouyinVideoUrl("https://user:pass@www.douyin.com/video/1")).toThrowError(VideoDownloadError);
+    expect(() => normalizeDouyinVideoUrl("https://www.douyin.com:8443/video/1")).toThrowError(VideoDownloadError);
+  });
+});
+
+describe("media candidate selection", () => {
+  it("extracts playable streams while ignoring cover URLs", () => {
+    const candidates = collectDouyinMediaCandidates({
+      aweme_detail: {
+        aweme_id: "123",
+        video: {
+          width: 720,
+          height: 1280,
+          cover: { url_list: ["https://p3.douyinvod.com/cover.jpg"] },
+          play_addr: { url_list: ["https://p3.douyinvod.com/aweme/v1/play/video.mp4"] },
+          bit_rate: [{ bit_rate: 2_000_000, play_addr: { url_list: ["https://p3.douyinvod.com/media-video-hd.mp4"] } }],
+        },
+      },
+    });
+    expect(candidates.map((candidate) => candidate.url)).toEqual([
+      "https://p3.douyinvod.com/aweme/v1/play/video.mp4",
+      "https://p3.douyinvod.com/media-video-hd.mp4",
+    ]);
+    expect(selectDouyinMediaCandidate(candidates)).toMatchObject({
+      url: "https://p3.douyinvod.com/aweme/v1/play/video.mp4",
+      type: "video+audio",
+    });
+  });
+
+  it("resolves a playable stream from a Douyin detail response", async () => {
+    let responseHandler;
+    const payload = {
+      aweme_detail: {
+        aweme_id: "1234567890",
+        desc: "测试详情",
+        author: { nickname: "测试作者" },
+        create_time: 1_735_689_600,
+        video: {
+          duration: 12_000,
+          play_addr: { url_list: ["https://p3.douyinvod.com/aweme/v1/play/detail.mp4"] },
+        },
+      },
+    };
+    const page = {
+      on: (_event, handler) => { responseHandler = handler; },
+      off: () => undefined,
+      goto: async () => {
+        await responseHandler({
+          url: () => "https://www.douyin.com/aweme/v1/web/aweme/detail/",
+          headers: () => ({ "content-type": "application/json" }),
+          ok: () => true,
+          json: async () => payload,
+        });
+      },
+      url: () => "https://www.douyin.com/video/1234567890",
+      title: async () => "测试详情 - 抖音",
+      evaluate: async () => [],
+      locator: () => null,
+      close: async () => undefined,
+    };
+    const result = await discoverDouyinVideo({ newPage: async () => page }, "https://www.douyin.com/video/1234567890", {
+      mediaWaitMs: 1_700,
+    });
+    expect(result).toMatchObject({
+      videoId: "1234567890",
+      title: "测试详情",
+      author: "测试作者",
+      durationSeconds: 12,
+      media: { url: "https://p3.douyinvod.com/aweme/v1/play/detail.mp4" },
+    });
+  });
+
+  it("keeps media hosts narrow", () => {
+    expect(isAllowedMediaUrl("https://p3.douyinvod.com/aweme/v1/play/1")).toBe(true);
+    expect(isAllowedMediaUrl("https://evil.example/aweme/v1/play/1")).toBe(false);
+    expect(isAllowedMediaUrl("https://p3.douyinvod.com:8443/aweme/v1/play/1")).toBe(false);
+  });
+});
+
+describe("downloadMediaFile", () => {
+  it("streams a video to a private file and atomically renames it", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "douyin-video-download-"));
+    temporaryDirectories.push(directory);
+    const mp4 = Buffer.concat([Buffer.from("\x00\x00\x00\x18ftypisom\x00\x00\x02\x00"), Buffer.from("video-bytes")]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(mp4, {
+      status: 200,
+      headers: { "Content-Type": "video/mp4", "Content-Length": String(mp4.length) },
+    })));
+    const progress = vi.fn();
+    const result = await downloadMediaFile({
+      context: { cookies: vi.fn().mockResolvedValue([]) },
+      media: { url: "https://p3.douyinvod.com/aweme/v1/play/1" },
+      outputDirectory: directory,
+      fileName: "示例视频-123.mp4",
+      onProgress: progress,
+    });
+    await expect(readFile(result.filePath)).resolves.toEqual(mp4);
+    expect(result.fileName).toBe("示例视频-123.mp4");
+    expect(progress).toHaveBeenCalled();
+  });
+
+  it("reuses a valid existing file without another network request", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "douyin-video-download-"));
+    temporaryDirectories.push(directory);
+    const mp4 = Buffer.from("\x00\x00\x00\x18ftypisom\x00\x00\x02\x00existing");
+    const firstFetch = vi.fn().mockResolvedValue(new Response(mp4, { status: 200 }));
+    vi.stubGlobal("fetch", firstFetch);
+    const args = {
+      context: { cookies: vi.fn().mockResolvedValue([]) },
+      media: { url: "https://p3.douyinvod.com/aweme/v1/play/2" },
+      outputDirectory: directory,
+      fileName: "same.mp4",
+    };
+    await downloadMediaFile(args);
+    const second = await downloadMediaFile(args);
+    expect(second.skipped).toBe(true);
+    expect(firstFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("makeVideoFileName", () => {
+  it("removes path separators and keeps a deterministic fallback", () => {
+    expect(makeVideoFileName({ title: " a/b:c ", videoId: "123" })).toBe("a_b_c-123.mp4");
+    expect(makeVideoFileName({ title: "", sourceUrl: "https://v.douyin.com/x" })).toMatch(/^抖音视频-[a-f0-9]{10}\.mp4$/u);
+  });
+});

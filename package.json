@@ -17,11 +17,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:story-frames": "node scripts/story-visual-regression.mjs",
-    "prebuild:web": "npm run build:icons",
+    "prebuild:web": "npm run build:icons && npm run sync:story",
     "build:web": "expo export --platform web",
     "desktop": "npm run build:web && electron desktop/main.mjs",
     "desktop:pack": "npm run build:web && npm run direct:setup && electron-builder --win dir",
-    "desktop:build": "npm run build:web && npm run direct:setup && electron-builder --win nsis"
+    "desktop:build": "npm run build:web && npm run direct:setup && electron-builder --win nsis",
+    "sync:story": "node scripts/sync-story.mjs"
   },
   "dependencies": {
     "@expo/metro-runtime": "~57.0.8",

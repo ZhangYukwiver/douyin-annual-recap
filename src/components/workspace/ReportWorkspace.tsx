@@ -73,7 +73,7 @@ import type {
 import { countChatMessages } from "../../domain/chatRecords";
 import type { ChatConversationSummary, ChatMessage, ChatMessageType } from "../../domain/chatRecords";
 import type { LivingReport } from "../../domain/livingReport";
-import { deriveProfile, progressPercentOf, type ProfileMetrics } from "../../domain/profile";
+import { deriveProfile, progressPercentOf, type ProfileMetrics, type ProfileTitle } from "../../domain/profile";
 import { deriveSurpriseInsights } from "../../domain/surpriseInsights";
 import type {
   PersonalRecordCollection,
@@ -412,9 +412,11 @@ export function ContentWorkspace(props: ContentWorkspaceProps) {
             ))}
           </View>
         ) : null}
-        <ScrollView contentContainerStyle={styles.lateScroll} showsVerticalScrollIndicator={false} style={styles.flex}>
-          {fittedPage}
-        </ScrollView>
+        <View {...vtBody} style={styles.flex}>
+          <ScrollView contentContainerStyle={styles.lateScroll} showsVerticalScrollIndicator={false} style={styles.flex}>
+            {fittedPage}
+          </ScrollView>
+        </View>
       </View>
       <View style={[styles.nav, compactNav && styles.navCompact]}>
         <Pressable accessibilityLabel="上一章" accessibilityRole="button" disabled={page === 0} onPress={() => step(-1)} style={({ pressed }) => [styles.navButton, compactNav && styles.navButtonCompact, page === 0 && styles.disabled, pressed && styles.pressed, pointer]}><ChevronLeft color="#9A9084" size={15} /></Pressable>
@@ -446,10 +448,11 @@ function Page(args: PageArgs & { current: PageId }) {
   }
 }
 
-// 章与章之间的衔接: 旧页顺着翻页方向退场 -> 过渡幕报出下一章 -> 新页从同一方向进场。
-// 12 段刻度条把每次跳转钉在同一条时间线上, 页面因此不再各自孤立。
-const TURN_OUT_MS = 260;
-const TURN_IN_MS = 320;
+// ponytail: 翻页动画已按要求移除, 换章即时切换; 旧的纸叶 View Transitions 实现看 git 历史。
+// vtBody/vtAnchor 标记保留为惰性 data 属性, 免得动一遍所有章节组件。
+const vtBody = Platform.OS === "web" ? ({ dataSet: { vtBody: "1" } } as unknown as { dataSet: Record<string, string> }) : null;
+const vtAnchor = Platform.OS === "web" ? ({ dataSet: { vtAnchor: "1" } } as unknown as { dataSet: Record<string, string> }) : null;
+
 const TURN_SHIFT = 70;
 
 interface ChapterTurn { dir: 1 | -1; phase: "out" | "in" }
@@ -465,11 +468,11 @@ function useChapterTurn(page: number, setPage: (next: number) => void) {
   // 初值 1 = 报告是从幕后揭开的, 挂载后立刻演一遍入场
   const cover = useRef(new Animated.Value(1)).current;
   const [turning, setTurning] = useState<ChapterTurn | null>({ dir: 1, phase: "in" });
-  // 转场中 page 落后于目标章, 用 ref 记住"逻辑当前章"以便连按时算对方向与队列。
-  const state = useRef({ busy: false, page, queued: null as number | null });
+  // step 是 useCallback, 闭包里的 page 会过期, 用 ref 读当前章
+  const state = useRef({ page });
 
   useEffect(() => {
-    if (!state.current.busy) state.current.page = page;
+    state.current.page = page;
   }, [page]);
 
   useEffect(() => {
@@ -484,43 +487,11 @@ function useChapterTurn(page: number, setPage: (next: number) => void) {
     // 只在进入报告时演一次
   }, [cover]);
 
-  const run = useRef((_target: number) => {});
-  run.current = (target: number) => {
-    const dir: 1 | -1 = target > state.current.page ? 1 : -1;
-    state.current.busy = true;
-    state.current.page = target;
-    setTurning({ dir, phase: "out" });
-    cover.setValue(0);
-    Animated.timing(cover, { duration: TURN_OUT_MS, easing: Easing.in(Easing.quad), toValue: 1, useNativeDriver: false }).start(({ finished }) => {
-      if (!finished) return;
-      // 幕布此刻不透明, 内容在幕后换掉
-      setPage(target);
-      setTurning({ dir, phase: "in" });
-      Animated.timing(cover, { duration: TURN_IN_MS, easing: Easing.out(Easing.cubic), toValue: 0, useNativeDriver: false }).start(() => {
-        state.current.busy = false;
-        setTurning(null);
-        const queued = state.current.queued;
-        state.current.queued = null;
-        if (queued !== null && queued !== state.current.page) run.current(queued);
-      });
-    });
-  };
-
   const step = useCallback((delta: number) => {
-    // 连按时以队列里的目标为基准, 三次"下一章"才会真的走三章
-    const base = state.current.queued ?? state.current.page;
-    const target = Math.max(0, Math.min(pages.length - 1, base + delta));
-    if (Platform.OS !== "web" || reducedMotion()) {
-      setPage(target);
-      return;
-    }
-    // 转场中的输入不丢: 记下最后一个目标, 幕落之后接着走
-    if (state.current.busy) {
-      state.current.queued = target;
-      return;
-    }
-    if (target === state.current.page) return;
-    run.current(target);
+    // 同帧连按时 useEffect 还没同步 ref, 这里自己推进, 三次"下一章"才真走三章
+    const target = Math.max(0, Math.min(pages.length - 1, state.current.page + delta));
+    state.current.page = target;
+    setPage(target);
   }, [setPage]);
 
   return { cover, step, turning };
@@ -1397,26 +1368,37 @@ function CompassRose({ color = "#4A4034", size = 30 }: { color?: string; size?: 
 }
 
 function ChapterRail({ desc, en, mobile, no, title, yearValue }: { desc: string; en: string; mobile: boolean; no: string; title: string; yearValue?: number }) {
+  // Keep the chapter metadata on a predictable baseline across all twelve
+  // pages.  The longer English labels otherwise wrap in the narrow rail and
+  // push the divider/description down by one line.
+  const compactEnglish = en.length >= 15;
   return (
     <View style={[styles.lpRail, mobile && styles.lpRailMobile]}>
-      <View>
-        <Text style={styles.lpRailNo}>{no}</Text>
-        <Text style={styles.lpRailYear}>{displayYear(yearValue)}</Text>
-        <View {...motionData("twinkle", 0)} style={styles.lpRailSpark}>
-        <Svg height={30} viewBox="0 0 24 30" width={24}>
-          <Path d={starD(12, 15, 5.5, 13, 0.13)} fill="#D9B58A" />
-          <Path d={starD(12, 15, 5.2, 5.2, 0.3)} fill="#D9B58A" opacity={0.8} transform="rotate(45 12 15)" />
-        </Svg>
+      <View style={styles.lpRailTop}>
+        <View style={styles.lpRailIdentity}>
+          <Text style={styles.lpRailNo}>{no}</Text>
+          <Text style={styles.lpRailYear}>{displayYear(yearValue)}</Text>
+          <View {...motionData("twinkle", 0)} style={styles.lpRailSpark}>
+            <Svg height={30} viewBox="0 0 24 30" width={24}>
+              <Path d={starD(12, 15, 5.5, 13, 0.13)} fill="#D9B58A" />
+              <Path d={starD(12, 15, 5.2, 5.2, 0.3)} fill="#D9B58A" opacity={0.8} transform="rotate(45 12 15)" />
+            </Svg>
+          </View>
+        </View>
+        <View style={styles.lpRailCopy}>
+          <Text numberOfLines={1} style={styles.lpRailTitle}>{title}</Text>
+          <Text numberOfLines={1} style={[styles.lpRailEn, compactEnglish && styles.lpRailEnCompact]}>{en}</Text>
+          <View style={styles.lpRailDash} />
+          <Text numberOfLines={3} style={styles.lpRailDesc}>{desc}</Text>
+        </View>
       </View>
-        <Text style={styles.lpRailTitle}>{title}</Text>
-        <Text style={styles.lpRailEn}>{en}</Text>
-        <View style={styles.lpRailDash} />
-        <Text style={styles.lpRailDesc}>{desc}</Text>
-      </View>
-      <View>
-        <Text style={styles.lpRailPattern}>PATTERN</Text>
-        <Text style={styles.lpRailObserved}>observed</Text>
-        <View style={styles.lpRailRose}><CompassRose size={96} /></View>
+      <View style={styles.lpRailBottom}>
+        <View style={styles.lpRailPatternCopy}>
+          <Text style={styles.lpRailPattern}>PATTERN</Text>
+          <Text style={styles.lpRailObserved}>observed</Text>
+        </View>
+        {/* 全书唯一的 vt 锚点: 纸叶翻动时罗盘被 VT 单独截出, 钉在原位不跟叶转 */}
+        <View {...vtAnchor} style={styles.lpRailRose}><CompassRose size={96} /></View>
       </View>
     </View>
   );
@@ -2924,10 +2906,28 @@ function ProfilePage({ mobile, model, onDashboard, onRestart }: PageArgs) {
   );
 }
 
+/**
+ * Keep the badge files statically referenced so Metro/Expo can bundle them on
+ * native and web. The generic emblem remains a safe fallback for old or
+ * otherwise unrecognised profile values.
+ */
+function profileBadgeSource(profile: string) {
+  switch (profile as ProfileTitle) {
+    case "万象漫游者": return require("./assets/profile-badge-many-worlds.png");
+    case "深度沉浸者": return require("./assets/profile-badge-deep-immersion.png");
+    case "珍藏策展人": return require("./assets/profile-badge-archive-curator.png");
+    case "社交回响者": return require("./assets/profile-badge-social-resonator.png");
+    case "多维共鸣者": return require("./assets/profile-badge-multidimensional.png");
+    case "静默观测者": return require("./assets/profile-badge-quiet-observer.png");
+    case "等待更多足迹": return require("./assets/profile-badge-awaiting-traces.png");
+    default: return require("./assets/habit-emblem.png");
+  }
+}
+
 function EmblemBadge({ en, profile }: { en: string; profile: string }) {
   return (
     <View {...motionData("twinkle", 2)} style={styles.hpEmblemWrap}>
-      <Image resizeMode="contain" source={require("./assets/habit-emblem.png")} style={styles.hpEmblemImg} />
+      <Image resizeMode="contain" source={profileBadgeSource(profile)} style={styles.hpEmblemImg} />
       <Text style={styles.hpEmblemCn}>{profile}</Text>
       <Text style={styles.hpEmblemEn}>{en}</Text>
     </View>
@@ -3570,17 +3570,25 @@ const styles = StyleSheet.create({
   lpBorderRight: { borderRightWidth: 1, borderRightColor: "#332C24" },
   lpBorderTop: { borderTopWidth: 1, borderTopColor: "#332C24" },
   lpRail: { width: 256, borderRightWidth: 1, borderRightColor: "#332C24", paddingHorizontal: 30, paddingVertical: 24, justifyContent: "space-between" },
-  lpRailMobile: { width: "100%", borderRightWidth: 0, borderBottomWidth: 1, borderBottomColor: "#332C24" },
+  lpRailMobile: { width: "100%", minHeight: 560, borderRightWidth: 0, borderBottomWidth: 1, borderBottomColor: "#332C24", paddingHorizontal: 24, paddingVertical: 20 },
+  // Cap the top rhythm so a tall portrait viewport does not stretch the
+  // heading all the way to the bottom of the rail.
+  lpRailTop: { flexGrow: 1, flexShrink: 1, minHeight: 360, maxHeight: 520, justifyContent: "space-between" },
+  lpRailIdentity: { height: 148, justifyContent: "space-between" },
+  lpRailCopy: { minHeight: 222 },
   lpRailNo: { color: "#C4A886", fontSize: 52, lineHeight: 58, fontFamily: didot },
-  lpRailYear: { color: "#A79885", fontSize: 13.5, letterSpacing: 2.6, marginTop: 4, fontFamily: didot },
-  lpRailSpark: { marginTop: 20, opacity: 0.92 },
-  lpRailTitle: { color: "#D8BFA1", fontSize: 34, lineHeight: 46, fontFamily: serif, fontWeight: "700", letterSpacing: 4, marginTop: 24 },
-  lpRailEn: { color: "#B38955", fontSize: 14.5, letterSpacing: 3.4, marginTop: 9, fontFamily: didot },
+  lpRailYear: { color: "#A79885", fontSize: 13.5, letterSpacing: 2.6, fontFamily: didot },
+  lpRailSpark: { opacity: 0.92 },
+  lpRailTitle: { height: 46, color: "#D8BFA1", fontSize: 34, lineHeight: 46, fontFamily: serif, fontWeight: "700", letterSpacing: 4 },
+  lpRailEn: { height: 24, color: "#B38955", fontSize: 14.5, lineHeight: 20, letterSpacing: 3.4, marginTop: 9, fontFamily: didot },
+  lpRailEnCompact: { fontSize: 12.5, letterSpacing: 2.45 },
   lpRailDash: { width: 34, height: 2, backgroundColor: "#6E5D49", marginTop: 22 },
-  lpRailDesc: { color: "#847869", fontSize: 15.5, lineHeight: 27, marginTop: 18, fontFamily: serif },
+  lpRailDesc: { height: 81, color: "#847869", fontSize: 15.5, lineHeight: 27, marginTop: 18, fontFamily: serif },
+  lpRailBottom: { height: 146, flexShrink: 0 },
+  lpRailPatternCopy: { height: 36 },
   lpRailPattern: { color: "#776C5E", fontSize: 11.5, letterSpacing: 2.8, fontFamily: didot },
   lpRailObserved: { color: "#5E5850", fontSize: 11, letterSpacing: 1.2, marginTop: 4, fontFamily: serif },
-  lpRailRose: { marginTop: 14, opacity: 0.9 },
+  lpRailRose: { marginTop: 14, alignSelf: "flex-start", opacity: 0.9 },
   lpFooter: { minHeight: 84, flexDirection: "row", alignItems: "center", gap: 12, borderTopWidth: 1, borderTopColor: "#332C24", paddingLeft: 26, paddingRight: 46, paddingVertical: 12 },
   lpFooterStar: { color: "#C59861", fontSize: 16 },
   lpFooterLabel: { color: "#776C5E", fontSize: 11.5, letterSpacing: 2.6, fontFamily: didot },

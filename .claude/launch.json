@@ -9,9 +9,27 @@
     {
       "name": "expo-web-8093",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["expo", "start", "--web", "--port", "8093"],
+      "runtimeArgs": [
+        "expo",
+        "start",
+        "--web",
+        "--port",
+        "8093"
+      ],
       "port": 8093,
       "autoPort": false
+    },
+    {
+      "name": "proto-static",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8891",
+        "--directory",
+        "prototype"
+      ],
+      "port": 8891
     }
   ]
 }
