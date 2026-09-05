@@ -1,7 +1,15 @@
 import { Platform } from "react-native";
 
-// 档案馆风：与故事页（ReportWorkspace）同一套暖金 + 冷青 + 近黑纸面
-export const workspaceColors = {
+import type { AppStyle } from "../../services/appStyle";
+
+/**
+ * 两套整体风格共用一份 token 名：
+ * - 档案馆：暖金 + 冷青 + 近黑纸面（与 ReportWorkspace 十二章同源）
+ * - 内容年志：故事页的纸面 / 墨色 / 信号蓝（prototype/story-draft_副本.html 的 :root）
+ * web 上每个 token 是 CSS 变量，<html data-style> 一换整套界面跟着换（见 ensureThemeStyles / applyAppStyle）；
+ * native 没有 CSS 变量，永远拿档案馆的实色。
+ */
+const archive = {
   canvas: "#0A0B0B",
   sidebar: "#0E1010",
   surface: "#131717",
@@ -25,19 +33,148 @@ export const workspaceColors = {
   amber: "#B68B57",
   amberSoft: "#241C12",
   danger: "#B4664F",
+  dangerSoft: "#241817",
   white: "#EFE6D8",
   black: "#0A0B0B",
   scrim: "rgba(10,11,11,0.72)",
-} as const;
+  // 实心主按钮（采集器页的“连接采集器 / 打开报告”）
+  button: "#EFE6D8",
+  buttonText: "#0A0B0B",
+  // “已连接 / 读取中”这类活的信号色
+  signal: "#70C3BF",
+  // 图表里固定的几个配角色
+  funnel0: "#3F5C5E",
+  funnel1: "#4E787C",
+  vennWatch: "#7FB0B4",
+  vennFavorite: "#A8804F",
+  shadow: "none",
+  heat: ["#10171A", "#1A3133", "#27494B", "#406C72", "#8A6238", "#B07E40"],
+  slices: ["#6E8C8F", "#C59861", "#4E787C", "#A8804F", "#8FA9AB", "#8A6238"],
+  avatars: ["#4E7578", "#6E5D49", "#805B38", "#3E5254", "#5A4833", "#2B6C72"],
+  tints: ["#1B2422", "#232019", "#1E1A16", "#182120", "#241E17", "#1C1F1E"],
+};
 
-export const workspaceFonts = {
-  serif: Platform.OS === "web" ? "Georgia, 'Songti SC', 'STSong', 'SimSun', serif" : undefined,
-  didot: Platform.OS === "web" ? "Didot, 'Bodoni 72', Georgia, 'Songti SC', serif" : undefined,
-} as const;
+export type WorkspacePalette = typeof archive;
 
-// ponytail: 档案页面是直角的，圆角 token 统一归零，不再逐处改 borderRadius
-export const workspaceRadii = {
-  small: 0,
-  medium: 0,
-  large: 0,
-} as const;
+const trace: WorkspacePalette = {
+  canvas: "#F3F2EC",
+  sidebar: "#FBFBF7",
+  surface: "#FFFFFF",
+  surfaceRaised: "#F9FAF7",
+  surfaceMuted: "#ECEEE9",
+  border: "#DEE2DE",
+  borderSoft: "#E8EBE6",
+  frame: "#D3D8D3",
+  text: "#171717",
+  textSecondary: "#444141",
+  textMuted: "#6B6B69",
+  accent: "#282834",
+  accentPressed: "#1F1F29",
+  accentAction: "#41A1CF",
+  accentSoft: "#EAEAF0",
+  figure: "#171717",
+  cyan: "#41A1CF",
+  cyanSoft: "#E7F3F9",
+  green: "#0081C0",
+  greenSoft: "#E3F1F9",
+  amber: "#B8702F",
+  amberSoft: "#FAF1E6",
+  danger: "#C0554A",
+  dangerSoft: "#FBE9E6",
+  white: "#FFFFFF",
+  black: "#171717",
+  scrim: "rgba(31,31,41,0.72)",
+  button: "#1F1F29",
+  buttonText: "#FFFFFF",
+  signal: "#0081C0",
+  funnel0: "#C9DFE9",
+  funnel1: "#8FC4E0",
+  vennWatch: "#41A1CF",
+  vennFavorite: "#B8702F",
+  shadow: "rgba(0,0,0,0.08) 0 1px 1px, rgba(0,0,0,0.08) 0 4px 5px",
+  heat: ["#F1F3F0", "#DCECF5", "#A9D3EA", "#6FB8DC", "#41A1CF", "#0081C0"],
+  slices: ["#41A1CF", "#282834", "#8FC7E3", "#7C5468", "#0081C0", "#B4B8B4"],
+  avatars: ["#41A1CF", "#7C5468", "#B8702F", "#282834", "#453E63", "#0081C0"],
+  tints: ["#E8EEF5", "#F0E9EE", "#EAF1F3", "#F6EDE4", "#ECF0EA", "#F2EFE6"],
+};
+
+const archiveFonts = {
+  serif: "Georgia, 'Songti SC', 'STSong', 'SimSun', serif",
+  didot: "Didot, 'Bodoni 72', Georgia, 'Songti SC', serif",
+  // 内容库各页正文：档案馆整页衬线；采集器页正文：系统无衬线（与 RN-web 的 System 栈一致）
+  body: "Georgia, 'Songti SC', 'STSong', 'SimSun', serif",
+  sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+  // 眉题 / 小标签：年志用等宽；档案馆里内容库沿用衬线、采集器页沿用无衬线，各自与改版前一致
+  mono: "Georgia, 'Songti SC', 'STSong', 'SimSun', serif",
+  setupMono: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+};
+const traceFonts: typeof archiveFonts = {
+  serif: "Fraunces, 'Songti SC', 'STSong', 'Noto Serif SC', Georgia, serif",
+  didot: "Fraunces, 'Songti SC', 'STSong', 'Noto Serif SC', Georgia, serif",
+  body: "Inter, 'PingFang SC', 'Helvetica Neue', sans-serif",
+  sans: "Inter, 'PingFang SC', 'Helvetica Neue', sans-serif",
+  mono: "'SFMono-Regular', ui-monospace, 'Roboto Mono', monospace",
+  setupMono: "'SFMono-Regular', ui-monospace, 'Roboto Mono', monospace",
+};
+
+// 档案页面是直角的；年志的卡片 12–16、按钮是胶囊
+const archiveRadii = { small: 0, medium: 0, large: 0, pill: 0 };
+const traceRadii: typeof archiveRadii = { small: 8, medium: 12, large: 16, pill: 50 };
+
+export const palettes: Record<AppStyle, { colors: WorkspacePalette; fonts: typeof archiveFonts; radii: typeof archiveRadii }> = {
+  archive: { colors: archive, fonts: archiveFonts, radii: archiveRadii },
+  trace: { colors: trace, fonts: traceFonts, radii: traceRadii },
+};
+
+const web = Platform.OS === "web";
+const cssName = (key: string, index?: number) => `--ws-${key.replace(/[A-Z]/gu, (char) => `-${char.toLowerCase()}`)}${index === undefined ? "" : `-${index}`}`;
+
+function colorTokens(palette: WorkspacePalette): WorkspacePalette {
+  if (!web) return palette;
+  return Object.fromEntries(Object.entries(palette).map(([key, value]) => [
+    key,
+    Array.isArray(value) ? value.map((_, index) => `var(${cssName(key, index)})`) : `var(${cssName(key)})`,
+  ])) as WorkspacePalette;
+}
+
+export const workspaceColors = colorTokens(archive);
+
+export const workspaceFonts: Record<keyof typeof archiveFonts, string | undefined> = web
+  ? { serif: "var(--ws-font-serif)", didot: "var(--ws-font-didot)", body: "var(--ws-font-body)", sans: "var(--ws-font-sans)", mono: "var(--ws-font-mono)", setupMono: "var(--ws-font-setup-mono)" }
+  : { serif: undefined, didot: undefined, body: undefined, sans: undefined, mono: undefined, setupMono: undefined };
+
+export const workspaceRadii: Record<keyof typeof archiveRadii, number | string> = web
+  ? { small: "var(--ws-radius-small)", medium: "var(--ws-radius-medium)", large: "var(--ws-radius-large)", pill: "var(--ws-radius-pill)" }
+  : archiveRadii;
+
+// 带透明度的 token。RN-web 只放行以 `var(` 开头的颜色字符串，所以借一个从不定义的变量的回退值把 color-mix 送进 CSS。
+export function alpha(token: string, ratio: number): string {
+  if (!web) return `${token}${Math.round(ratio * 255).toString(16).padStart(2, "0")}`;
+  return `var(--ws-unset, color-mix(in srgb, ${token} ${Math.round(ratio * 100)}%, transparent))`;
+}
+
+function declarations(style: AppStyle): string {
+  const { colors, fonts, radii } = palettes[style];
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(colors)) {
+    if (Array.isArray(value)) value.forEach((item, index) => lines.push(`${cssName(key, index)}:${item}`));
+    else lines.push(`${cssName(key)}:${value}`);
+  }
+  for (const [key, value] of Object.entries(fonts)) lines.push(`${cssName(`font-${key}`)}:${value}`);
+  for (const [key, value] of Object.entries(radii)) lines.push(`--ws-radius-${key}:${value}px`);
+  return lines.join(";");
+}
+
+export function themeCss(): string {
+  return `:root{${declarations("archive")}}\n:root[data-style="trace"]{${declarations("trace")}}\nhtml,body{background:var(--ws-canvas)}`;
+}
+
+const STYLE_ID = "content-insights-theme";
+
+export function ensureThemeStyles(doc: Document | undefined = globalThis.document): void {
+  if (!doc || doc.getElementById(STYLE_ID)) return;
+  const style = doc.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = themeCss();
+  doc.head.appendChild(style);
+}

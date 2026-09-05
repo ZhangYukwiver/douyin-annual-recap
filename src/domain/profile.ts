@@ -336,31 +336,32 @@ function chatMetrics(
 }
 
 function profileReason(title: ProfileTitle, metrics: ProfileMetrics): string {
+  // Plain sentences: this line is read on the report and on the story page, not in a log.
   const pct = (value: number | null) => value === null ? "待补充" : `${Math.round(value)}%`;
   const requestedDays = metrics.windowRequestedDays ?? PROFILE_WINDOW_DAYS;
   const windowText = metrics.windowed
     ? metrics.windowLimited
-      ? `近${requestedDays}天窗口（观看记录实际覆盖${metrics.windowObservedDays ?? 1}天）`
-      : `近${requestedDays}天窗口`
+      ? `称号只看最近 ${requestedDays} 天的记录（观看记录实际只覆盖了 ${metrics.windowObservedDays ?? 1} 天）`
+      : `称号只看最近 ${requestedDays} 天的记录`
     : metrics.windowUnavailable
-      ? "未建立时间窗口（观看时间不可用，暂用现有记录）"
-      : "全量有效记录";
-  const prefix = `${windowText}（仅用于称号判定）；`;
+      ? "观看时间不可用，未建立时间窗口，暂时按现有记录判定"
+      : "称号按全部有效记录判定";
+  const prefix = `${windowText}：`;
   switch (title) {
     case "万象漫游者":
-      return `${prefix}综合指数 ${pct(metrics.overallScore)}；优势在词条广度与创作者覆盖。`;
+      return `${prefix}综合指数 ${pct(metrics.overallScore)}，最突出的是词条的广度和创作者的覆盖面。`;
     case "深度沉浸者":
-      return `${prefix}综合指数 ${pct(metrics.overallScore)}；优势在观看深度与收藏倾向。`;
+      return `${prefix}综合指数 ${pct(metrics.overallScore)}，最突出的是看得深、爱收藏。`;
     case "珍藏策展人":
-      return `${prefix}综合指数 ${pct(metrics.overallScore)}；优势在点赞与收藏转化。`;
+      return `${prefix}综合指数 ${pct(metrics.overallScore)}，最突出的是点赞和收藏的转化。`;
     case "社交回响者":
-      return `${prefix}综合指数 ${pct(metrics.overallScore)}；优势在聊天连接与交流频率。`;
+      return `${prefix}综合指数 ${pct(metrics.overallScore)}，最突出的是聊天的连接和交流频率。`;
     case "多维共鸣者":
-      return `${prefix}综合指数 ${pct(metrics.overallScore)}，多个行为维度同时活跃。`;
+      return `${prefix}综合指数 ${pct(metrics.overallScore)}，几个行为维度都很活跃。`;
     case "静默观测者":
-      return `${prefix}综合指数 ${pct(metrics.overallScore)}，当前行为尚未形成突出单一倾向。`;
+      return `${prefix}综合指数 ${pct(metrics.overallScore)}，目前还没有形成突出的单一倾向。`;
     case "等待更多足迹":
-      return `${prefix}有效行为样本不足，继续积累后再判定。`;
+      return `${prefix}有效的行为样本还不够，等积累多一些再判定。`;
   }
 }
 

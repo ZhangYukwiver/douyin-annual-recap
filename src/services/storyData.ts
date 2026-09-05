@@ -8,6 +8,8 @@ export const STORY_STORAGE_KEY = "content-insights.story";
 
 export interface StoryRanked { name: string; count: number; share: number }
 export interface StoryCard { title: string; author: string | null; coverUrl: string | null; url: string | null; kind: "liked" | "favorite" | "watch" }
+/** A ranked tag plus the one card that carries it, so the roll can put a related cover under each headline. */
+export interface StoryTopic extends StoryRanked { card: StoryCard | null }
 export interface StoryConversation { name: string; kind: ChatConversationSummary["kind"]; avatarUrl: string | null; messageCount: number; ownMessageCount: number }
 export interface StoryHeatRef { title: string; count: number; url: string | null }
 /** Popularity of the content itself (like counts as recorded), never a claim about the person. */
@@ -72,7 +74,7 @@ export interface StoryData {
   progress: { done: number; mid: number; shallow: number } | null;
   recent: StoryCard[];
   topTopic: StoryRanked | null;
-  topics: StoryRanked[];
+  topics: StoryTopic[];
   topCreator: { name: string; unique: number; avatarUrl: string | null } | null;
   topicsCount: number;
   creators: StoryRanked[];
@@ -199,6 +201,9 @@ export function buildStoryData(model: ReportModel, input: StoryInput): StoryData
     ["已看进度", progressRows.length, records.watch_history.length],
   ] as Array<[string, number, number]>).map(([label, count, base]) => ({ label, count, base, share: base ? count / base : 0 }));
 
+  const pool = cardPool(records), usedCards = new Set<string>();
+  // all ten ranked tags, not eight: the roll drops compound tags (高达模型 next to 模型) and fills the gap from further down
+  const topics: StoryTopic[] = model.topics.map((topic) => ({ ...topic, card: topicCard(pool, topic.name, usedCards) }));
   const longestRow = rows.filter(({ record }) => typeof record.durationSeconds === "number" && Number.isFinite(record.durationSeconds)).sort((a, b) => b.record.durationSeconds! - a.record.durationSeconds!)[0];
   const length: StoryLength = { seconds: model.attentionSeconds, medianDuration: lengths.length ? median(lengths) : null, longest: longestRow ? { title: longestRow.record.title?.trim() || "未命名内容", seconds: longestRow.record.durationSeconds! } : null };
 
@@ -220,9 +225,9 @@ export function buildStoryData(model: ReportModel, input: StoryInput): StoryData
     timeSources,
     intersection: model.intersection,
     progress: bands,
-    recent: recentCards(records),
+    recent: recentCards(pool),
     topTopic: model.topics[0] ?? null,
-    topics: model.topics.slice(0, 8),
+    topics,
     topCreator,
     media,
     durations,
@@ -252,24 +257,45 @@ export function clearStoryData(storage = globalThis.localStorage): void {
   try { storage?.removeItem(STORY_STORAGE_KEY); } catch { /* nothing stored */ }
 }
 
-// Latest kept items first (liked + favorite), topped up with recent watches; one card per content.
-function recentCards(records: PersonalRecordCollection): StoryCard[] {
-  const tagged: Array<{ record: PersonalVideoRecord; kind: StoryCard["kind"] }> = [
-    ...records.liked_videos.map((record) => ({ record, kind: "liked" as const })),
-    ...records.favorite_videos.map((record) => ({ record, kind: "favorite" as const })),
+type TaggedRecord = { record: PersonalVideoRecord; kind: StoryCard["kind"] };
+// Kept items first (liked + favorite, latest first), then watches, latest first.
+function cardPool(records: PersonalRecordCollection): TaggedRecord[] {
+  const byTime = (list: TaggedRecord[]) => list.slice().sort((a, b) => (validTime(b.record.occurredAt) ?? 0) - (validTime(a.record.occurredAt) ?? 0));
+  return [
+    ...byTime([...records.liked_videos.map((record) => ({ record, kind: "liked" as const })), ...records.favorite_videos.map((record) => ({ record, kind: "favorite" as const }))]),
+    ...byTime(records.watch_history.map((record) => ({ record, kind: "watch" as const }))),
   ];
-  const watched = records.watch_history.map((record) => ({ record, kind: "watch" as const }));
-  const byTime = (list: typeof tagged) => list.slice().sort((a, b) => (validTime(b.record.occurredAt) ?? 0) - (validTime(a.record.occurredAt) ?? 0));
+}
+const toCard = ({ record, kind }: TaggedRecord): StoryCard => ({ title: record.title?.trim() || "未命名内容", author: record.author?.trim() || null, coverUrl: record.coverUrl ?? null, url: record.url ?? null, kind });
+
+// The latest four contents, one card each.
+function recentCards(pool: TaggedRecord[]): StoryCard[] {
   const seen = new Set<string>();
   const cards: StoryCard[] = [];
-  for (const { record, kind } of [...byTime(tagged), ...byTime(watched)]) {
+  for (const item of pool) {
     if (cards.length >= 4) break;
-    const key = recordKey(record);
+    const key = recordKey(item.record);
     if (seen.has(key)) continue;
     seen.add(key);
-    cards.push({ title: record.title?.trim() || "未命名内容", author: record.author?.trim() || null, coverUrl: record.coverUrl ?? null, url: record.url ?? null, kind });
+    cards.push(toCard(item));
   }
   return cards;
+}
+
+// The card that carries a tag: one not already given to an earlier tag first (a hashtag-heavy video must not fill the whole roll),
+// then a real cover over a bare one, a tag visible in the title over a structured-only one, then the latest.
+function topicCard(pool: TaggedRecord[], topic: string, used: Set<string>): StoryCard | null {
+  const key = topic.toLowerCase();
+  const has = (terms: string[]) => terms.some((term) => term.toLowerCase() === key);
+  let best: { item: TaggedRecord; score: number } | null = null;
+  for (const item of pool) {
+    if (!has(termsOf(item.record))) continue;
+    const score = (used.has(recordKey(item.record)) ? 0 : 4) + (item.record.coverUrl ? 2 : 0) + (has(hashtags(item.record.title)) ? 1 : 0);
+    if (!best || score > best.score) best = { item, score };
+  }
+  if (!best) return null;
+  used.add(recordKey(best.item.record));
+  return toCard(best.item);
 }
 
 function chatSummary(messages: ChatMessage[], conversations: ChatConversationSummary[]): StoryChat {

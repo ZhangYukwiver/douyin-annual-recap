@@ -14,13 +14,12 @@ import {
   attentionPattern,
   contentPattern,
   creatorsPattern,
-  heatColors,
   pctLabel,
   rhythmPattern,
   smoothPath,
   type ReportModel,
 } from "./ReportWorkspace";
-import { workspaceColors as color, workspaceFonts as font } from "./workspaceTheme";
+import { alpha, workspaceColors as color, workspaceFonts as font, workspaceRadii as radius } from "./workspaceTheme";
 
 export interface ReportDashboardProps {
   mobile: boolean;
@@ -36,7 +35,9 @@ const weekdayNames = ["周一", "周二", "周三", "周四", "周五", "周六"
 const monthNames = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
 const TEAL = color.cyan;
 const GOLD = color.accent;
-const sliceColors = ["#6E8C8F", "#C59861", "#4E787C", "#A8804F", "#8FA9AB", "#8A6238"];
+// 热力与饼图的色阶跟整体风格走（workspaceTheme）
+const heatColors = color.heat;
+const sliceColors = color.slices;
 
 /**
  * 持续报告：与故事页（ReportWorkspace 十二章）同源的一屏读数。
@@ -563,7 +564,7 @@ function Funnel({ steps }: { steps: Array<{ label: string; value: number | null 
           <View style={styles.funnelTrack}>
             <View style={[styles.funnelBlock, {
               width: `${step.value === null ? 0 : Math.max(3, step.value)}%`,
-              backgroundColor: index === 0 ? "#3F5C5E" : index === 1 ? "#4E787C" : index === 2 ? TEAL : GOLD,
+              backgroundColor: index === 0 ? color.funnel0 : index === 1 ? color.funnel1 : index === 2 ? TEAL : GOLD,
             }]} />
           </View>
           <Text style={styles.funnelValue}>{pctLabel(step.value)}</Text>
@@ -655,9 +656,9 @@ function MonthCurve({ months, peak }: { months: number[]; peak: number | null })
 /** 三类列表的交集韦恩图。 */
 function Venn({ intersection, totals }: { intersection: ReportModel["intersection"]; totals: { favorite: number; liked: number; watch: number } }) {
   const circles = [
-    { cx: 100, cy: 52, label: "观看", tone: "#7FB0B4", total: totals.watch, tx: 100, ty: 18 },
+    { cx: 100, cy: 52, label: "观看", tone: color.vennWatch, total: totals.watch, tx: 100, ty: 18 },
     { cx: 74, cy: 96, label: "喜欢", tone: GOLD, total: totals.liked, tx: 34, ty: 126 },
-    { cx: 126, cy: 96, label: "收藏", tone: "#A8804F", total: totals.favorite, tx: 166, ty: 126 },
+    { cx: 126, cy: 96, label: "收藏", tone: color.vennFavorite, total: totals.favorite, tx: 166, ty: 126 },
   ];
   return (
     <View>
@@ -695,9 +696,9 @@ function Matrix({ labels, matrix }: { labels: string[]; matrix: Array<Array<numb
                   ? color.surfaceRaised
                   : value === null
                     ? color.surfaceMuted
-                    : value >= 0
-                      ? `rgba(197,152,97,${(0.12 + Math.abs(value) * 0.72).toFixed(2)})`
-                      : `rgba(110,140,143,${(0.12 + Math.abs(value) * 0.72).toFixed(2)})`,
+                    : value >= 0 ? GOLD : TEAL,
+                // 相关性强弱用透明度表达；对角线与空值格子保持实色
+                opacity: rowIndex === columnIndex || value === null ? 1 : 0.12 + Math.abs(value) * 0.72,
               }]}
             />
           ))}
@@ -708,8 +709,8 @@ function Matrix({ labels, matrix }: { labels: string[]; matrix: Array<Array<numb
         {labels.map((label) => <Text key={label} numberOfLines={1} style={styles.matrixTick}>{label.slice(0, 2)}</Text>)}
       </View>
       <View style={styles.legendInline}>
-        <View style={[styles.legendSwatch, { backgroundColor: "rgba(197,152,97,0.8)" }]} /><Text style={styles.legendLabel}>正相关</Text>
-        <View style={[styles.legendSwatch, { backgroundColor: "rgba(110,140,143,0.8)" }]} /><Text style={styles.legendLabel}>负相关</Text>
+        <View style={[styles.legendSwatch, { backgroundColor: alpha(GOLD, 0.8) }]} /><Text style={styles.legendLabel}>正相关</Text>
+        <View style={[styles.legendSwatch, { backgroundColor: alpha(TEAL, 0.8) }]} /><Text style={styles.legendLabel}>负相关</Text>
       </View>
     </View>
   );
@@ -825,25 +826,25 @@ function formatTime(value: string | null): string {
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-// ponytail: 与档案风一致的默认衬线字体，见 workspaceTheme
-const archiveType = { fontFamily: font.serif } as const;
+// ponytail: 默认正文字体跟整体风格走（档案馆衬线 / 年志 Inter），见 workspaceTheme
+const bodyType = { fontFamily: font.body } as const;
 function Text({ style, ...rest }: TextProps) {
-  return <RNText {...rest} style={[archiveType, style]} />;
+  return <RNText {...rest} style={[bodyType, style]} />;
 }
 
 const styles = StyleSheet.create({
   content: { padding: 20, paddingBottom: 40 },
   contentMobile: { padding: 12, paddingBottom: 88 },
 
-  coverage: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: 12, marginTop: 14, paddingHorizontal: 14, paddingVertical: 10, borderLeftWidth: 3, borderLeftColor: color.amber, backgroundColor: color.amberSoft },
-  coverageLabel: { color: color.amber, fontSize: 10, fontWeight: "600", letterSpacing: 2 },
+  coverage: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: 12, marginTop: 14, paddingHorizontal: 14, paddingVertical: 10, borderLeftWidth: 3, borderLeftColor: color.amber, borderRadius: radius.small, backgroundColor: color.amberSoft },
+  coverageLabel: { color: color.amber, fontSize: 10, fontWeight: "600", letterSpacing: 2, fontFamily: font.mono },
   coverageText: { flex: 1, color: color.textSecondary, fontSize: 10.5, lineHeight: 17 },
 
   board: { position: "relative", marginTop: 12 },
-  tile: { minWidth: 0, overflow: "hidden", paddingHorizontal: 13, paddingVertical: 13, borderWidth: 1, borderColor: color.border, backgroundColor: color.surface },
+  tile: { minWidth: 0, overflow: "hidden", paddingHorizontal: 13, paddingVertical: 13, borderWidth: 1, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface, boxShadow: color.shadow },
   tileHead: { flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", gap: 8 },
-  tileTitle: { flexShrink: 0, color: color.text, fontSize: 15, fontWeight: "600", letterSpacing: 2.5 },
-  tileEn: { flexGrow: 1, flexShrink: 1, color: color.textMuted, fontSize: 10, letterSpacing: 1.5 },
+  tileTitle: { flexShrink: 0, color: color.text, fontSize: 15, fontWeight: "600", letterSpacing: 2.5, fontFamily: font.serif },
+  tileEn: { flexGrow: 1, flexShrink: 1, color: color.textMuted, fontSize: 10, letterSpacing: 1.5, fontFamily: font.mono },
   tileMeta: { flexShrink: 0, maxWidth: "100%", color: color.textMuted, fontSize: 9.5, letterSpacing: 1 },
   tileBody: { marginTop: 10 },
   tileFoot: { flexDirection: "row", gap: 8, paddingTop: 10 },

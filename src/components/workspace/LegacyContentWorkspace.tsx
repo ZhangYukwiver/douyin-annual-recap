@@ -48,10 +48,11 @@ import type {
   PersonalVideoRecord,
 } from "../../domain/personalRecords";
 import type { CollectorStatus } from "../../services/localCollector";
+import type { AppStyle } from "../../services/appStyle";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { ReportDashboard } from "./ReportDashboard";
 import { buildReportModel } from "./ReportWorkspace";
-import { workspaceColors as color, workspaceFonts as font, workspaceRadii as radius } from "./workspaceTheme";
+import { alpha, workspaceColors as color, workspaceFonts as font, workspaceRadii as radius } from "./workspaceTheme";
 
 export type WorkspaceViewKey = PersonalRecordType | "summary" | "highlights" | "chat";
 
@@ -74,6 +75,8 @@ export interface ContentWorkspaceProps {
   onSync: () => void;
   onTogglePrivacy: () => void;
   privacy: boolean;
+  /** 整体风格：文案与纸纹装饰跟着走，配色本身由 workspaceTheme 的 CSS 变量切换 */
+  appStyle?: AppStyle;
 }
 
 export type RecordDownloadState = "idle" | "queued" | "running" | "complete" | "failed";
@@ -99,10 +102,10 @@ const annualNavItems = navItems.slice(4);
 
 const webPointer = Platform.OS === "web" ? ({ cursor: "pointer" } as object) : null;
 
-// ponytail: 包一层给全页默认衬线字体，比给上百条 style 逐个加 fontFamily 省
-const archiveType = { fontFamily: font.serif } as const;
+// ponytail: 包一层给全页默认正文字体（档案馆衬线 / 年志 Inter），比给上百条 style 逐个加 fontFamily 省
+const bodyType = { fontFamily: font.body } as const;
 function Text({ style, ...rest }: TextProps) {
-  return <RNText {...rest} style={[archiveType, style]} />;
+  return <RNText {...rest} style={[bodyType, style]} />;
 }
 
 export function ContentWorkspace({
@@ -124,9 +127,12 @@ export function ContentWorkspace({
   onSync,
   onTogglePrivacy,
   privacy,
+  appStyle = "archive",
 }: ContentWorkspaceProps) {
   const { width } = useWindowDimensions();
   const mobile = width < 720;
+  const trace = appStyle === "trace";
+  const replayLabel = trace ? "重读内容年志" : "重看内容故事";
   const reportView = isReportView(activeView);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // 持续报告首次打开时自动收起；用户仍可用左上角按钮临时展开。
@@ -188,7 +194,7 @@ export function ContentWorkspace({
       {!mobile ? <SidebarToggle collapsed={compactSidebar} onPress={toggleSidebar} /> : null}
       {!mobile ? (
         <View testID="workspace-sidebar" style={[styles.sidebar, compactSidebar && styles.sidebarCompact]}>
-          <Brand compact={compactSidebar} />
+          <Brand compact={compactSidebar} trace={trace} />
           <View accessibilityRole="tablist" style={styles.sidebarNav}>
             {!compactSidebar ? <Text style={styles.sidebarSectionLabel}>内容记录</Text> : null}
             {recordNavItems.map((item) => (
@@ -215,7 +221,7 @@ export function ContentWorkspace({
           </View>
           <View style={styles.sidebarFooter}>
             <Pressable
-              accessibilityLabel="重看内容故事"
+              accessibilityLabel={replayLabel}
               accessibilityRole="button"
               disabled={!report || report.status === "empty"}
               onPress={onReplayStory}
@@ -228,7 +234,7 @@ export function ContentWorkspace({
               ]}
             >
               <View style={styles.navIconWrap}><Sparkles color={color.accent} size={20} strokeWidth={2} /></View>
-              {!compactSidebar ? <Text style={styles.navLabel}>重看内容故事</Text> : null}
+              {!compactSidebar ? <Text style={styles.navLabel}>{replayLabel}</Text> : null}
             </Pressable>
             {!compactSidebar ? (
               <View style={styles.localBadge}>
@@ -255,7 +261,7 @@ export function ContentWorkspace({
       <View style={[styles.main, mobile && styles.mainMobile]}>
         <View testID="workspace-topbar" style={[styles.topbar, mobile && styles.topbarMobile]}>
           <View style={styles.topbarHeading}>
-            <Text style={styles.topbarEyebrow}>{reportView ? "LIVING REPORT" : "CONTENT ARCHIVE"}</Text>
+            <Text style={styles.topbarEyebrow}>{reportView ? "LIVING REPORT" : trace ? "CONTENT STREAMS" : "CONTENT ARCHIVE"}</Text>
             <View style={styles.topbarTitleRow}>
               <Text numberOfLines={1} style={[styles.topbarTitle, mobile && styles.topbarTitleMobile]}>{currentNav.label}</Text>
               <Text style={styles.topbarCount}>{counts[activeView].toLocaleString("zh-CN")}</Text>
@@ -264,7 +270,7 @@ export function ContentWorkspace({
           <View style={styles.topbarActions}>
             {mobile ? (
               <Pressable
-                accessibilityLabel="重看内容故事"
+                accessibilityLabel={replayLabel}
                 accessibilityRole="button"
                 onPress={onReplayStory}
                 style={({ pressed }) => [styles.toolbarButton, pressed && styles.buttonPressed, webPointer]}
@@ -352,7 +358,7 @@ export function ContentWorkspace({
         )}
       </View>
 
-      {Platform.OS === "web" ? (
+      {Platform.OS === "web" && !trace ? (
         <>
           <View pointerEvents="none" style={styles.paperGrain}>
             <Image resizeMode="repeat" source={require("./assets/paper-grain.png")} style={styles.paperGrainImg} />
@@ -412,7 +418,7 @@ function SidebarToggle({ collapsed, onPress }: { collapsed: boolean; onPress: ()
   );
 }
 
-function Brand({ compact }: { compact: boolean }) {
+function Brand({ compact, trace }: { compact: boolean; trace: boolean }) {
   return (
     <View style={[styles.brand, compact && styles.brandCompact]}>
       <View style={styles.brandMarkWrap}>
@@ -422,8 +428,8 @@ function Brand({ compact }: { compact: boolean }) {
       </View>
       {!compact ? (
         <View>
-          <Text style={styles.brandName}>足迹</Text>
-          <Text style={styles.brandMeta}>我的内容档案</Text>
+          <Text style={styles.brandName}>{trace ? "内容年志" : "足迹"}</Text>
+          <Text style={styles.brandMeta}>{trace ? "TRACE · ANNUAL" : "我的内容档案"}</Text>
         </View>
       ) : null}
     </View>
@@ -459,7 +465,7 @@ function NavButton({
         webPointer,
       ]}
     >
-      <View style={[styles.navIconWrap, selected && { backgroundColor: `${item.accent}22` }]}>
+      <View style={[styles.navIconWrap, selected && { backgroundColor: alpha(item.accent, 0.13) }]}>
         <Icon color={selected ? item.accent : color.textMuted} size={20} strokeWidth={selected ? 2.5 : 2} />
       </View>
       {!compact ? (
@@ -1067,14 +1073,13 @@ function hashString(value: string): number {
 }
 
 function fallbackColor(value: string): string {
-  const palette = ["#1B2422", "#232019", "#1E1A16", "#182120", "#241E17", "#1C1F1E"];
-  return palette[hashString(value) % palette.length]!;
+  return color.tints[hashString(value) % color.tints.length]!;
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, minHeight: "100%", padding: 18, backgroundColor: color.canvas },
   rootMobile: { padding: 0 },
-  stage: { position: "relative", flex: 1, minHeight: 0, flexDirection: "row", borderWidth: 1, borderColor: color.frame, backgroundColor: color.surface },
+  stage: { position: "relative", flex: 1, minHeight: 0, flexDirection: "row", overflow: "hidden", borderWidth: 1, borderColor: color.frame, borderRadius: radius.large, backgroundColor: color.surface, boxShadow: color.shadow },
   stageMobile: { borderWidth: 0 },
   paperGrain: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, opacity: 0.3, zIndex: 40 },
   paperGrainImg: { width: "100%", height: "100%" },
@@ -1093,8 +1098,8 @@ const styles = StyleSheet.create({
   brandMarkCyan: { position: "absolute", width: 26, height: 26, left: 3, top: 4, borderRadius: 2, backgroundColor: color.cyan },
   brandMarkRed: { position: "absolute", width: 26, height: 26, right: 3, bottom: 4, borderRadius: 2, backgroundColor: color.accent },
   brandMarkCore: { width: 26, height: 26, zIndex: 2, alignItems: "center", justifyContent: "center", borderRadius: 2, backgroundColor: color.black },
-  brandName: { color: color.text, fontSize: 17, fontWeight: "700", letterSpacing: 4 },
-  brandMeta: { color: color.textMuted, fontSize: 10, letterSpacing: 1.4, marginTop: 3 },
+  brandName: { color: color.text, fontSize: 17, fontWeight: "700", letterSpacing: 4, fontFamily: font.serif },
+  brandMeta: { color: color.textMuted, fontSize: 10, letterSpacing: 1.4, marginTop: 3, fontFamily: font.mono },
   sidebarNav: { flex: 1, gap: 4, paddingTop: 20 },
   sidebarSectionLabel: { color: color.textMuted, fontSize: 9, fontWeight: "700", letterSpacing: 3, paddingHorizontal: 8, paddingBottom: 7 },
   sidebarSectionLabelAnnual: { marginTop: 15 },
@@ -1122,9 +1127,9 @@ const styles = StyleSheet.create({
   topbar: { height: 72, flexDirection: "row", alignItems: "center", paddingHorizontal: 28, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border, backgroundColor: "transparent" },
   topbarMobile: { height: 64, paddingHorizontal: 16 },
   topbarHeading: { flex: 1, minWidth: 0 },
-  topbarEyebrow: { color: color.accent, fontSize: 9, fontWeight: "600", letterSpacing: 3.5 },
+  topbarEyebrow: { color: color.accent, fontSize: 9, fontWeight: "600", letterSpacing: 3.5, fontFamily: font.mono },
   topbarTitleRow: { flexDirection: "row", alignItems: "baseline", gap: 9, marginTop: 3 },
-  topbarTitle: { maxWidth: "80%", color: color.text, fontSize: 20, fontWeight: "600", letterSpacing: 3 },
+  topbarTitle: { maxWidth: "80%", color: color.text, fontSize: 20, fontWeight: "600", letterSpacing: 3, fontFamily: font.serif },
   topbarTitleMobile: { fontSize: 17 },
   topbarCount: { color: color.textMuted, fontSize: 13, fontFamily: font.didot, letterSpacing: 1, fontVariant: ["tabular-nums"] },
   topbarActions: { flexDirection: "row", alignItems: "center", gap: 6 },
@@ -1137,7 +1142,7 @@ const styles = StyleSheet.create({
   galleryContentEmpty: { flexGrow: 1 },
   galleryHeader: { minHeight: 60, flexDirection: "row", alignItems: "center", marginBottom: 14 },
   galleryHeaderCopy: { flex: 1, minWidth: 0 },
-  galleryTitle: { color: color.text, fontSize: 16, fontWeight: "600", letterSpacing: 2.5 },
+  galleryTitle: { color: color.text, fontSize: 16, fontWeight: "600", letterSpacing: 2.5, fontFamily: font.serif },
   galleryMeta: { color: color.textMuted, fontSize: 10, marginTop: 5 },
   layoutSwitch: { height: 42, flexDirection: "row", padding: 3, borderWidth: 1, borderColor: color.border, borderRadius: radius.medium, backgroundColor: color.sidebar },
   layoutButton: { width: 40, height: 34, alignItems: "center", justifyContent: "center", borderRadius: radius.small },
@@ -1150,7 +1155,7 @@ const styles = StyleSheet.create({
   tileImage: { width: "100%", height: "100%" },
   fallbackVisual: { flex: 1, alignItems: "center", justifyContent: "center" },
   fallbackDisc: { width: 62, height: 62, alignItems: "center", justifyContent: "center", borderWidth: 1, borderRadius: 31, backgroundColor: color.scrim },
-  fallbackIndex: { position: "absolute", right: 10, bottom: 8, color: "rgba(239,223,204,0.20)", fontSize: 30, fontWeight: "900" },
+  fallbackIndex: { position: "absolute", right: 10, bottom: 8, color: color.text, opacity: 0.2, fontSize: 30, fontWeight: "900" },
   tileTopMeta: { position: "absolute", top: 9, right: 9, left: 9, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   typeBadge: { width: 8, height: 8, borderRadius: 4 },
   durationBadge: { color: color.white, fontSize: 10, fontWeight: "800", paddingHorizontal: 6, paddingVertical: 3, borderRadius: radius.small, backgroundColor: color.scrim },
@@ -1205,9 +1210,9 @@ const styles = StyleSheet.create({
   rowTopic: { fontSize: 10, fontWeight: "700" },
   emptyState: { flex: 1, minHeight: 360, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   emptyIcon: { width: 58, height: 58, alignItems: "center", justifyContent: "center", borderRadius: 29, borderWidth: 1, borderColor: color.border },
-  emptyTitle: { color: color.text, fontSize: 17, fontWeight: "600", letterSpacing: 3, marginTop: 16 },
+  emptyTitle: { color: color.text, fontSize: 17, fontWeight: "600", letterSpacing: 3, marginTop: 16, fontFamily: font.serif },
   emptyDetail: { color: color.textMuted, fontSize: 12, lineHeight: 19, textAlign: "center", marginTop: 7 },
-  emptyButton: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 20, paddingHorizontal: 16, borderRadius: radius.medium, backgroundColor: color.cyan },
+  emptyButton: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 20, paddingHorizontal: 16, borderRadius: radius.pill, backgroundColor: color.cyan },
   emptyButtonText: { color: color.black, fontSize: 12, fontWeight: "900" },
   bottomNav: { position: "absolute", right: 0, bottom: 0, left: 0, height: 68, flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border, backgroundColor: color.sidebar, zIndex: 20 },
   bottomNavItem: { position: "relative", flex: 1, minWidth: 0, alignItems: "center", justifyContent: "center", gap: 4 },
@@ -1217,8 +1222,8 @@ const styles = StyleSheet.create({
   dashboardHeaderCopy: { flex: 1, minWidth: 0 },
   dashboardPeriodMobile: { width: "100%", alignItems: "flex-start", paddingLeft: 0, paddingTop: 14, borderTopWidth: 1, borderTopColor: color.border, borderLeftWidth: 0 },
   dashboardPeriodMeta: { color: color.textMuted, fontSize: 10, lineHeight: 16, letterSpacing: 0.8, marginTop: 6 },
-  summaryEyebrow: { color: color.accent, fontSize: 10, fontWeight: "600", letterSpacing: 3.5 },
-  summaryTitle: { maxWidth: 720, color: color.text, fontSize: 30, lineHeight: 40, fontWeight: "600", letterSpacing: 3, marginTop: 10 },
+  summaryEyebrow: { color: color.accent, fontSize: 10, fontWeight: "600", letterSpacing: 3.5, fontFamily: font.mono },
+  summaryTitle: { maxWidth: 720, color: color.text, fontSize: 30, lineHeight: 40, fontWeight: "600", letterSpacing: 3, marginTop: 10, fontFamily: font.serif },
   summaryTitleMobile: { fontSize: 24, lineHeight: 32 },
   summaryLead: { color: color.textSecondary, fontSize: 12.5, lineHeight: 21, letterSpacing: 0.8, marginTop: 12 },
   panelNotice: { color: color.amber, fontSize: 9, lineHeight: 15, marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: color.border },
@@ -1229,13 +1234,13 @@ const styles = StyleSheet.create({
   highlightCountValue: { color: color.text, fontSize: 40, lineHeight: 46, fontFamily: font.didot, fontVariant: ["tabular-nums"] },
   highlightsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14, marginTop: 18 },
   highlightsGridMobile: { flexDirection: "column" },
-  highlightCard: { width: "32%", minWidth: 260, minHeight: 338, overflow: "hidden", borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
+  highlightCard: { width: "32%", minWidth: 260, minHeight: 338, overflow: "hidden", borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface, boxShadow: color.shadow },
   highlightCardMobile: { width: "100%", minWidth: 0 },
   highlightCardEmpty: { opacity: 0.72 },
   highlightVisual: { position: "relative", height: 190, overflow: "hidden" },
   highlightImage: { width: "100%", height: "100%" },
   highlightFallback: { flex: 1, alignItems: "center", justifyContent: "center" },
-  highlightIndex: { position: "absolute", right: 14, bottom: 8, color: "rgba(239,223,204,0.20)", fontSize: 34, fontWeight: "900" },
+  highlightIndex: { position: "absolute", right: 14, bottom: 8, color: color.text, opacity: 0.2, fontSize: 34, fontWeight: "900" },
   highlightLabel: { position: "absolute", top: 12, left: 12, minHeight: 28, justifyContent: "center", paddingHorizontal: 9, borderWidth: 1, borderRadius: radius.small, backgroundColor: color.scrim },
   highlightLabelText: { color: color.white, fontSize: 9, fontWeight: "900" },
   highlightBody: { flex: 1, padding: 15 },
@@ -1247,12 +1252,12 @@ const styles = StyleSheet.create({
   highlightsFootnote: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16, paddingHorizontal: 14, borderLeftWidth: 3, borderLeftColor: color.amber, backgroundColor: color.amberSoft },
   highlightsFootnoteText: { flex: 1, color: color.textSecondary, fontSize: 10, lineHeight: 16 },
   livingChangeList: { gap: 12, marginTop: 18 },
-  livingChangeCard: { minHeight: 180, padding: 16, borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface },
+  livingChangeCard: { minHeight: 180, padding: 16, borderWidth: 1, borderTopWidth: 4, borderColor: color.border, borderRadius: radius.large, backgroundColor: color.surface, boxShadow: color.shadow },
   livingChangeHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   livingChangeEyebrow: { color: color.textMuted, fontSize: 9, fontWeight: "900", letterSpacing: 0.4 },
   livingChangeStatus: { color: color.green, fontSize: 9, fontWeight: "900" },
   livingChangeStatusMuted: { color: color.amber },
-  livingChangeTitle: { color: color.text, fontSize: 18, lineHeight: 24, fontWeight: "900", marginTop: 7 },
+  livingChangeTitle: { color: color.text, fontSize: 18, lineHeight: 24, fontWeight: "900", marginTop: 7, fontFamily: font.serif },
   livingChangeNarrative: { color: color.textSecondary, fontSize: 12, lineHeight: 19, marginTop: 8 },
   livingChangeSignal: { minHeight: 27, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 7, paddingHorizontal: 8, backgroundColor: color.surfaceRaised },
   livingChangeSignalLabel: { flex: 1, color: color.textSecondary, fontSize: 10, fontWeight: "800" },

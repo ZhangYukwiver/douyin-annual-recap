@@ -59,10 +59,15 @@ describe("story pages", () => {
     expect(story.status).toBe(200);
     expect(story.headers.get("content-security-policy")).toContain("script-src 'self' 'unsafe-inline'");
     expect(story.headers.get("content-security-policy")).toContain("fonts.googleapis.com");
+    // 内容年志在应用内以同源 iframe 承载
+    expect(story.headers.get("content-security-policy")).toContain("frame-ancestors 'self'");
     expect(story.headers.get("cache-control")).toBe("no-cache");
 
     const app = await fetch(`${runtime.url}/assets/app.js`);
     expect(app.headers.get("content-security-policy")).toContain("script-src 'self';");
     expect(app.headers.get("content-security-policy")).not.toContain("unsafe-inline';");
+    // 整体风格选“内容年志”时应用本身也要取同一组 Google 字体
+    expect(app.headers.get("content-security-policy")).toContain("font-src 'self' data: https://fonts.gstatic.com");
+    expect(app.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   });
 });

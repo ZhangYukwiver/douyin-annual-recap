@@ -111,6 +111,10 @@
     .nav-icon { width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: 50%; border: 1px solid rgba(180,184,180,.55); color: var(--cream); background: transparent; cursor: pointer; font-size: 13px; transition: color .4s ease; }
     body.nav-light .nav-icon { color: var(--charcoal); border-color: var(--fog); }
     .nav-icon:hover { border-color: var(--blue); }
+    /* framed inside the app (StoryFrame): a way back to the workspace */
+    [hidden] { display: none !important; }
+    .nav-btn.ghost { border-color: rgba(246,241,228,.35); color: var(--cream); transition: color .4s ease, border-color .4s ease; }
+    body.nav-light .nav-btn.ghost { color: var(--charcoal); border-color: var(--fog); }
 
     /* chapter rail */
     .rail { position: fixed; z-index: 35; right: 22px; top: 50%; transform: translateY(-50%); display: grid; gap: 12px; }
@@ -348,7 +352,7 @@
     .cerulean .mini-lines .ml b { color: #fff; }
     .cerulean .track { background: rgba(255,255,255,.22); }
     .cerulean .fill { background: #fff; }
-    .cell-foot { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--mist); color: var(--fog); font: 400 10px/1.6 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cell-foot { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--mist); color: var(--fog); font: 400 10px/1.6 var(--mono); }
     .cerulean .cell-foot { border-top-color: rgba(255,255,255,.28); color: rgba(255,255,255,.72); }
     .cell-metrics { display: flex; gap: 28px; margin-top: 20px; }
     .cell-metrics strong { margin-top: 0; font-size: 22px; }
@@ -612,6 +616,7 @@
     <div class="nav-right">
       <span id="clock">--:--</span>
       <button id="skyBtn" class="nav-icon" aria-label="切换卷首天空" title="切换卷首天空">◐</button>
+      <button id="toWorkspace" class="nav-btn ghost" hidden onclick="toWorkspace()">工作台</button>
       <button class="nav-btn" onclick="document.querySelector('#evidence').scrollIntoView({behavior:'smooth'})">数据口径 <span class="cir">→</span></button>
     </div>
   </header>
@@ -632,8 +637,8 @@
     <section class="window hero in" data-skystate="0" data-tone="dark" id="hero">
       <div class="hero-copy">
         <p class="eyebrow"><i></i>TRACE · <span data-slot="hero-year">二〇二五</span> · PERSONAL SIGNALS</p>
-        <h1>把这一年的停留，<br><b>打开成一卷。</b></h1>
-        <p class="hero-lead">观看、喜欢、收藏与聊天——四条在本地采集的数据流，被装订成一册可以回看的年志。每一个数字都有出处，每一条边界都被写明。</p>
+        <h1>把这一年的痕迹，<br><b>摊开成一卷。</b></h1>
+        <p class="hero-lead">观看、喜欢、收藏和聊天，这四类在本地采集的记录，装订成一册可以回看的年志。每个数字都有出处，每条边界都写得清楚。</p>
         <div class="hero-meta"><span data-slot="hero-unique">21 个独立内容</span><span data-slot="hero-days">28 个活跃日</span><span data-slot="hero-streams">4 条数据流</span><span>LOCAL · PRIVATE</span></div>
         <div class="hero-actions">
           <button class="btn btn-cream" onclick="document.querySelector('#w-sample').scrollIntoView({behavior:'smooth'})">开始阅读 <span class="cir">↓</span></button>
@@ -660,7 +665,7 @@
         </div>
         <div class="cols">
           <div data-reveal style="--i:1">
-            <p class="lead">观看历史、喜欢、收藏、聊天，是四种笔迹不同的记录。年志只对已经写下的字负责——不推断没有被记录的生活。</p>
+            <p class="lead">观看历史、喜欢、收藏、聊天，是四种笔迹不同的记录。年志只写已经记下的事，不去推断没有被记录的生活。</p>
             <div class="metrics">
               <div class="metric"><strong data-slot="unique" data-count="21">0</strong><span>独立内容 · 去重后</span></div>
               <div class="metric"><strong data-slot="days" data-count="28">0</strong><span>活跃日</span></div>
@@ -674,17 +679,17 @@
                 <div class="ml"><span>收藏</span><span class="track"><i class="fill" style="--w:27%"></i></span><b>24 个</b></div>
                 <div class="ml"><span>聊天</span><span class="track"><i class="fill" style="--w:0%"></i></span><b>—</b></div>
               </div>
-              <p class="note conc-note" data-slot="concentration-note">条越短，越集中：覆盖一半的记录只要更少的词条。</p>
+              <p class="note conc-note" data-slot="concentration-note">条越短越集中：只需要更少的词条，就能覆盖一半的记录。</p>
             </div>
-            <p class="note">观测范围 <b data-slot="range">2025-01-03 → 2025-12-20</b> · <span data-slot="source">演示快照 · 本地浏览器采集</span></p>
+            <p class="note"><b data-slot="range">这一卷记录的是 2025-01-03 到 2025-12-20 这段时间</b>，<span data-slot="source">数字来自演示快照</span>。</p>
           </div>
           <div class="board" data-reveal style="--i:2">
             <div class="board-head"><span>FOUR STREAMS</span><small data-slot="events">34 video events</small></div>
-            <div class="stream-row" data-slot="stream-watch"><span class="stream-name">观看历史<small>WATCH</small></span><span class="track"><i class="fill blue" style="--w:100%"></i></span><b class="stream-count" data-count="20">0</b><div class="stream-terms" data-slot="terms-watch"><i>#示例话题一</i><i>#示例话题二</i><i>#示例话题三</i><small>2,756 个不同话题 · 前 12 个覆盖 31% · 覆盖一半要 34 个</small></div></div>
-            <div class="stream-row" data-slot="stream-liked"><span class="stream-name">喜欢<small>LIKED</small></span><span class="track"><i class="fill" style="--w:40%"></i></span><b class="stream-count" data-count="8">0</b><div class="stream-terms" data-slot="terms-liked"><i>#示例话题一</i><i>#示例话题四</i><i>#示例话题五</i><small>2,361 个不同话题 · 前 12 个覆盖 18% · 覆盖一半要 90 个</small></div></div>
-            <div class="stream-row" data-slot="stream-favorite"><span class="stream-name">收藏<small>FAVORITE</small></span><span class="track"><i class="fill" style="--w:30%"></i></span><b class="stream-count" data-count="6">0</b><div class="stream-terms" data-slot="terms-favorite"><i>#示例话题六</i><i>#示例话题二</i><i>#示例话题七</i><small>318 个不同话题 · 前 12 个覆盖 33% · 覆盖一半要 24 个</small></div></div>
-            <div class="stream-row" data-slot="stream-chat"><span class="stream-name">聊天<small>CHAT</small></span><span class="track"><i class="fill" style="--w:3%"></i></span><b class="stream-count">—</b><div class="stream-terms" data-slot="terms-chat"><small>等待聊天读取</small></div></div>
-            <div class="board-foot">▤ <span>一次性读取 · 不持续监听 · 不上传云端</span></div>
+            <div class="stream-row" data-slot="stream-watch"><span class="stream-name">观看历史<small>WATCH</small></span><span class="track"><i class="fill blue" style="--w:100%"></i></span><b class="stream-count" data-count="20">0</b><div class="stream-terms" data-slot="terms-watch"><i>#示例话题一</i><i>#示例话题二</i><i>#示例话题三</i><small>共 2,756 个不同话题，前 12 个覆盖了 31% 的记录，覆盖一半需要 34 个。</small></div></div>
+            <div class="stream-row" data-slot="stream-liked"><span class="stream-name">喜欢<small>LIKED</small></span><span class="track"><i class="fill" style="--w:40%"></i></span><b class="stream-count" data-count="8">0</b><div class="stream-terms" data-slot="terms-liked"><i>#示例话题一</i><i>#示例话题四</i><i>#示例话题五</i><small>共 2,361 个不同话题，前 12 个覆盖了 18% 的记录，覆盖一半需要 90 个。</small></div></div>
+            <div class="stream-row" data-slot="stream-favorite"><span class="stream-name">收藏<small>FAVORITE</small></span><span class="track"><i class="fill" style="--w:30%"></i></span><b class="stream-count" data-count="6">0</b><div class="stream-terms" data-slot="terms-favorite"><i>#示例话题六</i><i>#示例话题二</i><i>#示例话题七</i><small>共 318 个不同话题，前 12 个覆盖了 33% 的记录，覆盖一半需要 24 个。</small></div></div>
+            <div class="stream-row" data-slot="stream-chat"><span class="stream-name">聊天<small>CHAT</small></span><span class="track"><i class="fill" style="--w:3%"></i></span><b class="stream-count">—</b><div class="stream-terms" data-slot="terms-chat"><small>等读取聊天后再统计。</small></div></div>
+            <div class="board-foot">▤ <span>只读取一次，不持续监听，也不上传云端。</span></div>
           </div>
         </div>
       </div>
@@ -695,7 +700,7 @@
       <div class="window-copy">
         <p class="w-eyebrow">( 02 ) · WHEN YOU ARRIVED · [ ASIA/SHANGHAI ]</p>
         <h2 class="w-title">时间把偏好，写成<em>一条起伏的线</em>。</h2>
-        <p class="w-sub">只有带可靠行为时间的记录，才被允许进入时间轴。</p>
+        <p class="w-sub">只有带可靠行为时间的记录，才会进入时间轴。</p>
       </div>
     </section>
 
@@ -703,7 +708,7 @@
       <div class="chapter-inner">
         <div class="ch-head" data-reveal>
           <div class="meta-line"><b>02</b> WHEN YOU ARRIVED</div>
-          <h2>抵达的月份，与抵达的时辰。</h2>
+          <h2>常来的月份，常来的时辰。</h2>
         </div>
         <div class="cols rev">
           <div class="board" data-reveal style="--i:1">
@@ -727,9 +732,9 @@
             <div class="hour-labels"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
           </div>
           <div data-reveal style="--i:2">
-            <p class="lead">每条记录的行为时间都标注了来源。发布时间只属于内容，不属于你——它不会被当成你的行为画进这条线。</p>
+            <p class="lead">每条记录的行为时间都标注了来源。发布时间是内容自己的时间，不是你的行为，不会被画进这条线。</p>
             <div class="metrics">
-              <div class="metric"><strong data-slot="peak-hour">15:00</strong><span>最常抵达的时刻</span></div>
+              <div class="metric"><strong data-slot="peak-hour">15:00</strong><span>最常来的时刻</span></div>
               <div class="metric"><strong data-slot="peak-day">2025-05-05</strong><span>最密集的一天</span></div>
             </div>
             <div class="time-sources">
@@ -737,7 +742,7 @@
               <div class="ts-row"><code>ARCHIVE</code><span>归档动作时间</span><b data-slot="ts-archive">0 条</b></div>
               <div class="ts-row"><code>NO TIME</code><span>暂无可靠时间 · 不入轴</span><b data-slot="ts-unknown">1 条</b></div>
             </div>
-            <p class="note">没有时间来源的内容仍留在清单里，只是不被硬塞进时间轴。</p>
+            <p class="note">没有可靠时间的内容仍留在清单里，只是不会被硬塞进时间轴。</p>
           </div>
         </div>
       </div>
@@ -748,7 +753,7 @@
       <div class="window-copy">
         <p class="w-eyebrow">( 03 ) · WHAT STAYED · [ STABLE IDS ONLY ]</p>
         <h2 class="w-title">真正留下来的，都经过<em>两次选择</em>。</h2>
-        <p class="w-sub">看过、喜欢、收藏——三个环，只用稳定的 ID 相扣。</p>
+        <p class="w-sub">看过、喜欢、收藏三个环，只靠稳定的作品 ID 相扣。</p>
       </div>
     </section>
 
@@ -762,12 +767,12 @@
           <div class="venn-col" data-reveal style="--i:1">
             <div class="venn">
               <i class="va"></i><i class="vb"></i><i class="vc"></i>
-              <strong data-slot="all-three" data-count="5">0<small>三重交集<em data-slot="k-share"> · 占独立内容 0.4%</em></small></strong>
+              <strong data-slot="all-three" data-count="5">0<small>三重交集<em data-slot="k-share">，占独立内容的 0.4%</em></small></strong>
               <span class="la">看过</span><span class="lb">喜欢</span><span class="lc">收藏</span>
             </div>
           </div>
           <div class="kept-copy" data-reveal style="--i:2">
-            <p class="lead">交集只认稳定的作品 ID；没有 ID 的记录不会被强行连线。看的深浅来自每条观看的已看时长与百分比。</p>
+            <p class="lead">交集只认稳定的作品 ID，没有 ID 的记录不会硬连在一起。看得深浅，按每条观看记录的已看时长和百分比算。</p>
             <div class="metrics rings">
               <div class="metric"><strong data-slot="k-watch" data-count="1240">0</strong><span><i class="dot-a"></i>看过 · WATCHED</span></div>
               <div class="metric"><strong data-slot="k-liked" data-count="96">0</strong><span><i class="dot-b"></i>喜欢 · LIKED</span></div>
@@ -788,13 +793,13 @@
               <div class="pm mid"><i class="dot"></i><strong data-slot="p-mid">37%</strong><span>中途 · 30–90%</span></div>
               <div class="pm shallow"><i class="dot"></i><strong data-slot="p-shallow">21%</strong><span>浅尝 · &lt;30%</span></div>
             </div>
-            <div class="board-foot">只统计带已看时长的观看记录</div>
+            <div class="board-foot">只统计带已看时长的观看记录。</div>
           </div>
         </div>
         <div class="recent">
           <div class="recent-head" data-reveal>
-            <div><div class="meta-line" style="margin-bottom:10px"><b>RECENT</b> SIGNALS</div><h3>最近被你留下的内容</h3></div>
-            <small>封面来自原视频 · 点击打开抖音</small>
+            <div><div class="meta-line" style="margin-bottom:10px"><b>RECENT</b> SIGNALS</div><h3>你最近留下的内容</h3></div>
+            <small>封面来自原视频，点击可打开抖音</small>
           </div>
           <div class="cards">
             <a class="card" href="#" onclick="return false" data-reveal style="--i:1"><div class="card-cover c1"><b>01</b><em class="card-kind">喜欢</em></div><div class="card-body"><h4>#城市散步 年末灯火</h4><p>示例创作者甲</p><span class="open">查看 ↗</span></div></a>
@@ -810,7 +815,7 @@
     <section class="window" data-skystate="2" data-tone="dark" id="w-mix">
       <div class="window-copy">
         <p class="w-eyebrow">( 04 ) · THE MIX · [ TOPICS · CREATORS · MEDIA · DURATION · MUSIC ]</p>
-        <h2 class="w-title">你选择的内容，有自己的<em>材质</em>。</h2>
+        <h2 class="w-title">你选的内容，有自己的<em>质地</em>。</h2>
         <p class="w-sub">话题聚成星群，创作者留下轨迹。</p>
       </div>
     </section>
@@ -820,21 +825,21 @@
         <div class="ch-head" data-reveal>
           <div class="meta-line"><b>04</b> THE MIX</div>
           <h2>话题、来路，与质地。</h2>
-          <p class="lead">显式的话题标签、创作者、媒介形态与时长分层——这些拼出内容的材质；作品热度只是内容的快照，不叙述成你的行为。</p>
+          <p class="lead">话题标签、创作者、媒介形态和时长分层，拼出了内容的质地；作品热度只是内容本身的快照，不算作你的行为。</p>
         </div>
         <div class="bento">
           <div class="bento-col">
             <div class="bento-cell cerulean" data-reveal style="--i:1">
               <span class="label">TOPIC SIGNAL · 唯一的一块颜色</span>
               <strong data-slot="topic-name">#城市散步</strong>
-              <small data-slot="topic-meta">5 条 · 31% · 年度最常出现的话题</small>
+              <small data-slot="topic-meta">这一年出现最多的话题，出现在 5 条记录里，占 31%。</small>
               <div class="mini-lines topic-lines" data-slot="tags">
                 <div class="ml"><span>#手作</span><span class="track"><i class="fill" style="--w:100%"></i></span><b>4</b></div>
                 <div class="ml"><span>#家常菜</span><span class="track"><i class="fill" style="--w:75%"></i></span><b>3</b></div>
                 <div class="ml"><span>#摄影</span><span class="track"><i class="fill" style="--w:75%"></i></span><b>3</b></div>
                 <div class="ml"><span>#植物</span><span class="track"><i class="fill" style="--w:25%"></i></span><b>1</b></div>
               </div>
-              <div class="cell-foot" data-slot="topic-foot">共 5 个显式话题 · 按出现次数</div>
+              <div class="cell-foot" data-slot="topic-foot">记录里一共有 5 个不同的话题，按出现次数排序。</div>
             </div>
             <div class="bento-cell" data-reveal style="--i:4"><span class="label">DURATION</span>
               <div class="mini-lines" data-slot="duration">
@@ -846,18 +851,18 @@
                 <div><strong data-slot="len-median">48 秒</strong><span>内容中位时长</span></div>
                 <div><strong data-slot="len-watched">3 时 20 分</strong><span>累计已看</span></div>
               </div>
-              <div class="cell-foot" data-slot="len-longest">最长的一条 · 1 时 12 分 · 示例长视频</div>
+              <div class="cell-foot" data-slot="len-longest">最长的一条是《示例长视频》，长 1 时 12 分。</div>
             </div>
           </div>
           <div class="bento-col">
-            <div class="bento-cell" data-reveal style="--i:2"><span class="label">CREATOR FIELD</span><span class="avatar" data-slot="creator-avatar" aria-hidden="true"></span><strong data-slot="creator-name">示例创作者甲</strong><small data-slot="creator-meta">8 个独立内容 · 出现最多的创作者</small>
+            <div class="bento-cell" data-reveal style="--i:2"><span class="label">CREATOR FIELD</span><span class="avatar" data-slot="creator-avatar" aria-hidden="true"></span><strong data-slot="creator-name">示例创作者甲</strong><small data-slot="creator-meta">出现最多的创作者，贡献了 5 个不同的作品。</small>
               <div class="mini-lines creator-lines" data-slot="creators">
                 <div class="ml"><span>示例创作者乙</span><span class="track"><i class="fill" style="--w:100%"></i></span><b>5</b></div>
                 <div class="ml"><span>示例创作者丙</span><span class="track"><i class="fill" style="--w:60%"></i></span><b>3</b></div>
                 <div class="ml"><span>示例创作者丁</span><span class="track"><i class="fill" style="--w:40%"></i></span><b>2</b></div>
                 <div class="ml"><span>示例创作者戊</span><span class="track"><i class="fill" style="--w:20%"></i></span><b>1</b></div>
               </div>
-              <div class="cell-foot" data-slot="creator-foot">共 12 位创作者 · 前三位占 62%</div>
+              <div class="cell-foot" data-slot="creator-foot">一共 12 位创作者，前三位占了 62%。</div>
             </div>
             <div class="bento-cell" data-reveal style="--i:5"><span class="label">BGM · 重复出现的音乐</span>
               <div class="music-rows" data-slot="musics">
@@ -865,17 +870,17 @@
                 <div class="music-row"><span class="eq"><i></i><i></i><i></i><i></i></span><span class="mt"><b>《示例旋律 · 雨夜》</b> — 示例音乐人</span><small>4 次</small></div>
                 <div class="music-row"><span class="eq"><i></i><i></i><i></i><i></i></span><span class="mt"><b>《示例旋律 · 清晨》</b> — 示例乐队</span><small>2 次</small></div>
               </div>
-              <div class="cell-foot" data-slot="music-foot">共 9 首不同的音乐 · 只列出现两次以上的</div>
+              <div class="cell-foot" data-slot="music-foot">一共 9 首不同的音乐，这里只列出出现两次以上的。</div>
             </div>
           </div>
           <div class="bento-col">
-            <div class="bento-cell" data-reveal style="--i:3"><span class="label">STATS SNAPSHOT</span><strong data-slot="heat-median">1.2 万</strong><small data-slot="heat-meta">你遇到的内容 · 点赞数中位 · 热度只是内容的快照</small>
+            <div class="bento-cell" data-reveal style="--i:3"><span class="label">STATS SNAPSHOT</span><strong data-slot="heat-median">1.2 万</strong><small data-slot="heat-meta">你遇到的内容，点赞数的中位数——热度只是内容本身的快照。</small>
               <div class="heat-rows">
                 <div class="heat-row"><span>最热</span><em data-slot="heat-hot-title">示例 · 最多人点赞的一条</em><b data-slot="heat-hot">320 万</b></div>
                 <div class="heat-row"><span>最冷</span><em data-slot="heat-cold-title">示例 · 最安静的一条</em><b data-slot="heat-cold">12</b></div>
               </div>
             </div>
-            <div class="bento-cell" data-reveal style="--i:6"><span class="label">CONTENT AGE</span><strong data-slot="age-median">3 天</strong><small data-slot="age-meta">遇到它时，它已发布多久 · 中位</small>
+            <div class="bento-cell" data-reveal style="--i:6"><span class="label">CONTENT AGE</span><strong data-slot="age-median">3 天</strong><small data-slot="age-meta">内容从发布到被你遇到，中间隔了这么久，取中位数。</small>
               <div class="depth-bar age-bar" data-slot="age-bar"><i style="--w:60%"></i><i style="--w:30%"></i><i style="--w:10%"></i></div>
               <div class="age-legend" data-slot="age-legend"><span><i></i>一周内 <b>60%</b></span><span><i></i>三个月内 <b>30%</b></span><span><i></i>更早 <b>10%</b></span></div>
             </div>
@@ -909,8 +914,8 @@
     <section class="window" data-skystate="3" data-tone="dark" id="w-echo">
       <div class="window-copy">
         <p class="w-eyebrow">( 05 ) · THE ECHO · [ CHAT · ONE-TIME READ ]</p>
-        <h2 class="w-title">内容之外，还有人与你<em>交换回声</em>。</h2>
-        <p class="w-sub">夜空下，消息只留形态与时间。</p>
+        <h2 class="w-title">内容之外，还有<em>朋友的回声</em>。</h2>
+        <p class="w-sub">夜空下，消息只留下形态和时间。</p>
       </div>
     </section>
 
@@ -922,7 +927,7 @@
         </div>
         <div class="cols">
           <div data-reveal style="--i:1">
-            <p class="lead">聊天读取是一次性动作。好友消息只观察形态；群聊正文从不落盘——只保留群名、消息总量与本人条数。带作者或封面证据的分享，才算一张分享卡。</p>
+            <p class="lead">聊天只读取一次。好友消息只看形态，不看内容；群聊正文从不落盘，只保留群名、消息总量和本人发言条数。带作者或封面证据的分享，才算一张分享卡。</p>
             <div class="metrics">
               <div class="metric"><strong data-slot="chat-friend">—</strong><span data-slot="chat-friend-label">好友消息 · 待采集</span></div>
               <div class="metric"><strong data-slot="chat-call">—</strong><span>通话总时长</span></div>
@@ -930,7 +935,7 @@
             </div>
             <div class="share-sample" data-slot="share">
               <div class="sc" aria-hidden="true"></div>
-              <div class="st"><b>分享卡示例：《示例视频 · 夜色片段》</b><span>分享自好友</span><p>好友转发的视频会以分享卡的形式进入回声——前提是带得出证据。</p></div>
+              <div class="st"><b>分享卡示例：《示例视频 · 夜色片段》</b><span>好友转发的视频</span><p>好友转发的视频，会以分享卡的形式出现在这里——前提是有作者或封面这样的证据。</p></div>
             </div>
             <div class="chips-block" data-slot="contrast">
               <p class="chips-head">SHARED VS LIKED · 两边不重合的话题</p>
@@ -960,14 +965,14 @@
               <div class="ml"><span>示例词二</span><span class="track"><i class="fill" style="--w:75%"></i></span><b>6</b></div>
               <div class="ml"><span>示例词三</span><span class="track"><i class="fill" style="--w:50%"></i></span><b>4</b></div>
             </div>
-            <div class="cell-foot" data-slot="chat-words-foot">等待聊天读取 · 平台模板不计入</div>
+            <div class="cell-foot" data-slot="chat-words-foot">等读取聊天后再统计，平台的模板消息不计入。</div>
             <p class="sub">SHARED · 好友分享的视频带着什么话题</p>
             <div class="mini-lines" data-slot="share-terms">
               <div class="ml"><span>#示例话题八</span><span class="track"><i class="fill" style="--w:100%"></i></span><b>31</b></div>
               <div class="ml"><span>#示例话题九</span><span class="track"><i class="fill" style="--w:45%"></i></span><b>14</b></div>
               <div class="ml"><span>#示例话题十</span><span class="track"><i class="fill" style="--w:39%"></i></span><b>12</b></div>
             </div>
-            <div class="cell-foot" data-slot="share-terms-foot">等待聊天读取 · 只统计带证据的分享卡</div>
+            <div class="cell-foot" data-slot="share-terms-foot">等读取聊天后再统计，只算带证据的分享卡。</div>
           </div>
         </div>
       </div>
@@ -1002,7 +1007,7 @@
             <div class="caveat" id="caveat"><b>CAVEATS / 当前边界</b><br>1 条记录没有可用行为时间，不参与时间轴；没有稳定作品 ID 的记录仍保留在原清单，但不参与交集计算；采集器警告 1 条，原文附在档案里。</div>
           </div>
           <div data-reveal style="--i:2">
-            <p class="lead">这一页只对可采集、可解释的字段负责。没有时间、没有稳定 ID、没有明确来源的内容，会被诚实地标记为边界——而不是被编成漂亮的数字。</p>
+            <p class="lead">这一页只写可采集、可解释的字段。没有时间、没有稳定 ID、没有明确来源的内容，会老老实实标成边界，而不是被凑成漂亮的数字。</p>
             <p class="note"><b>数据来源：</b>观看、喜欢、收藏三份清单，加上聊天消息、会话目录与归档警告。</p>
             <div data-slot="fields-block">
               <p class="sub" style="margin-top:24px;color:var(--ash);font:400 9px var(--mono);letter-spacing:.18em">FIELD COVERAGE · 每个字段有多少条记录填了</p>
@@ -1026,8 +1031,8 @@
     <section class="window" data-skystate="4" data-tone="dark" id="w-signature">
       <div class="window-copy">
         <p class="w-eyebrow">( 07 ) · THE SIGNATURE · [ SEAL & COLOPHON ]</p>
-        <h2 class="w-title">当信号聚拢，<em>签下这一年</em>。</h2>
-        <p class="w-sub">所有星点归拢成一枚印。</p>
+        <h2 class="w-title">信号聚拢，<em>为这一年落款</em>。</h2>
+        <p class="w-sub">所有星点，归拢成一枚印章。</p>
       </div>
     </section>
 
@@ -1041,10 +1046,11 @@
           <div data-reveal style="--i:1">
             <div class="signature-name" data-slot="sig-name">午后的<em>收藏者</em></div>
             <div class="signature-en" data-slot="sig-en">THE AFTERNOON COLLECTOR</div>
-            <p class="lead" style="margin-top:22px" data-slot="sig-lead">这不是人格测试。只是把已经发生的选择，放回它们自己的上下文里，然后签上一个名字。</p>
+            <p class="lead" style="margin-top:22px" data-slot="sig-lead">这不是人格测试，只是把这一年已经发生的选择放回原处，看它们连成什么样子，再落一个款。</p>
             <div class="actions">
-              <button class="btn btn-dark" onclick="window.scrollTo({top:0,behavior:'smooth'})">再读一遍 <span class="cir">↺</span></button>
-              <button class="btn btn-blue" onclick="document.querySelector('#evidence').scrollIntoView({behavior:'smooth'})">回到数据口径</button>
+              <button class="btn btn-dark" id="toDashboard" onclick="toWorkspace()">进入持续报告 <span class="cir">→</span></button>
+              <button class="btn btn-blue" onclick="window.scrollTo({top:0,behavior:'smooth'})">再读一遍 <span class="cir">↺</span></button>
+              <button class="btn btn-ghost" onclick="document.querySelector('#evidence').scrollIntoView({behavior:'smooth'})">回到数据口径</button>
             </div>
           </div>
           <div class="seal" data-reveal style="--i:2">
@@ -1068,6 +1074,18 @@
 
   <script>
     const $ = (s, el) => (el || document).querySelector(s);
+
+    /* ---------- framed inside the app: the volume ends in the living report ----------
+       StoryFrame (App) listens for this message; opened on its own, fall back to the app root. */
+    const framed = window.parent !== window;
+    function toWorkspace() {
+      if (framed) parent.postMessage({ type: "trace:open-dashboard" }, location.origin);
+      else location.href = "/";
+    }
+    if (framed) {
+      $("#toWorkspace").hidden = false;
+      addEventListener("keydown", (e) => { if (e.key === "Escape") toWorkspace(); });
+    }
     const $$ = (s, el) => [...(el || document).querySelectorAll(s)];
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -1220,11 +1238,21 @@
         return node;
       };
       const vertical = (w) => { const node = el("div", "rv", w.name); rollStrip.append(node); return node; };
+      // the cover under a headline carries one of its two tags: the tag's own card from the data, else a recent card whose title shows the tag, else the next unused recent card
+      const used = new Set(), key = (c) => c.url || c.title;
+      const pick = (k) => {
+        const pair = [word(2 * k), word(2 * k + 1)];
+        const c = pair.map((w) => w.card).find((c) => c && !used.has(key(c)))
+          || cards.find((c) => !used.has(key(c)) && pair.some((w) => (c.title || "").includes(w.name)))
+          || cards.find((c) => !used.has(key(c)));
+        if (c) used.add(key(c));
+        return c;
+      };
       rollStrip.textContent = "";
       rollPanels = [];
       for (let k = 0; k < Math.max(3, cards.length); k++) {
         const p = { h: headline(2 * k), vl: vertical(stand(2 * k + 2)), c: null, vr: vertical(stand(2 * k + 3)), flip: k % 2 === 1 };
-        const c = cards[k];
+        const c = pick(k);
         if (c) {
           const a = el("a", "rc");
           if (c.url) { a.href = c.url; a.target = "_blank"; a.rel = "noopener"; } else { a.href = "#"; a.addEventListener("click", (e) => e.preventDefault()); }
@@ -1237,7 +1265,9 @@
         rollPanels.push(p);
       }
       const end = el("div", "rend"), ml = el("div", "meta-line"); ml.append(el("b", "", "END"), " OF ROLL");
-      end.append(ml, el("strong", "", words.length ? `${words.length} 个高频词条 · 共出现 ${total.toLocaleString("zh-CN")} 次` : "这一年的记录里没有显式话题标签"), el("small", "", "封面来自原视频 · 点击打开抖音 · 继续向下，进入下一章"));
+      // the closing line is told, not tallied: the same few words, returned to again and again
+      const few = words.length > 1 ? `这 ${words.length} 个词条` : "这一个词条";
+      end.append(ml, el("strong", "", words.length ? `这一年，你反复遇到的就是${few}，前前后后一共出现了 ${total.toLocaleString("zh-CN")} 次。` : "这一年的记录里没有反复出现的词条。"), el("small", "", "封面来自原视频，点击可打开抖音 · 继续向下，进入下一章"));
       rollStrip.append(end);
       rollPanels.push({ h: headline(0), end, flip: false });
       rollItems = [...rollStrip.children].map((node) => ({ node, x: 0 }));
@@ -1290,9 +1320,9 @@
     addEventListener("resize", rollLayout);
     document.fonts.ready.then(rollLayout); // words are measured in the display font
     buildRoll(
-      [["#城市散步", 5], ["#手作", 4], ["#家常菜", 3], ["#摄影", 3], ["#植物", 1]].map(([name, count]) => ({ name, count })),
-      [["#城市散步 年末灯火", "示例创作者甲"], ["修补一只旧包 #手作", "示例创作者乙"], ["#家常菜 热气腾腾", "示例创作者丙"], ["秋天的配色 #摄影", "示例创作者甲"]].map(([title, author]) => ({ title, author })),
-      16);
+      [["#城市散步", 5], ["#手作", 4], ["#家常菜", 3], ["#摄影", 3], ["#植物", 2], ["#露营", 2], ["#读书", 1], ["#咖啡", 1]].map(([name, count]) => ({ name, count })),
+      [["#城市散步 年末灯火", "示例创作者甲"], ["#家常菜 热气腾腾", "示例创作者丙"], ["秋天的配色 #植物 #摄影", "示例创作者甲"], ["睡前二十页 #读书", "示例创作者乙"]].map(([title, author]) => ({ title, author })),
+      21);
 
     /* ---------- real data: the app writes one JSON snapshot (localStorage "content-insights.story") before opening this page; without it the demo numbers stay ---------- */
     (() => {
@@ -1326,8 +1356,8 @@
       cnt("unique", d.unique);
       cnt("days", d.activeDays);
       if (c.chat === null) { cnt("chat-n", null); txt("chat-label", "聊天消息 · 备用文件不含聊天"); } else { cnt("chat-n", c.chat); txt("chat-label", "聊天消息 · 一次性读取"); }
-      txt("range", d.range ? `${d.range[0]} → ${d.range[1]}` : "暂无可靠行为时间");
-      txt("source", `本地快照 · ${sourceLabel}${stamp ? ` · ${stamp}` : ""}`);
+      txt("range", d.range ? `这一卷记录的是 ${d.range[0]} 到 ${d.range[1]} 这段时间` : "这一卷里的记录没有可靠的行为时间");
+      txt("source", `数字来自${d.source.kind === "archive" ? "导入的备用文件" : "本地采集器"}${stamp ? `，${stamp} 更新` : ""}`);
       txt("events", `${num(c.events)} video events`);
       const maxStream = Math.max(1, c.watch, c.liked, c.favorite, c.chat || 0);
       [["stream-watch", c.watch], ["stream-liked", c.liked], ["stream-favorite", c.favorite], ["stream-chat", c.chat]].forEach(([name, v]) => {
@@ -1347,9 +1377,9 @@
           const box = S(slot); if (!box) return;
           box.textContent = "";
           if (!field) { box.append(el("small", "", noChat)); return; }
-          if (!field.sampled) { box.append(el("small", "", tag ? "记录里没有话题标签" : "没有可统计的词")); return; }
+          if (!field.sampled) { box.append(el("small", "", tag ? "这类记录里没有话题标签。" : "还没有可以统计的词。")); return; }
           field.top.slice(0, 3).forEach((t) => box.append(el("i", "", tag ? `#${t.name}` : t.name)));
-          box.append(el("small", "", `${num(field.distinct)} 个不同${tag ? "话题" : "词"} · 前 12 个覆盖 ${pct(field.coverage)}${field.halfAt ? ` · 覆盖一半要 ${num(field.halfAt)} 个` : ""}`));
+          box.append(el("small", "", `共 ${num(field.distinct)} 个不同${tag ? "话题" : "的词"}，前 12 个覆盖了 ${pct(field.coverage)} 的记录${field.halfAt ? `，覆盖一半需要 ${num(field.halfAt)} 个` : ""}。`));
         };
         terms("terms-watch", LX.watch, true);
         terms("terms-liked", LX.liked, true);
@@ -1360,8 +1390,8 @@
         $$(".ml", S("concentration")).forEach((row, i) => { const f = conc[i]; bar(row, f && f.halfAt ? f.halfAt / halfMax : 0, f && f.halfAt ? `${num(f.halfAt)} 个` : "—"); });
         const hw = LX.watch.halfAt, hl = LX.liked.halfAt;
         txt("concentration-note", hw && hl
-          ? `覆盖一半的喜欢要 ${num(hl)} 个词条，看过只要 ${num(hw)} 个——${hl > hw * 1.2 ? "留下的比看过的更分散" : hw > hl * 1.2 ? "留下的比看过的更集中" : "两边差不多"}。`
-          : "记录里的话题标签还不够画出集中度。");
+          ? `覆盖一半的记录，喜欢要 ${num(hl)} 个词条，看过要 ${num(hw)} 个——${hl > hw * 1.2 ? "留下的比看过的更分散" : hw > hl * 1.2 ? "留下的比看过的更集中" : "两边差不多"}。`
+          : "记录里的话题标签还不够多，算不出集中度。");
       }
 
       /* 02 time */
@@ -1386,7 +1416,7 @@
       txt("p-mid", pct(d.progress && d.progress.mid));
       txt("p-shallow", pct(d.progress && d.progress.shallow));
       cnt("k-watch", c.watch); cnt("k-liked", c.liked); cnt("k-fav", c.favorite);
-      txt("k-share", d.unique && d.intersection.allThree ? ` · 占独立内容 ${(d.intersection.allThree / d.unique * 100).toFixed(1)}%` : "");
+      txt("k-share", d.unique && d.intersection.allThree ? `，占独立内容的 ${(d.intersection.allThree / d.unique * 100).toFixed(1)}%` : "");
       txt("k-noid", `${num(d.caveats ? d.caveats.noVideoId : 0)} 条`);
       const bands = d.progress || {};
       $$("#depthBar i").forEach((seg) => seg.style.setProperty("--w", `${Math.round((bands[seg.dataset.k] || 0) * 100)}%`));
@@ -1403,38 +1433,41 @@
       });
 
       /* 04 mix */
-      if (d.topTopic) { txt("topic-name", `#${d.topTopic.name}`); txt("topic-meta", `${num(d.topTopic.count)} 条 · ${pct(d.topTopic.share)} · 年度最常出现的话题`); }
-      else { txt("topic-name", "—"); txt("topic-meta", "记录里没有显式话题标签"); }
+      if (d.topTopic) { txt("topic-name", `#${d.topTopic.name}`); txt("topic-meta", `这一年出现最多的话题，出现在 ${num(d.topTopic.count)} 条记录里，占 ${pct(d.topTopic.share)}。`); }
+      else { txt("topic-name", "—"); txt("topic-meta", "记录里没有明确的话题标签。"); }
       // ranked rows rebuilt from data (variable length): label · bar relative to the first row · count
       const rankLines = (name, items, label) => { const box = S(name); if (!box) return; box.innerHTML = ""; box.style.display = items.length ? "" : "none"; const max = Math.max(1, ...items.map((it) => it.count)); items.forEach((it) => { const row = el("div", "ml"); const track = el("span", "track"); const fill = el("i", "fill"); fill.style.setProperty("--w", `${Math.round(it.count / max * 100)}%`); track.append(fill); row.append(el("span", "", label(it)), track, el("b", "", num(it.count))); box.append(row); }); };
       rankLines("tags", d.topics.slice(1, 5), (t) => `#${t.name}`);
-      txt("topic-foot", d.topicsCount ? `共 ${num(d.topicsCount)} 个显式话题 · 按出现次数` : "记录里没有显式话题");
-      if (d.topCreator) { txt("creator-name", d.topCreator.name); txt("creator-meta", `${num(d.topCreator.unique)} 个独立内容 · 出现最多的创作者`); cover(S("creator-avatar"), d.topCreator.avatarUrl); }
-      else { txt("creator-name", "—"); txt("creator-meta", "记录里没有创作者字段"); }
+      txt("topic-foot", d.topicsCount ? `记录里一共有 ${num(d.topicsCount)} 个不同的话题，按出现次数排序。` : "记录里没有明确的话题标签。");
+      if (d.topCreator) { txt("creator-name", d.topCreator.name); txt("creator-meta", `出现最多的创作者，贡献了 ${num(d.topCreator.unique)} 个不同的作品。`); cover(S("creator-avatar"), d.topCreator.avatarUrl); }
+      else { txt("creator-name", "—"); txt("creator-meta", "记录里没有创作者信息。"); }
       const creators = d.creators || [];
       rankLines("creators", creators.slice(1, 5), (c) => c.name);
-      txt("creator-foot", creators.length ? `共 ${num(d.creatorsCount)} 位创作者 · 前三位占 ${pct(creators.slice(0, 3).reduce((sum, c) => sum + c.share, 0))}` : "记录里没有创作者字段");
+      txt("creator-foot", creators.length ? `一共 ${num(d.creatorsCount)} 位创作者，前三位占了 ${pct(creators.slice(0, 3).reduce((sum, c) => sum + c.share, 0))}。` : "记录里没有创作者信息。");
       const lines = (name, items) => $$(".ml", S(name)).forEach((row, i) => { const it = items && items[i]; bar(row, it ? it.share : 0, it ? pct(it.share) : "—"); });
       lines("media", d.media);
       lines("duration", d.durations);
       const L = d.length || {};
       txt("len-median", typeof L.medianDuration === "number" ? clock(L.medianDuration) : "—");
       txt("len-watched", L.seconds ? clock(L.seconds) : "—");
-      txt("len-longest", L.longest ? `最长的一条 · ${clock(L.longest.seconds)} · ${L.longest.title}` : "记录里没有时长字段");
+      txt("len-longest", L.longest ? `最长的一条是《${L.longest.title.length > 20 ? `${L.longest.title.slice(0, 20)}…` : L.longest.title}》，长 ${clock(L.longest.seconds)}。` : "记录里没有时长信息。");
       const musics = S("musics");
       if (musics) {
         musics.innerHTML = "";
         const list = d.musics && d.musics.length ? d.musics : d.music ? [d.music] : [];
-        if (!list.length) musics.append(el("div", "music-row", "暂无重复出现的音乐"));
-        txt("music-foot", d.musicsCount ? `共 ${num(d.musicsCount)} 首不同的音乐 · 只列出现两次以上的` : "记录里没有音乐字段");
+        if (!list.length) musics.append(el("div", "music-row", "还没有一首音乐重复出现。"));
+        txt("music-foot", d.musicsCount ? `一共 ${num(d.musicsCount)} 首不同的音乐，这里只列出出现两次以上的。` : "记录里没有音乐信息。");
         list.forEach((m) => { const row = el("div", "music-row"); const eq = el("span", "eq"); for (let i = 0; i < 4; i++) eq.append(el("i")); const t = el("span", "mt"); t.append(el("b", "", `《${m.title}》`), ` — ${m.author || "未知音乐人"}`); row.append(eq, t, el("small", "", `${num(m.count)} 次`)); musics.append(row); });
       }
       const big = (n) => n >= 1e8 ? `${(n / 1e8).toFixed(1).replace(/\.0$/, "")} 亿` : n >= 1e4 ? `${(n / 1e4).toFixed(n < 1e5 ? 1 : 0).replace(/\.0$/, "")} 万` : num(n);
-      if (d.heat) { txt("heat-median", big(d.heat.median)); txt("heat-meta", `${num(d.heat.sampled)} 条内容的点赞数中位 · 热度只是内容的快照`); txt("heat-hot-title", d.heat.hottest.title); txt("heat-hot", big(d.heat.hottest.count)); txt("heat-cold-title", d.heat.quietest.title); txt("heat-cold", big(d.heat.quietest.count)); }
-      else { txt("heat-median", "—"); txt("heat-meta", "记录里没有点赞数 · 热度只是内容的快照"); $(".heat-rows").style.display = "none"; }
-      if (d.age) { txt("age-median", `${num(d.age.medianDays)} 天`); txt("age-meta", `遇到它时，它已发布多久 · ${num(d.age.sampled)} 条的中位`); $$("i", S("age-bar")).forEach((seg, i) => seg.style.setProperty("--w", `${Math.round((d.age.bands[i] ? d.age.bands[i].share : 0) * 100)}%`)); $$("b", S("age-legend")).forEach((b, i) => { b.textContent = pct(d.age.bands[i] ? d.age.bands[i].share : 0); }); }
-      else { txt("age-median", "—"); txt("age-meta", "记录里没有发布时间"); S("age-bar").style.display = "none"; S("age-legend").style.display = "none"; }
-      buildRoll(d.topics.map((t) => ({ name: `#${t.name}`, count: t.count })), d.recent, d.topics.reduce((sum, t) => sum + t.count, 0));
+      if (d.heat) { txt("heat-median", big(d.heat.median)); txt("heat-meta", `${num(d.heat.sampled)} 条内容的点赞数中位数——热度只是内容本身的快照。`); txt("heat-hot-title", d.heat.hottest.title); txt("heat-hot", big(d.heat.hottest.count)); txt("heat-cold-title", d.heat.quietest.title); txt("heat-cold", big(d.heat.quietest.count)); }
+      else { txt("heat-median", "—"); txt("heat-meta", "记录里没有点赞数。"); $(".heat-rows").style.display = "none"; }
+      if (d.age) { txt("age-median", `${num(d.age.medianDays)} 天`); txt("age-meta", `内容从发布到被你遇到，中间隔了这么久，取 ${num(d.age.sampled)} 条的中位数。`); $$("i", S("age-bar")).forEach((seg, i) => seg.style.setProperty("--w", `${Math.round((d.age.bands[i] ? d.age.bands[i].share : 0) * 100)}%`)); $$("b", S("age-legend")).forEach((b, i) => { b.textContent = pct(d.age.bands[i] ? d.age.bands[i].share : 0); }); }
+      else { txt("age-median", "—"); txt("age-meta", "记录里没有发布时间。"); S("age-bar").style.display = "none"; S("age-legend").style.display = "none"; }
+      // a compound tag repeats the word it is built on (模型 · 高达模型 · 拼装模型 read as one word three times), so the roll keeps the atoms — 模型 and 高达 — and drops any tag that contains another; an exact repeat (AI / ai) keeps its first spelling
+      const low = (t) => t.name.toLowerCase();
+      const atoms = d.topics.filter((t, i) => !d.topics.some((u, j) => j !== i && low(t).includes(low(u)) && (low(t) !== low(u) || j < i))).slice(0, 8);
+      buildRoll(atoms.map((t) => ({ name: `#${t.name}`, count: t.count, card: t.card || null })), d.recent, atoms.reduce((sum, t) => sum + t.count, 0));
 
       /* 05 echo */
       const ch = d.chat;
@@ -1447,7 +1480,7 @@
       if (share) {
         if (ch && ch.share) {
           share.querySelector(".st b").textContent = `分享卡：《${ch.share.title || "未命名分享"}》`;
-          share.querySelector(".st span").textContent = ch.share.author ? `作者 ${ch.share.author} · 好友转发` : "好友转发的视频";
+          share.querySelector(".st span").textContent = ch.share.author ? `好友转发了 ${ch.share.author} 的作品` : "好友转发的视频";
           cover(share.querySelector(".sc"), ch.share.coverUrl);
         } else share.style.display = "none";
       }
@@ -1466,12 +1499,10 @@
       else {
         rankLines("chat-words", LX.chat ? LX.chat.top.slice(0, 6) : [], (t) => t.name);
         rankLines("share-terms", LX.shared ? LX.shared.top.slice(0, 6) : [], (t) => `#${t.name}`);
-        txt("chat-words-foot", LX.chat
-          ? `${num(LX.chat.total)} 条文字消息${LX.chat.excluded ? ` · 去掉 ${num(LX.chat.excluded)} 条平台模板` : ""} · 前 12 个词覆盖 ${pct(LX.chat.coverage)}`
-          : noChatFoot(c));
-        txt("share-terms-foot", LX.shared
-          ? `${num(LX.shared.total)} 张分享卡 · ${num(LX.shared.sampled)} 张带话题 · 前 12 个覆盖 ${pct(LX.shared.coverage)}`
-          : "备用文件不含聊天");
+        txt("chat-words-foot", !LX.chat ? noChatFoot(c) : !LX.chat.total ? "这次读取到的聊天里没有文字消息。"
+          : `${num(LX.chat.total)} 条文字消息${LX.chat.excluded ? `，去掉 ${num(LX.chat.excluded)} 条平台模板后` : ""}，前 12 个词覆盖了 ${pct(LX.chat.coverage)}。`);
+        txt("share-terms-foot", !LX.shared ? "备用文件不含聊天" : !LX.shared.total ? "没有读到带证据的分享卡。"
+          : `${num(LX.shared.total)} 张分享卡里有 ${num(LX.shared.sampled)} 张带话题，前 12 个话题覆盖了 ${pct(LX.shared.coverage)}。`);
         const ct = LX.contrast;
         if (!ct || (!ct.sharedOnly.length && !ct.likedOnly.length)) hide("contrast");
         else {

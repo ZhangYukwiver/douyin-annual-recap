@@ -41,7 +41,7 @@ const music1 = { id: "m1", title: "旋律一", author: "音乐人" };
 
 const records: PersonalRecordCollection = {
   watch_history: [
-    rec("w1", { videoId: "v1", occurredAt: "2026-01-05T09:00:00+08:00", publishedAt: "2026-01-01T00:00:00+08:00", authorAvatarUrl: "https://a/1.png", topics: ["城市散步"], mediaType: "video", durationSeconds: 30, music: music1, watchProgress: { percent: 95 }, coverUrl: "https://c/w1.jpg", stats: { diggCount: 1200 } }),
+    rec("w1", { videoId: "v1", title: "#城市散步 清晨路线", occurredAt: "2026-01-05T09:00:00+08:00", publishedAt: "2026-01-01T00:00:00+08:00", authorAvatarUrl: "https://a/1.png", topics: ["城市散步"], mediaType: "video", durationSeconds: 30, music: music1, watchProgress: { percent: 95 }, coverUrl: "https://c/w1.jpg", stats: { diggCount: 1200 } }),
     rec("w2", { videoId: "v2", occurredAt: "2026-02-10T09:30:00+08:00", topics: ["城市散步", "手作"], mediaType: "video", durationSeconds: 120, music: music1, watchProgress: { percent: 50 } }),
     rec("w3", { videoId: "v3", author: "创作者乙", occurredAt: "2026-02-11T21:00:00+08:00", publishedAt: "2025-11-01T00:00:00+08:00", topics: ["家常菜"], mediaType: "image", durationSeconds: 700, music: { id: "m2", title: "旋律二", author: null }, watchProgress: { percent: 10 }, stats: { diggCount: 5 } }),
     rec("w4", { videoId: "v1", occurredAt: "2026-03-01T09:15:00+08:00", topics: ["城市散步"], mediaType: "video", durationSeconds: 30, music: music1, watchProgress: { percent: 100 } }),
@@ -53,7 +53,7 @@ const records: PersonalRecordCollection = {
     rec("l2", { videoId: "v2", author: "创作者乙", occurredAt: "2026-01-20T10:00:00+08:00", topics: ["ai", "手作", "ai"] }),
   ],
   favorite_videos: [
-    rec("f1", { videoId: "v1", occurredAt: "2026-03-05T11:00:00+08:00", coverUrl: "https://c/f1.jpg", title: "收藏一" }),
+    rec("f1", { videoId: "v1", occurredAt: "2026-03-05T11:00:00+08:00", coverUrl: "https://c/f1.jpg", title: "收藏一", topics: ["手作"] }),
     rec("f2", { videoId: "v3", author: "创作者乙", occurredAt: "2026-02-20T11:00:00+08:00" }),
   ],
 };
@@ -112,10 +112,13 @@ describe("story data", () => {
     expect(data.musics).toEqual([{ title: "旋律一", author: "音乐人", count: 3 }]);
     expect(data.musicsCount).toBe(2);
     expect(data.topicsCount).toBe(5);
+    // each headline tag gets the card that carries it: w1 shows 城市散步 in its title (beats the newer cover-only l1); that spends content v1,
+    // so for 手作 the bare l2 beats f1's cover (same v1) rather than repeating it; ai / AI are one term and fall back to v1 as the only carrier
+    expect(data.topics.map((topic) => [topic.name, topic.card && topic.card.title, topic.card && topic.card.kind])).toEqual([["城市散步", "#城市散步 清晨路线", "watch"], ["手作", "内容 l2", "liked"], ["ai", "喜欢一", "liked"], ["家常菜", "内容 w3", "watch"], ["AI", "喜欢一", "liked"]]);
     expect(data.creators.map((item) => [item.name, item.count])).toEqual([["创作者甲", 5], ["创作者乙", 3], ["创作者丙", 1]]);
     expect(data.creatorsCount).toBe(3);
     // like counts: one entry per content (l1 repeats v1, so w1's count wins), lower-middle median
-    expect(data.heat).toEqual({ sampled: 2, median: 5, hottest: { title: "内容 w1", count: 1200, url: "https://www.douyin.com/video/w1" }, quietest: { title: "内容 w3", count: 5, url: "https://www.douyin.com/video/w3" } });
+    expect(data.heat).toEqual({ sampled: 2, median: 5, hottest: { title: "#城市散步 清晨路线", count: 1200, url: "https://www.douyin.com/video/w1" }, quietest: { title: "内容 w3", count: 5, url: "https://www.douyin.com/video/w3" } });
     expect(data.age).toEqual({ sampled: 2, medianDays: 4, bands: [{ label: "一周内", share: 0.5 }, { label: "三个月内", share: 0 }, { label: "更早", share: 0.5 }] });
     expect(data.length).toEqual({ seconds: model.attentionSeconds, medianDuration: 30, longest: { title: "内容 w3", seconds: 700 } });
     expect(model.attentionSeconds).toBeCloseTo(188.5, 1);
@@ -134,7 +137,7 @@ describe("story data", () => {
     ]);
     expect(data.lexicon.liked).toMatchObject({ total: 2, sampled: 2, distinct: 3, coverage: 1, halfAt: 1, excluded: 0 });
     expect(data.lexicon.watch).toMatchObject({ total: 6, sampled: 4, distinct: 3, halfAt: 1 });
-    expect(data.lexicon.favorite).toMatchObject({ total: 2, sampled: 0, distinct: 0, coverage: 0, halfAt: null });
+    expect(data.lexicon.favorite).toMatchObject({ total: 2, sampled: 1, distinct: 1, coverage: 1, halfAt: 1, top: [{ name: "手作", count: 1, share: 1 }] });
   });
 
   it("reads chat words without the platform boilerplate or the group thread", () => {
@@ -168,7 +171,7 @@ describe("story data", () => {
     expect(data.fields.map((field) => [field.label, field.count, field.base])).toEqual([
       ["行为时间", 9, 10],
       ["作品 ID", 9, 10],
-      ["话题标签", 6, 10],
+      ["话题标签", 7, 10],
       ["时长", 4, 10],
       ["发布时间", 2, 10],
       ["点赞数", 3, 10],
